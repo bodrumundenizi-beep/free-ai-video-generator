@@ -2,3 +2,13 @@ moviepy
 requests
 gTTS
 edge-tts
+
+To install these run these command ONE BY ONE on the python terminal or vs code terminal
+
+pip install moviepy
+
+pip install requests
+
+pip install gTTS
+
+pip install edge-tts
