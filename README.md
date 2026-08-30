@@ -9,7 +9,7 @@ A professional-grade automated video generation tool that uses Python to turn wr
 - **GUI Dashboard:** Built-in Windows application to handle API keys, voice selection, and rendering status.
 - **End-to-End Automation:** Fetches, generates, matches duration, and stitches everything into a final `.mp4`.
 
-## 🛠 Prerequisites
+##  Prerequisites
 1. **Python 3.10+** installed on your system.
 2. **FFmpeg:** Ensure FFmpeg is installed and added to your System PATH (required for video processing).
 
