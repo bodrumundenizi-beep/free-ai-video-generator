@@ -2,7 +2,7 @@
 
 A professional-grade automated video generation tool that uses Python to turn written scripts into fully edited, high-quality videos.
 
-## 🚀 Features
+##  Features
 - **Automated Stock Footage:** Automatically fetches relevant video clips from Pexels API.
 - **Neural AI Voices:** Uses Microsoft Edge-TTS for high-quality, natural-sounding male and female voices.
 - **Smart Script Parser:** Automatically reads your script line-by-line using `Visual:` and `Voice:` tags.
@@ -13,7 +13,7 @@ A professional-grade automated video generation tool that uses Python to turn wr
 1. **Python 3.10+** installed on your system.
 2. **FFmpeg:** Ensure FFmpeg is installed and added to your System PATH (required for video processing).
 
-## 📦 Quick Setup
+##  Quick Setup
 1. **Clone the repository:**
    ```bash
    git clone https://github.com/yourusername/your-repo-name.git
