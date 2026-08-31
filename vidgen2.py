@@ -6,7 +6,7 @@ import subprocess
 import sys
 import tkinter as tk
 import re
-from tkinter import ttk, messagebox, scrolledtext
+from tkinter import ttk, messagebox, scrolledtext, filedialog
 
 # MoviePy v2
 from moviepy import VideoFileClip, AudioFileClip, concatenate_videoclips
@@ -37,12 +37,25 @@ def download_stock_video(api_key, query, filename, log_func):
 
 
 def generate_voiceover(text, filename, log_func, voice_choice):
-    # edge-tts names: Guy is Male, Aria is Female
-    voice_code = "en-US-GuyNeural" if voice_choice == "Male" else "en-US-AriaNeural"
+    voice_map = {
+        "Neural Male": "en-US-GuyNeural",
+        "Neural Female": "en-US-AriaNeural",
+        "Happy/Upbeat (Female)": "en-US-JennyNeural",
+        "Deep/Narrator (Male)": "en-US-ChristopherNeural"
+    }
+    
+    voice_code = voice_map.get(voice_choice, "en-US-GuyNeural")
     
     log_func(f"🗣️ Generating {voice_choice} Voice: '{text}'")
     
-    cmd = [sys.executable, "-m", "edge_tts", "--voice", voice_code, "--text", text, "--write-media", filename]
+    cmd = [
+        sys.executable, "-m", "edge_tts",
+        "--voice", voice_code,
+        "--text", text,
+        "--write-media", filename,
+        "--rate", "+10%",
+        "--pitch", "+5Hz"
+    ]
     result = subprocess.run(cmd, capture_output=True)
     
     if result.returncode != 0:
@@ -57,48 +70,39 @@ def create_video_thread():
         
         api_key = api_entry.get().strip()
         voice_choice = voice_var.get()
+        save_path = output_entry.get().strip()
         script_text = script_box.get("1.0", tk.END).strip()
         
         if not api_key: raise Exception("API Key cannot be blank.")
+        if not save_path: raise Exception("Save location cannot be blank. Please select where to save the video.")
         if not script_text: raise Exception("Script cannot be blank.")
         
-        # --- NEW SCRIPT PARSING LOGIC ---
+        # --- SCRIPT PARSING LOGIC ---
         script_scenes = []
         current_visual = None
         
-        # Read the script line by line
         for line_num, line in enumerate(script_text.split("\n")):
             line = line.strip()
-            
-            # Skip empty lines (like pressing enter twice between scenes)
             if not line:
                 continue
                 
-            # Check if the line starts with "Visual:" (case-insensitive, allows spaces)
             if re.match(r"(?i)^visual\s*:", line):
-                # Cut out the "Visual:" part and save just the keyword
                 current_visual = re.sub(r"(?i)^visual\s*:", "", line).strip()
                 
-            # Check if the line starts with "Voice:"
             elif re.match(r"(?i)^voice\s*:", line):
                 if current_visual is None:
                     raise Exception(f"Error near Line {line_num + 1}: Found a 'Voice:' but missing the 'Visual:' before it!")
                 
-                # Cut out the "Voice:" part and save the speech
                 current_voice = re.sub(r"(?i)^voice\s*:", "", line).strip()
-                
-                # We have a matching pair! Add them to the timeline and reset
                 script_scenes.append({"visual": current_visual, "voice": current_voice})
                 current_visual = None 
             else:
-                # If they wrote text without 'Visual:' or 'Voice:'
                 raise Exception(f"Error on Line {line_num + 1}: Every line must begin with 'Visual:' or 'Voice:'. Please fix!")
                 
         if len(script_scenes) == 0:
             raise Exception("No valid scenes were found. Please use the exact Visual: / Voice: formatting.")
-        # ---------------------------------
 
-        log_box.insert(tk.END, "🚀 Starting video generation sequence...\n")
+        update_log("🚀 Starting video generation sequence...")
         
         final_clips = []
         source_clips = []
@@ -129,7 +133,7 @@ def create_video_thread():
         update_log("✂️ Stitching all scenes together. (Check your terminal window for progress bar!)")
         
         final_movie = concatenate_videoclips(final_clips, method="compose")
-        final_movie.write_videofile("final_video.mp4", codec="libx264", audio_codec="aac", fps=24)
+        final_movie.write_videofile(save_path, codec="libx264", audio_codec="aac", fps=24)
         
         update_log("🧹 Releasing memory and deleting temp files...")
         final_movie.close()
@@ -143,8 +147,8 @@ def create_video_thread():
             except:
                 pass
             
-        update_log("✅ DONE! Video saved in your folder as 'final_video.mp4'.")
-        messagebox.showinfo("Success!", "Video rendered successfully!")
+        update_log(f"✅ DONE! Video saved to:\n{save_path}")
+        messagebox.showinfo("Success!", f"Video rendered successfully!\n\nSaved at:\n{save_path}")
 
     except Exception as e:
         update_log(f"❌ ERROR: {str(e)}")
@@ -161,34 +165,134 @@ def update_log(msg):
 def start_generation():
     threading.Thread(target=create_video_thread, daemon=True).start()
 
+def choose_save_location():
+    chosen_file = filedialog.asksaveasfilename(
+        defaultextension=".mp4",
+        filetypes=[("MP4 Video", "*.mp4"), ("All Files", "*.*")],
+        initialdir=os.getcwd(),
+        initialfile="final_video.mp4"
+    )
+    if chosen_file:
+        output_entry.delete(0, tk.END)
+        output_entry.insert(0, chosen_file)
 
-# --- 3. BUILD THE GRAPHICAL UI ---
+
+# --- 3. THEME MANAGEMENT (DARK / LIGHT MODE) ---
+is_dark_mode = True
+
+def toggle_theme():
+    global is_dark_mode
+    is_dark_mode = not is_dark_mode
+    apply_theme()
+
+def apply_theme():
+    if is_dark_mode:
+        bg_main = "#1e1e1e"
+        fg_main = "#ffffff"
+        bg_input = "#2d2d30"
+        btn_theme.config(text="☀️ Light Mode", bg="#333333", fg="#ffffff")
+        log_bg = "#141414"
+        log_fg = "#00ff66"
+    else:
+        bg_main = "#f4f4f5"
+        fg_main = "#18181b"
+        bg_input = "#ffffff"
+        btn_theme.config(text="🌙 Dark Mode", bg="#e4e4e7", fg="#18181b")
+        log_bg = "#27272a"
+        log_fg = "#a3e635"
+
+    window.configure(bg=bg_main)
+    header_frame.configure(bg=bg_main)
+    title_label.configure(bg=bg_main, fg=fg_main)
+    path_frame.configure(bg=bg_main)
+    radio_frame.configure(bg=bg_main)
+
+    for lbl in custom_labels:
+        lbl.configure(bg=bg_main, fg=fg_main)
+
+    style = ttk.Style()
+    style.theme_use('clam')
+    
+    style.configure(".", background=bg_main, foreground=fg_main)
+    style.configure("TLabelframe", background=bg_main, foreground=fg_main)
+    style.configure("TLabelframe.Label", background=bg_main, foreground=fg_main, font=('Segoe UI', 9, 'bold'))
+    style.configure("TLabel", background=bg_main, foreground=fg_main)
+    style.configure("TRadiobutton", background=bg_main, foreground=fg_main)
+    style.configure("TEntry", fieldbackground=bg_input, foreground=fg_main)
+    style.configure("TButton", background=bg_input, foreground=fg_main)
+    style.map("TButton", background=[('active', '#3f3f46' if is_dark_mode else '#d4d4d8')])
+
+    script_box.configure(bg=bg_input, fg=fg_main, insertbackground=fg_main)
+    log_box.configure(bg=log_bg, fg=log_fg, insertbackground=fg_main)
+
+
+# --- 4. BUILD THE GRAPHICAL UI ---
 window = tk.Tk()
 window.title("Automated Video Creator V2")
-window.geometry("700x750")
-window.configure(padx=20, pady=20)
+window.geometry("860x830")
+window.configure(padx=20, pady=15)
 
+custom_labels = []
+
+# Top Header with Dark Mode Switch
+header_frame = tk.Frame(window)
+header_frame.pack(fill="x", pady=(0, 10))
+
+title_label = tk.Label(header_frame, text="🎬 AI Video Studio", font=("Segoe UI", 14, "bold"))
+title_label.pack(side="left")
+
+btn_theme = tk.Button(header_frame, text="☀️ Light Mode", font=("Segoe UI", 9, "bold"), relief="groove", padx=10, pady=3, command=toggle_theme)
+btn_theme.pack(side="right")
+
+# Configuration Frame
 frame_top = ttk.LabelFrame(window, text="⚙️ Configuration")
-frame_top.pack(fill="x", pady=10)
+frame_top.pack(fill="x", pady=5)
 
-tk.Label(frame_top, text="Pexels API Key:").grid(row=0, column=0, padx=5, pady=5, sticky="w")
-api_entry = ttk.Entry(frame_top, width=65)
-api_entry.grid(row=0, column=1, padx=5, pady=5)
-api_entry.insert(0, "KPwsjAyOxYePDSkp7uSn1ist6DYqkbPAAUqGEMnOXGYmsWt97L6Jduwj") 
+lbl_api = tk.Label(frame_top, text="Pexels API Key:")
+lbl_api.grid(row=0, column=0, padx=5, pady=5, sticky="w")
+custom_labels.append(lbl_api)
 
-tk.Label(frame_top, text="AI Voice Engine:").grid(row=1, column=0, padx=5, pady=5, sticky="w")
-voice_var = tk.StringVar(value="Male")
+api_entry = ttk.Entry(frame_top, width=70)
+api_entry.grid(row=0, column=1, padx=5, pady=5, sticky="w")
+api_entry.insert(0, "KPwsjAyOxYePDSkp7uSn1ist6DYqkbPAAUqGEMnOXGYmsWt97L6Jduwj")
+
+lbl_save = tk.Label(frame_top, text="Save Video To:")
+lbl_save.grid(row=1, column=0, padx=5, pady=5, sticky="w")
+custom_labels.append(lbl_save)
+
+path_frame = tk.Frame(frame_top)
+path_frame.grid(row=1, column=1, sticky="w", padx=5, pady=5)
+
+output_entry = ttk.Entry(path_frame, width=58)
+output_entry.pack(side="left", padx=(0, 5))
+default_save_file = os.path.join(os.getcwd(), "final_video.mp4")
+output_entry.insert(0, default_save_file)
+
+btn_browse = ttk.Button(path_frame, text="📁 Browse...", command=choose_save_location)
+btn_browse.pack(side="left")
+
+lbl_voice = tk.Label(frame_top, text="AI Voice Engine:")
+lbl_voice.grid(row=2, column=0, padx=5, pady=5, sticky="w")
+custom_labels.append(lbl_voice)
+
+voice_var = tk.StringVar(value="Neural Male")
+voice_options = [
+    "Neural Male",
+    "Neural Female",
+    "Happy/Upbeat (Female)",
+    "Deep/Narrator (Male)"
+]
 
 radio_frame = tk.Frame(frame_top)
-radio_frame.grid(row=1, column=1, sticky="w", padx=5)
-ttk.Radiobutton(radio_frame, text="Neural Male", variable=voice_var, value="Male").pack(side="left", padx=5)
-ttk.Radiobutton(radio_frame, text="Neural Female", variable=voice_var, value="Female").pack(side="left", padx=5)
+radio_frame.grid(row=2, column=1, sticky="w", padx=5, pady=5)
 
-# --- SCRIPTING FRAME WITH UPDATED TEXT ---
+for opt in voice_options:
+    ttk.Radiobutton(radio_frame, text=opt, variable=voice_var, value=opt).pack(side="left", padx=5)
+
+# Scripting Frame
 frame_mid = ttk.LabelFrame(window, text="📝 Your Script (Lines must start with 'Visual:' or 'Voice:')")
 frame_mid.pack(fill="both", expand=True, pady=10)
 
-# Provided Sample format using the newly requested layout!
 default_script = """Visual: slow broken computer
 Voice: Is your PC booting incredibly slow?
 
@@ -198,16 +302,20 @@ Voice: Don't smash your monitor just yet!
 Visual: typing fast on modern laptop
 Voice: Try this simple setting tweak to speed it up in seconds."""
 
-script_box = scrolledtext.ScrolledText(frame_mid, height=10, width=80)
+script_box = scrolledtext.ScrolledText(frame_mid, height=10, width=80, font=("Consolas", 10))
 script_box.pack(padx=10, pady=10, fill="both", expand=True)
 script_box.insert(tk.END, default_script)
 
 btn_generate = ttk.Button(window, text="🎥 Render Full Video", command=start_generation)
-btn_generate.pack(pady=10)
+btn_generate.pack(pady=5)
 
+# Event Log Frame
 frame_bot = ttk.LabelFrame(window, text="📋 Event Log")
-frame_bot.pack(fill="both", expand=True)
-log_box = scrolledtext.ScrolledText(frame_bot, height=10, width=80, bg="#2E2E2E", fg="#00FF00")
+frame_bot.pack(fill="both", expand=True, pady=5)
+log_box = scrolledtext.ScrolledText(frame_bot, height=10, width=80, font=("Consolas", 9))
 log_box.pack(padx=10, pady=10, fill="both", expand=True)
+
+# Apply Default Dark Theme on startup
+apply_theme()
 
 window.mainloop()
