@@ -33,3 +33,36 @@ pip install edge-tts
    ```bash
    git clone https://github.com/yourusername/your-repo-name.git
    cd your-repo-name
+
+## AI Script Generation Prompt
+
+You can use ChatGPT, Claude, or Gemini to automatically write scripts formatted specifically for this app. Copy and paste the prompt template below into your AI of choice:
+
+---
+
+> **Prompt:**
+> 
+> "You are an expert short-form video scriptwriter for TikTok and YouTube Shorts.
+> 
+> I need a 45-second high-retention script about: **[INSERT TOPIC HERE]**
+> 
+> Strict Formatting Rules:
+> 1. Output ONLY pairs of lines starting with `Visual:` and `Voice:`.
+> 2. Do NOT include scene numbers, timestamps, markdown asterisks, or extra conversational text.
+> 3. `Visual:` must contain 2 to 4 simple, searchable stock video keywords that can be found on Pexels (e.g., 'typing on laptop keyboard', 'neon lightning bolt', 'frustrated person at computer').
+> 4. `Voice:` must contain punchy, engaging spoken dialogue (no emojis, no stage directions).
+> 5. Create 6 to 8 scene pairs (roughly 100-120 words total).
+> 
+> Example output format:
+> Visual: slow broken laptop
+> Voice: Is your computer taking forever to start up?
+> 
+> Visual: hands typing on keyboard
+> Voice: Here is a simple setting tweak to fix it in seconds."
+
+---
+
+### How to use:
+1. Replace `[INSERT TOPIC HERE]` with your video idea (e.g., *'3 hidden iPhone camera features'* or *'How to clear cache on Windows'*).
+2. Copy the AI's exact text output.
+3. Paste it directly into the **AutoVideo-AI** script box and click **Render Full Video**!
