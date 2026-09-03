@@ -1,3 +1,15 @@
+====================================================================
+HOW TO CREATE YOUR OWN SCRIPT:
+====================================================================
+1. Structure your script in pairs of "Visual:" and "Voice:".
+2. IMPORTANT: Do NOT remove, translate, or change the words 
+   "Visual:" and "Voice:". The parser requires these exact tags.
+3. "Visual:" -> Write 2-4 simple search keywords for Pexels stock 
+                footage (e.g., 'typing keyboard', 'loading bar').
+4. "Voice:"  -> Write the exact sentence you want the AI to speak.
+5. Leave a blank line between each scene for clean formatting.
+====================================================================
+
 Visual: frustrated person typing laptop
 Voice: Did you know you are copying and pasting completely wrong on Windows?
 
