@@ -12,12 +12,19 @@ from tkinter import ttk, messagebox, scrolledtext, filedialog
 from moviepy import VideoFileClip, AudioFileClip, concatenate_videoclips
 
 # --- 1. CORE LOGIC ---
-def download_stock_video(api_key, query, filename, log_func):
-    log_func(f"🎬 [{query}] Searching Pexels for stock footage...")
+def download_stock_video(api_key, query, filename, log_func, orientation):
+    log_func(f"🎬 [{query}] Searching Pexels ({orientation})...")
     headers = {"Authorization": api_key}
-    url = f"https://api.pexels.com/videos/search?query={query}&per_page=3"
     
+    # Search with preferred orientation first
+    url = f"https://api.pexels.com/videos/search?query={query}&orientation={orientation}&per_page=3"
     response = requests.get(url, headers=headers)
+    
+    # Fallback to general search if specific orientation returns no results
+    if response.status_code != 200 or len(response.json().get('videos', [])) == 0:
+        url = f"https://api.pexels.com/videos/search?query={query}&per_page=3"
+        response = requests.get(url, headers=headers)
+
     if response.status_code != 200:
         raise Exception("Failed to connect to Pexels API. Check your API key.")
         
@@ -70,13 +77,22 @@ def create_video_thread():
         
         api_key = api_entry.get().strip()
         voice_choice = voice_var.get()
+        ratio_choice = ratio_var.get()
         save_path = output_entry.get().strip()
         script_text = script_box.get("1.0", tk.END).strip()
         
         if not api_key: raise Exception("API Key cannot be blank.")
-        if not save_path: raise Exception("Save location cannot be blank. Please select where to save the video.")
+        if not save_path: raise Exception("Save location cannot be blank.")
         if not script_text: raise Exception("Script cannot be blank.")
         
+        # Determine target dimensions and Pexels orientation filter
+        if ratio_choice == "16:9":
+            target_w, target_h = 1920, 1080
+            orientation = "landscape"
+        else:
+            target_w, target_h = 1080, 1920
+            orientation = "portrait"
+
         # --- SCRIPT PARSING LOGIC ---
         script_scenes = []
         current_visual = None
@@ -88,21 +104,19 @@ def create_video_thread():
                 
             if re.match(r"(?i)^visual\s*:", line):
                 current_visual = re.sub(r"(?i)^visual\s*:", "", line).strip()
-                
             elif re.match(r"(?i)^voice\s*:", line):
                 if current_visual is None:
-                    raise Exception(f"Error near Line {line_num + 1}: Found a 'Voice:' but missing the 'Visual:' before it!")
-                
+                    raise Exception(f"Error near Line {line_num + 1}: Missing 'Visual:' before 'Voice:'")
                 current_voice = re.sub(r"(?i)^voice\s*:", "", line).strip()
                 script_scenes.append({"visual": current_visual, "voice": current_voice})
                 current_visual = None 
             else:
-                raise Exception(f"Error on Line {line_num + 1}: Every line must begin with 'Visual:' or 'Voice:'. Please fix!")
+                raise Exception(f"Error on Line {line_num + 1}: Line must begin with 'Visual:' or 'Voice:'")
                 
         if len(script_scenes) == 0:
-            raise Exception("No valid scenes were found. Please use the exact Visual: / Voice: formatting.")
+            raise Exception("No valid scenes were found.")
 
-        update_log("🚀 Starting video generation sequence...")
+        update_log(f"🚀 Starting {ratio_choice} video generation sequence...")
         
         final_clips = []
         source_clips = []
@@ -113,7 +127,7 @@ def create_video_thread():
             
             log_print = lambda msg: update_log(msg)
             
-            download_stock_video(api_key, scene['visual'], video_file, log_print)
+            download_stock_video(api_key, scene['visual'], video_file, log_print, orientation)
             generate_voiceover(scene['voice'], audio_file, log_print, voice_choice)
             
             video_clip = VideoFileClip(video_file)
@@ -126,11 +140,21 @@ def create_video_thread():
                 
             video_clip = video_clip.subclipped(0, audio_clip.duration)
             video_clip = video_clip.with_audio(audio_clip)
-            video_clip = video_clip.resized(width=1920) 
+
+            # --- DYNAMIC SCALE & CENTER CROP (Supports both 16:9 & 9:16) ---
+            scale_factor = max(target_w / video_clip.w, target_h / video_clip.h)
+            video_clip = video_clip.resized(scale_factor)
+            
+            video_clip = video_clip.cropped(
+                x_center=video_clip.w / 2,
+                y_center=video_clip.h / 2,
+                width=target_w,
+                height=target_h
+            )
             
             final_clips.append(video_clip)
 
-        update_log("✂️ Stitching all scenes together. (Check your terminal window for progress bar!)")
+        update_log(f"✂️ Stitching {ratio_choice} scenes together...")
         
         final_movie = concatenate_videoclips(final_clips, method="compose")
         final_movie.write_videofile(save_path, codec="libx264", audio_codec="aac", fps=24)
@@ -147,8 +171,8 @@ def create_video_thread():
             except:
                 pass
             
-        update_log(f"✅ DONE! Video saved to:\n{save_path}")
-        messagebox.showinfo("Success!", f"Video rendered successfully!\n\nSaved at:\n{save_path}")
+        update_log(f"✅ DONE! {ratio_choice} Video saved to:\n{save_path}")
+        messagebox.showinfo("Success!", f"Video rendered successfully!\n\nFormat: {ratio_choice}\nSaved at:\n{save_path}")
 
     except Exception as e:
         update_log(f"❌ ERROR: {str(e)}")
@@ -177,7 +201,7 @@ def choose_save_location():
         output_entry.insert(0, chosen_file)
 
 
-# --- 3. THEME MANAGEMENT (DARK / LIGHT MODE) ---
+# --- 3. THEME MANAGEMENT ---
 is_dark_mode = True
 
 def toggle_theme():
@@ -205,6 +229,7 @@ def apply_theme():
     header_frame.configure(bg=bg_main)
     title_label.configure(bg=bg_main, fg=fg_main)
     path_frame.configure(bg=bg_main)
+    ratio_frame.configure(bg=bg_main)
     radio_frame.configure(bg=bg_main)
 
     for lbl in custom_labels:
@@ -229,12 +254,12 @@ def apply_theme():
 # --- 4. BUILD THE GRAPHICAL UI ---
 window = tk.Tk()
 window.title("Automated Video Creator V2")
-window.geometry("860x830")
+window.geometry("860x860")
 window.configure(padx=20, pady=15)
 
 custom_labels = []
 
-# Top Header with Dark Mode Switch
+# Header
 header_frame = tk.Frame(window)
 header_frame.pack(fill="x", pady=(0, 10))
 
@@ -248,6 +273,7 @@ btn_theme.pack(side="right")
 frame_top = ttk.LabelFrame(window, text="⚙️ Configuration")
 frame_top.pack(fill="x", pady=5)
 
+# Row 0: API Key
 lbl_api = tk.Label(frame_top, text="Pexels API Key:")
 lbl_api.grid(row=0, column=0, padx=5, pady=5, sticky="w")
 custom_labels.append(lbl_api)
@@ -256,6 +282,7 @@ api_entry = ttk.Entry(frame_top, width=70)
 api_entry.grid(row=0, column=1, padx=5, pady=5, sticky="w")
 api_entry.insert(0, "KPwsjAyOxYePDSkp7uSn1ist6DYqkbPAAUqGEMnOXGYmsWt97L6Jduwj")
 
+# Row 1: Save Path
 lbl_save = tk.Label(frame_top, text="Save Video To:")
 lbl_save.grid(row=1, column=0, padx=5, pady=5, sticky="w")
 custom_labels.append(lbl_save)
@@ -271,8 +298,21 @@ output_entry.insert(0, default_save_file)
 btn_browse = ttk.Button(path_frame, text="📁 Browse...", command=choose_save_location)
 btn_browse.pack(side="left")
 
+# Row 2: Aspect Ratio (9:16 vs 16:9)
+lbl_ratio = tk.Label(frame_top, text="Aspect Ratio:")
+lbl_ratio.grid(row=2, column=0, padx=5, pady=5, sticky="w")
+custom_labels.append(lbl_ratio)
+
+ratio_var = tk.StringVar(value="9:16")
+ratio_frame = tk.Frame(frame_top)
+ratio_frame.grid(row=2, column=1, sticky="w", padx=5, pady=5)
+
+ttk.Radiobutton(ratio_frame, text="📱 9:16 (Shorts / TikTok / Reels)", variable=ratio_var, value="9:16").pack(side="left", padx=5)
+ttk.Radiobutton(ratio_frame, text="🖥️ 16:9 (YouTube Landscape)", variable=ratio_var, value="16:9").pack(side="left", padx=15)
+
+# Row 3: Voice Engine
 lbl_voice = tk.Label(frame_top, text="AI Voice Engine:")
-lbl_voice.grid(row=2, column=0, padx=5, pady=5, sticky="w")
+lbl_voice.grid(row=3, column=0, padx=5, pady=5, sticky="w")
 custom_labels.append(lbl_voice)
 
 voice_var = tk.StringVar(value="Neural Male")
@@ -284,7 +324,7 @@ voice_options = [
 ]
 
 radio_frame = tk.Frame(frame_top)
-radio_frame.grid(row=2, column=1, sticky="w", padx=5, pady=5)
+radio_frame.grid(row=3, column=1, sticky="w", padx=5, pady=5)
 
 for opt in voice_options:
     ttk.Radiobutton(radio_frame, text=opt, variable=voice_var, value=opt).pack(side="left", padx=5)
@@ -293,14 +333,7 @@ for opt in voice_options:
 frame_mid = ttk.LabelFrame(window, text="📝 Your Script (Lines must start with 'Visual:' or 'Voice:')")
 frame_mid.pack(fill="both", expand=True, pady=10)
 
-default_script = """Visual: slow broken computer
-Voice: Is your PC booting incredibly slow?
-
-Visual: frustrated man
-Voice: Don't smash your monitor just yet!
-
-Visual: typing fast on modern laptop
-Voice: Try this simple setting tweak to speed it up in seconds."""
+default_script =
 
 script_box = scrolledtext.ScrolledText(frame_mid, height=10, width=80, font=("Consolas", 10))
 script_box.pack(padx=10, pady=10, fill="both", expand=True)
@@ -315,7 +348,6 @@ frame_bot.pack(fill="both", expand=True, pady=5)
 log_box = scrolledtext.ScrolledText(frame_bot, height=10, width=80, font=("Consolas", 9))
 log_box.pack(padx=10, pady=10, fill="both", expand=True)
 
-# Apply Default Dark Theme on startup
 apply_theme()
 
 window.mainloop()
