@@ -280,7 +280,7 @@ custom_labels.append(lbl_api)
 
 api_entry = ttk.Entry(frame_top, width=70)
 api_entry.grid(row=0, column=1, padx=5, pady=5, sticky="w")
-api_entry.insert(0, "KPwsjAyOxYePDSkp7uSn1ist6DYqkbPAAUqGEMnOXGYmsWt97L6Jduwj")
+api_entry.insert(0, "")
 
 # Row 1: Save Path
 lbl_save = tk.Label(frame_top, text="Save Video To:")
