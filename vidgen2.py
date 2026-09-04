@@ -333,7 +333,7 @@ for opt in voice_options:
 frame_mid = ttk.LabelFrame(window, text="📝 Your Script (Lines must start with 'Visual:' or 'Voice:')")
 frame_mid.pack(fill="both", expand=True, pady=10)
 
-default_script =
+default_script = """ """
 
 script_box = scrolledtext.ScrolledText(frame_mid, height=10, width=80, font=("Consolas", 10))
 script_box.pack(padx=10, pady=10, fill="both", expand=True)
