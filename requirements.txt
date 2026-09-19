@@ -1,14 +1,10 @@
-moviepy
-requests
-gTTS
-edge-tts
-
-To install these run these command ONE BY ONE on the python terminal or vs code terminal
-
-pip install moviepy
-
-pip install requests
-
-pip install gTTS
-
-pip install edge-tts
+# Runtime dependencies, pinned.
+# This is a frozen desktop app: a minor bump in MoviePy or CustomTkinter can
+# silently change ffmpeg resolution or the Fluent layout, and you would not find
+# out until a user reports it. Reproducibility beats freshness here.
+customtkinter==6.0.0
+requests==2.34.2
+moviepy==2.1.2
+edge-tts==7.2.8
+imageio-ffmpeg==0.6.0
+pywinstyles==1.8

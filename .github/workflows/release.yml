@@ -1,0 +1,116 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  # Lets you exercise the whole build without burning a tag.
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Resolve version
+        id: ver
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF_TYPE -eq 'tag') { $v = $env:GITHUB_REF_NAME -replace '^v','' }
+          else { $v = '0.0.0-dev' }
+          "version=$v" >> $env:GITHUB_OUTPUT
+          Write-Host "Building version $v"
+
+      - name: Check APP_VERSION matches the tag
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        run: |
+          $src = Get-Content src/ai_video_studio.py -Raw
+          if ($src -notmatch 'APP_VERSION\s*=\s*"([^"]+)"') { throw "APP_VERSION not found" }
+          $app = $Matches[1]
+          if ($app -ne "${{ steps.ver.outputs.version }}") {
+            throw "APP_VERSION '$app' does not match tag '${{ steps.ver.outputs.version }}' - bump it in src/ai_video_studio.py and packaging/version_info.txt"
+          }
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-build.txt
+
+      - name: Generate icon
+        run: python packaging/make_icon.py
+
+      - name: Build with PyInstaller
+        run: pyinstaller --noconfirm --clean packaging/ai_video_studio.spec
+
+      - name: Smoke-check the bundle
+        shell: pwsh
+        run: |
+          if (-not (Test-Path dist/AIVideoStudio/AIVideoStudio.exe)) { throw "exe missing" }
+          $ff = Get-ChildItem dist/AIVideoStudio/_internal/imageio_ffmpeg/binaries -Filter ffmpeg*.exe -ErrorAction SilentlyContinue
+          if (-not $ff) { throw "bundled ffmpeg missing - did pyinstaller-hooks-contrib change?" }
+          if (-not (Test-Path dist/AIVideoStudio/_internal/assets/icon.ico)) { throw "icon asset missing" }
+          if (-not (Test-Path dist/AIVideoStudio/_internal/customtkinter/assets)) { throw "customtkinter assets missing" }
+          Write-Host "ffmpeg: $($ff.Name) $([math]::Round($ff.Length/1MB,1)) MB"
+          $mb = (Get-ChildItem dist/AIVideoStudio -Recurse | Measure-Object Length -Sum).Sum / 1MB
+          Write-Host ("bundle: {0:N0} MB" -f $mb)
+
+      - name: Portable ZIP
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist/artifacts | Out-Null
+          # 7-Zip is preinstalled and much faster than Compress-Archive here.
+          # Archiving the folder (not its contents) so it extracts into a folder
+          # rather than spraying 150 MB into the user's Downloads.
+          7z a -mx=5 "dist/artifacts/AIVideoStudio-${{ steps.ver.outputs.version }}-portable.zip" "./dist/AIVideoStudio"
+
+      - name: Locate Inno Setup
+        id: inno
+        shell: pwsh
+        run: |
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            Write-Host "Not preinstalled on this image; installing"
+            choco install innosetup -y --no-progress
+          }
+          if (-not (Test-Path $iscc)) { throw "ISCC.exe not found at $iscc" }
+          "iscc=$iscc" >> $env:GITHUB_OUTPUT
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          & "${{ steps.inno.outputs.iscc }}" /DMyAppVersion=${{ steps.ver.outputs.version }} packaging\installer.iss
+          Copy-Item dist/installer/*.exe dist/artifacts/
+
+      - name: Checksums
+        shell: pwsh
+        run: |
+          Get-ChildItem dist/artifacts -File | ForEach-Object {
+            "{0}  {1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash, $_.Name
+          } | Set-Content dist/artifacts/SHA256SUMS.txt
+          Get-Content dist/artifacts/SHA256SUMS.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AIVideoStudio-${{ steps.ver.outputs.version }}
+          path: dist/artifacts/*
+          retention-days: 14
+
+      - name: Publish release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/artifacts/*
+          generate_release_notes: true
+          # Draft so you can download and run both artifacts before anyone else
+          # sees them. Flip to false once you trust the pipeline.
+          draft: true
+          fail_on_unmatched_files: true

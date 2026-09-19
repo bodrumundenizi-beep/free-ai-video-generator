@@ -1,0 +1,20 @@
+__pycache__/
+*.py[cod]
+
+# Build output
+build/
+dist/
+*.manifest
+
+# Local environments
+.venv/
+venv/
+
+# Never commit a real settings file - it holds the user's Pexels API key
+settings.json
+
+# Render artefacts
+*.mp4
+*.mp3
+temp_vid_*.mp4
+temp_aud_*.mp3

@@ -1,0 +1,35 @@
+# Win32 version resource for AIVideoStudio.exe.
+#
+# Keep filevers/prodvers and the version strings in step with APP_VERSION in
+# src/ai_video_studio.py - the release workflow fails the build if the tag and
+# APP_VERSION disagree.
+#
+# This is not cosmetic: an unsigned executable with no version resource looks
+# more like malware to SmartScreen and AV heuristics than a described one.
+VSVersionInfo(
+  ffi=FixedFileInfo(
+    filevers=(3, 0, 0, 0),
+    prodvers=(3, 0, 0, 0),
+    mask=0x3f,
+    flags=0x0,
+    OS=0x40004,
+    fileType=0x1,
+    subtype=0x0,
+    date=(0, 0)
+  ),
+  kids=[
+    StringFileInfo([
+      StringTable('040904B0', [
+        StringStruct('CompanyName', 'AI Video Studio'),
+        StringStruct('FileDescription', 'AI Video Studio'),
+        StringStruct('FileVersion', '3.0.0.0'),
+        StringStruct('InternalName', 'AIVideoStudio'),
+        StringStruct('LegalCopyright', 'Copyright (c) 2026. MIT License.'),
+        StringStruct('OriginalFilename', 'AIVideoStudio.exe'),
+        StringStruct('ProductName', 'AI Video Studio'),
+        StringStruct('ProductVersion', '3.0.0'),
+      ])
+    ]),
+    VarFileInfo([VarStruct('Translation', [1033, 1200])])
+  ]
+)

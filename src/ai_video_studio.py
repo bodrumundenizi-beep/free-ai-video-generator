@@ -35,14 +35,87 @@ import math
 import os
 import queue
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 import threading
+import time
 import tkinter as tk
 from tkinter import filedialog
 from tkinter import font as tkfont
 
 import requests
+
+
+# =============================================================================
+#  SECTION 0 - FROZEN-BUILD BOOTSTRAP
+# =============================================================================
+# Everything in this section has to run before CustomTkinter or MoviePy are
+# imported.  It is a no-op when running from source.
+
+IS_FROZEN = getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS")
+BUNDLE_DIR = sys._MEIPASS if IS_FROZEN else os.path.dirname(os.path.abspath(__file__))
+
+# A windowed (--noconsole) build has no stdout or stderr at all: they are None.
+# Anything that writes to them - the import guard below, or tqdm inside MoviePy's
+# progress logger - would raise AttributeError on None and kill the render.
+# Give them somewhere harmless to go.
+if IS_FROZEN:
+    for _stream in ("stdout", "stderr"):
+        if getattr(sys, _stream, None) is None:
+            try:
+                setattr(sys, _stream, open(os.devnull, "w", encoding="utf-8"))
+            except OSError:
+                pass
+
+
+def asset_path(name: str):
+    """Locate a bundled asset in both layouts, or None.
+
+    Frozen: <_MEIPASS>/assets/<name>.  From source the script lives in src/, so
+    the repo's assets/ folder is one level up.
+    """
+    for base in (BUNDLE_DIR, os.path.dirname(BUNDLE_DIR)):
+        candidate = os.path.join(base, "assets", name)
+        if os.path.exists(candidate):
+            return candidate
+    return None
+
+
+def _bundled_ffmpeg():
+    """The ffmpeg PyInstaller collected via hook-imageio_ffmpeg, if present."""
+    binaries = os.path.join(BUNDLE_DIR, "imageio_ffmpeg", "binaries")
+    try:
+        names = os.listdir(binaries)
+    except OSError:
+        return None
+    for name in names:
+        lowered = name.lower()
+        if lowered.startswith("ffmpeg") and lowered.endswith(".exe"):
+            return os.path.join(binaries, name)
+    return None
+
+
+def configure_ffmpeg():
+    """Point imageio-ffmpeg, and so MoviePy, at the bundled ffmpeg.
+
+    imageio_ffmpeg.get_ffmpeg_exe() reads IMAGEIO_FFMPEG_EXE first and trusts it
+    without probing.  Deliberately not MoviePy's own FFMPEG_BINARY: that path is
+    validated by spawning the binary at import time.
+
+    Returns None when running from source, where imageio auto-detects as before.
+    """
+    if os.environ.get("IMAGEIO_FFMPEG_EXE"):
+        return os.environ["IMAGEIO_FFMPEG_EXE"]
+    exe = _bundled_ffmpeg()
+    if exe:
+        os.environ["IMAGEIO_FFMPEG_EXE"] = exe
+    return exe
+
+
+FFMPEG_EXE = configure_ffmpeg()
+
 
 try:
     import customtkinter as ctk
@@ -55,7 +128,10 @@ except ImportError:  # pragma: no cover - startup guard
 
 
 APP_NAME = "AI Video Studio"
-APP_VERSION = "3.0"
+APP_VERSION = "3.0.0"
+# Must match AppUserModelID in packaging/installer.iss, or a pinned taskbar
+# shortcut will not group with the running window.
+APP_MODEL_ID = "AIVideoStudio.Desktop.3"
 
 
 # =============================================================================
@@ -66,6 +142,53 @@ SETTINGS_DIR = os.path.join(
     os.environ.get("APPDATA") or os.path.expanduser("~"), "AIVideoStudio"
 )
 SETTINGS_FILE = os.path.join(SETTINGS_DIR, "settings.json")
+
+
+def default_output_dir() -> str:
+    """The user's Videos folder, honouring a OneDrive redirect, with fallbacks.
+
+    SHGetFolderPathW is superseded by SHGetKnownFolderPath, but it is still
+    present on Windows 11, it follows folder redirection, and it needs no GUID
+    struct - which makes it the cheapest correct option here.
+    """
+    if sys.platform == "win32":
+        try:
+            buffer = ctypes.create_unicode_buffer(260)
+            # CSIDL_MYVIDEO = 14, SHGFP_TYPE_CURRENT = 0
+            if ctypes.windll.shell32.SHGetFolderPathW(None, 14, None, 0, buffer) == 0:
+                if buffer.value and os.path.isdir(buffer.value):
+                    return buffer.value
+        except Exception:
+            pass
+    guess = os.path.join(os.path.expanduser("~"), "Videos")
+    return guess if os.path.isdir(guess) else os.path.expanduser("~")
+
+
+# Scratch space for a render.  Never the working directory: once installed, that
+# is the (possibly read-only) install folder, not somewhere we may write.
+TEMP_ROOT = os.path.join(tempfile.gettempdir(), "AIVideoStudio")
+
+
+def new_work_dir() -> str:
+    """A private directory for one render's intermediate files."""
+    os.makedirs(TEMP_ROOT, exist_ok=True)
+    return tempfile.mkdtemp(prefix="run_", dir=TEMP_ROOT)
+
+
+def sweep_old_work_dirs(max_age_hours: int = 24) -> None:
+    """Remove scratch dirs a crashed render left behind (clips can stay locked)."""
+    cutoff = time.time() - max_age_hours * 3600
+    try:
+        names = os.listdir(TEMP_ROOT)
+    except OSError:
+        return
+    for name in names:
+        path = os.path.join(TEMP_ROOT, name)
+        try:
+            if name.startswith("run_") and os.path.getmtime(path) < cutoff:
+                shutil.rmtree(path, ignore_errors=True)
+        except OSError:
+            pass
 
 DEFAULT_SCRIPT = """Visual: hard drive
 Voice: Your PC could be hoarding gigabytes of junk you will never use.
@@ -104,7 +227,7 @@ BITRATE_MAP = {"1080p": "8000k", "720p": "5000k"}
 def default_settings() -> dict:
     return {
         "api_key": "",
-        "output_path": os.path.join(os.getcwd(), "final_video.mp4"),
+        "output_path": os.path.join(default_output_dir(), "final_video.mp4"),
         "aspect": "9:16",
         "resolution": "1080p",
         "voice": "Neural Male",
@@ -139,6 +262,12 @@ def load_settings() -> dict:
         data["voice"] = "Neural Male"
     if data["theme"] not in ("dark", "light"):
         data["theme"] = "dark"
+
+    # Repair a path saved by an older build, or one that pointed at a folder the
+    # installed app cannot write to.
+    out_dir = os.path.dirname(str(data.get("output_path") or ""))
+    if not out_dir or not os.path.isdir(out_dir) or not os.access(out_dir, os.W_OK):
+        data["output_path"] = os.path.join(default_output_dir(), "final_video.mp4")
     return data
 
 
@@ -261,25 +390,27 @@ def generate_voiceover(text, filename, log_func, voice_choice):
     voice_code = voice_map.get(voice_choice, "en-US-GuyNeural")
     log_func(f"🗣️ Generating {voice_choice} Voice: '{text}'")
 
-    cmd = [
-        sys.executable,
-        "-m",
-        "edge_tts",
-        "--voice",
-        voice_code,
-        "--text",
-        text,
-        "--write-media",
-        filename,
-        "--rate",
-        "+10%",
-        "--pitch",
-        "+5Hz",
-    ]
-    result = subprocess.run(cmd, capture_output=True)
-    if result.returncode != 0:
+    # In-process, not "sys.executable -m edge_tts": in a frozen build
+    # sys.executable is AIVideoStudio.exe, which has no -m.  Communicate()'s
+    # rate/pitch are the same knobs the old --rate/--pitch flags drove.
+    # Imported here rather than at module scope because edge_tts pulls in
+    # aiohttp, and the window should appear instantly - same reasoning as
+    # load_moviepy().
+    import asyncio
+    import edge_tts
+
+    try:
+        speaker = edge_tts.Communicate(text, voice_code, rate="+10%", pitch="+5Hz")
+        # Safe: this only ever runs on the render worker thread, which has no
+        # event loop of its own.
+        asyncio.run(speaker.save(filename))
+    except Exception as exc:  # noqa: BLE001 - surfaced to the user
+        raise Exception(f"Voice generation failed! ({exc})") from exc
+
+    if not os.path.exists(filename) or os.path.getsize(filename) == 0:
         raise Exception(
-            "Voice generation failed! Make sure you ran 'pip install edge-tts'."
+            "Voice generation failed! No audio came back from the voice service "
+            "- check your internet connection."
         )
     return filename
 
@@ -366,6 +497,8 @@ class UiBridge:
 
 def render_worker(cfg: dict, ui: UiBridge):
     """The original create_video_thread(), with config passed in as a snapshot."""
+    # Allocated before the try so the finally can always clean it up.
+    work_dir = new_work_dir()
     try:
         api_key = cfg["api_key"]
         voice_choice = cfg["voice"]
@@ -400,8 +533,8 @@ def render_worker(cfg: dict, ui: UiBridge):
         total = len(script_scenes)
 
         for index, scene in enumerate(script_scenes):
-            video_file = f"temp_vid_{index}.mp4"
-            audio_file = f"temp_aud_{index}.mp3"
+            video_file = os.path.join(work_dir, f"temp_vid_{index}.mp4")
+            audio_file = os.path.join(work_dir, f"temp_aud_{index}.mp3")
 
             ui.log(f"🎬 Scene {index + 1} of {total}")
 
@@ -445,6 +578,12 @@ def render_worker(cfg: dict, ui: UiBridge):
             fps=30,
             preset="fast",
             bitrate=bitrate,
+            # Without this MoviePy drops TEMP_MPY_wvf_snd.mp3 beside the output.
+            temp_audiofile_path=work_dir,
+            # logger defaults to "bar", whose tqdm writes to sys.stderr - which is
+            # None in a windowed build, killing the render here.  The UI already
+            # shows an indeterminate spinner for this phase.
+            logger=None,
         )
 
         ui.spinner(False)
@@ -456,15 +595,6 @@ def render_worker(cfg: dict, ui: UiBridge):
         for v_clip, a_clip in source_clips:
             v_clip.close()
             a_clip.close()
-
-        for index in range(len(script_scenes)):
-            try:
-                if os.path.exists(f"temp_vid_{index}.mp4"):
-                    os.remove(f"temp_vid_{index}.mp4")
-                if os.path.exists(f"temp_aud_{index}.mp3"):
-                    os.remove(f"temp_aud_{index}.mp3")
-            except OSError:
-                pass
 
         ui.progress(1.0)
         ui.log(f"✅ DONE! {target_w}x{target_h} video saved to:\n{save_path}")
@@ -480,6 +610,10 @@ def render_worker(cfg: dict, ui: UiBridge):
         ui.log(f"❌ ERROR: {str(e)}")
         ui.finished(False, "Render failed", str(e))
     finally:
+        # Here rather than on the success path, so a failed render cleans up too.
+        # On the error path the clips may still be open and their files locked;
+        # sweep_old_work_dirs() at startup catches whatever survives.
+        shutil.rmtree(work_dir, ignore_errors=True)
         ui.busy(False)
 
 
@@ -937,6 +1071,12 @@ class App(ctk.CTk):
         ctk.set_default_color_theme("blue")
 
         self.title(f"{APP_NAME}")
+        icon_path = asset_path("icon.ico")
+        if icon_path:
+            try:
+                self.iconbitmap(icon_path)
+            except Exception:
+                pass
         self.geometry("1180x780")
         self.minsize(980, 640)
         self.configure(fg_color=MAIN_BG)
@@ -1396,7 +1536,7 @@ class App(ctk.CTk):
         return page
 
     def open_output_folder(self):
-        target = os.path.dirname(self.var_output.get().strip()) or os.getcwd()
+        target = os.path.dirname(self.var_output.get().strip()) or default_output_dir()
         self._open_folder(target)
 
     def open_settings_folder(self):
@@ -1520,7 +1660,7 @@ class App(ctk.CTk):
         chosen = filedialog.asksaveasfilename(
             defaultextension=".mp4",
             filetypes=[("MP4 Video", "*.mp4"), ("All Files", "*.*")],
-            initialdir=os.path.dirname(current) or os.getcwd(),
+            initialdir=os.path.dirname(current) or default_output_dir(),
             initialfile=os.path.basename(current) or "final_video.mp4",
         )
         if chosen:
@@ -1547,12 +1687,14 @@ class App(ctk.CTk):
         self.apply_effects()
         self.append_log(f"{APP_NAME} {APP_VERSION} ready.")
         self.append_log(f"🪟 Window effect: {self.effect_note}")
+        self.append_log(f"🎞️ ffmpeg: {FFMPEG_EXE or 'system / imageio auto-detect'}")
         if not self.var_api.get().strip():
             self.append_log("⚠️ No Pexels API key yet - add one in Settings.")
         self.refresh_home()
         threading.Thread(target=self._warm_moviepy, daemon=True).start()
 
     def _warm_moviepy(self):
+        sweep_old_work_dirs()
         try:
             load_moviepy()
             self.ui.log("📦 MoviePy loaded.")
@@ -1626,6 +1768,13 @@ class App(ctk.CTk):
 
 
 def main():
+    if sys.platform == "win32":
+        try:
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+                APP_MODEL_ID
+            )
+        except Exception:
+            pass
     app = App()
     app.mainloop()
 
