@@ -8,3 +8,7 @@ moviepy==2.1.2
 edge-tts==7.2.8
 imageio-ffmpeg==0.6.0
 pywinstyles==1.8
+# Imported directly by the engine (frame maths, Ken Burns resampling), so pinned
+# here rather than left to whatever MoviePy happens to pull in.
+numpy==2.5.2
+pillow==11.3.0

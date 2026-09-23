@@ -16,18 +16,32 @@ import os
 ROOT = os.path.abspath(os.path.join(SPECPATH, os.pardir))
 ICON = os.path.join(ROOT, "assets", "icon.ico")
 
+# Royalty-free tracks placed in assets/music ship inside the app and show up in
+# Settings > Background music. Only audio files - not the folder's README.
+MUSIC_EXTS = (".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac")
+MUSIC_SRC = os.path.join(ROOT, "assets", "music")
+MUSIC = [
+    (os.path.join(MUSIC_SRC, name), os.path.join("assets", "music"))
+    for name in (os.listdir(MUSIC_SRC) if os.path.isdir(MUSIC_SRC) else [])
+    if name.lower().endswith(MUSIC_EXTS)
+]
+
 a = Analysis(
     [os.path.join(ROOT, "src", "ai_video_studio.py")],
     pathex=[os.path.join(ROOT, "src")],
     binaries=[],
-    # The window icon, looked up at runtime by asset_path().
-    datas=[(ICON, "assets")],
+    # The window icon, and any bundled music, looked up at runtime by asset_path().
+    datas=[(ICON, "assets")] + MUSIC,
     hiddenimports=[
         # Imported inside a try/except in apply_window_effects(); PyInstaller's
         # scan does find it, but being explicit costs nothing.
         "pywinstyles",
         # edge_tts and moviepy are imported lazily inside functions.
         "edge_tts",
+        # The engine's heavy half is imported lazily by vidgen.render.
+        "vidgen", "vidgen.audio", "vidgen.footage", "vidgen.formats",
+        "vidgen.motion", "vidgen.render", "vidgen.script", "vidgen.timeline",
+        "vidgen.voice",
     ],
     hookspath=[],
     hooksconfig={},
