@@ -2,16 +2,16 @@
 """
 AI Video Studio - Fluent Edition
 ================================
-Windows 11 / "Wintoys"-style redesign of the automated video creator.
+The window: a Windows 11 / "Wintoys"-style shell around the video engine.
 
-The video pipeline (Pexels search + download, edge-tts voiceover, MoviePy
-render, script parser) is unchanged.  Everything else is a new UI layer:
+This file is the interface - settings, pages, window effects. The engine
+(script parser, footage search, motion, music, rendering) lives in the
+``vidgen`` package beside it.
 
   * Fluent-style shell: near-black sidebar, lighter content area, rounded cards.
   * Pages: Home / Create / Log / Feedback / Settings.
-  * NEW: 1080p / 720p resolution selector (drives target size + bitrate).
-  * Settings are persisted to a small JSON file (incl. the Pexels key, which is
-    no longer hardcoded).
+  * Settings are persisted to a small JSON file, including the API keys, which
+    are never in the source.
   * Mica / acrylic translucency + dark title bar on Windows 11.
   * Thread-safe UI: the render thread never touches a widget.  It pushes
     messages onto a queue that the main thread drains from a window.after()
@@ -19,33 +19,25 @@ render, script parser) is unchanged.  Everything else is a new UI layer:
 
 Requirements
 ------------
-    pip install customtkinter requests moviepy edge-tts
-    pip install pywinstyles          # optional, nicer Mica/acrylic path
+    pip install -r requirements.txt
 
 Run
 ---
-    python vidgen3.py
+    python src/ai_video_studio.py
 """
 
 from __future__ import annotations
 
 import ctypes
 import json
-import math
 import os
 import queue
-import re
-import shutil
 import subprocess
 import sys
-import tempfile
 import threading
-import time
 import tkinter as tk
 from tkinter import filedialog
 from tkinter import font as tkfont
-
-import requests
 
 
 # =============================================================================
@@ -56,6 +48,12 @@ import requests
 
 IS_FROZEN = getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS")
 BUNDLE_DIR = sys._MEIPASS if IS_FROZEN else os.path.dirname(os.path.abspath(__file__))
+
+# The engine package lives beside this file. Python adds the script's folder
+# to sys.path when it is run directly, but not when it is loaded some other way
+# (tests, an IDE runner), so make sure.
+if not IS_FROZEN and BUNDLE_DIR not in sys.path:
+    sys.path.insert(0, BUNDLE_DIR)
 
 # A windowed (--noconsole) build has no stdout or stderr at all: they are None.
 # Anything that writes to them - the import guard below, or tqdm inside MoviePy's
@@ -126,9 +124,15 @@ except ImportError:  # pragma: no cover - startup guard
     )
     raise SystemExit(1)
 
+# The engine. Only light modules load here; MoviePy waits for the first render
+# (or the warm-up thread), so the window still appears instantly.
+from vidgen.formats import RATIO_OPTIONS, RESOLUTION_OPTIONS, resolve_target  # noqa: E402
+from vidgen.render import UiBridge, render_worker, sweep_old_work_dirs  # noqa: E402
+from vidgen.script import count_scenes  # noqa: E402
+
 
 APP_NAME = "AI Video Studio"
-APP_VERSION = "3.0.0"
+APP_VERSION = "3.1.0"
 # Must match AppUserModelID in packaging/installer.iss, or a pinned taskbar
 # shortcut will not group with the running window.
 APP_MODEL_ID = "AIVideoStudio.Desktop.3"
@@ -144,8 +148,8 @@ SETTINGS_DIR = os.path.join(
 SETTINGS_FILE = os.path.join(SETTINGS_DIR, "settings.json")
 
 
-def default_output_dir() -> str:
-    """The user's Videos folder, honouring a OneDrive redirect, with fallbacks.
+def _known_folder(csidl: int, fallback: str) -> str:
+    """A shell folder, honouring a OneDrive redirect, with a home-dir fallback.
 
     SHGetFolderPathW is superseded by SHGetKnownFolderPath, but it is still
     present on Windows 11, it follows folder redirection, and it needs no GUID
@@ -154,41 +158,41 @@ def default_output_dir() -> str:
     if sys.platform == "win32":
         try:
             buffer = ctypes.create_unicode_buffer(260)
-            # CSIDL_MYVIDEO = 14, SHGFP_TYPE_CURRENT = 0
-            if ctypes.windll.shell32.SHGetFolderPathW(None, 14, None, 0, buffer) == 0:
+            # SHGFP_TYPE_CURRENT = 0
+            if ctypes.windll.shell32.SHGetFolderPathW(None, csidl, None, 0, buffer) == 0:
                 if buffer.value and os.path.isdir(buffer.value):
                     return buffer.value
         except Exception:
             pass
-    guess = os.path.join(os.path.expanduser("~"), "Videos")
+    guess = os.path.join(os.path.expanduser("~"), fallback)
     return guess if os.path.isdir(guess) else os.path.expanduser("~")
 
 
-# Scratch space for a render.  Never the working directory: once installed, that
-# is the (possibly read-only) install folder, not somewhere we may write.
-TEMP_ROOT = os.path.join(tempfile.gettempdir(), "AIVideoStudio")
+def default_output_dir() -> str:
+    """The user's Videos folder."""
+    return _known_folder(14, "Videos")  # CSIDL_MYVIDEO
 
 
-def new_work_dir() -> str:
-    """A private directory for one render's intermediate files."""
-    os.makedirs(TEMP_ROOT, exist_ok=True)
-    return tempfile.mkdtemp(prefix="run_", dir=TEMP_ROOT)
+# Tracks dropped in here appear in Settings > Background music. Documents rather
+# than %APPDATA%, because people need to be able to find it.
+MUSIC_DIR = os.path.join(_known_folder(5, "Documents"), "AI Video Studio", "Music")
+MUSIC_EXTS = (".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac")
+SEARCH_CACHE_DIR = os.path.join(SETTINGS_DIR, "cache", "search")
+PADDING_OPTIONS = {"0s": 0.0, "0.25s": 0.25, "0.5s": 0.5, "1s": 1.0}
+DEFAULT_PADDING = 0.25
 
 
-def sweep_old_work_dirs(max_age_hours: int = 24) -> None:
-    """Remove scratch dirs a crashed render left behind (clips can stay locked)."""
-    cutoff = time.time() - max_age_hours * 3600
-    try:
-        names = os.listdir(TEMP_ROOT)
-    except OSError:
-        return
-    for name in names:
-        path = os.path.join(TEMP_ROOT, name)
-        try:
-            if name.startswith("run_") and os.path.getmtime(path) < cutoff:
-                shutil.rmtree(path, ignore_errors=True)
-        except OSError:
-            pass
+def music_tracks() -> dict:
+    """{name: path} for every track in the user's Music folder and assets/music."""
+    tracks = {}
+    for folder in (MUSIC_DIR, asset_path("music")):
+        if not folder or not os.path.isdir(folder):
+            continue
+        for name in sorted(os.listdir(folder), key=str.lower):
+            if name.lower().endswith(MUSIC_EXTS):
+                tracks.setdefault(name, os.path.join(folder, name))
+    return tracks
+
 
 DEFAULT_SCRIPT = """Visual: hard drive
 Voice: Your PC could be hoarding gigabytes of junk you will never use.
@@ -209,24 +213,13 @@ VOICE_OPTIONS = [
     "Deep/Narrator (Male)",
 ]
 
-RATIO_OPTIONS = ["9:16", "16:9"]
-RESOLUTION_OPTIONS = ["1080p", "720p"]
-
-# NEW: aspect ratio + quality -> output frame size.
-RESOLUTION_MAP = {
-    ("16:9", "1080p"): (1920, 1080),
-    ("16:9", "720p"): (1280, 720),
-    ("9:16", "1080p"): (1080, 1920),
-    ("9:16", "720p"): (720, 1280),
-}
-
-# Bitrate scaled to the chosen quality.
-BITRATE_MAP = {"1080p": "8000k", "720p": "5000k"}
-
-
 def default_settings() -> dict:
     return {
         "api_key": "",
+        "pixabay_key": "",
+        "padding": DEFAULT_PADDING,
+        "music_enabled": False,
+        "music_path": "",
         "output_path": os.path.join(default_output_dir(), "final_video.mp4"),
         "aspect": "9:16",
         "resolution": "1080p",
@@ -253,6 +246,17 @@ def load_settings() -> dict:
     # Never hardcode the key: allow an environment variable as a second source.
     if not str(data.get("api_key", "")).strip():
         data["api_key"] = os.environ.get("PEXELS_API_KEY", "")
+    if not str(data.get("pixabay_key", "")).strip():
+        data["pixabay_key"] = os.environ.get("PIXABAY_API_KEY", "")
+
+    try:
+        padding = float(data["padding"])
+    except (TypeError, ValueError):
+        padding = DEFAULT_PADDING
+    data["padding"] = padding if padding in PADDING_OPTIONS.values() else DEFAULT_PADDING
+    data["music_enabled"] = bool(data["music_enabled"])
+    if data["music_path"] and not os.path.isfile(str(data["music_path"])):
+        data["music_path"] = ""
 
     if data["aspect"] not in RATIO_OPTIONS:
         data["aspect"] = "9:16"
@@ -278,343 +282,6 @@ def save_settings(data: dict) -> None:
             json.dump(data, fh, indent=2)
     except OSError:
         pass
-
-
-# =============================================================================
-#  SECTION 2 - VIDEO PIPELINE (logic unchanged from the original app)
-# =============================================================================
-
-_MOVIEPY: dict = {}
-
-
-def load_moviepy():
-    """Import MoviePy lazily so the window appears instantly."""
-    if not _MOVIEPY:
-        from moviepy import VideoFileClip, AudioFileClip, concatenate_videoclips
-
-        _MOVIEPY["VideoFileClip"] = VideoFileClip
-        _MOVIEPY["AudioFileClip"] = AudioFileClip
-        _MOVIEPY["concatenate_videoclips"] = concatenate_videoclips
-    return (
-        _MOVIEPY["VideoFileClip"],
-        _MOVIEPY["AudioFileClip"],
-        _MOVIEPY["concatenate_videoclips"],
-    )
-
-
-def get_best_hd_file(video_obj, target_orientation):
-    """Finds the highest resolution MP4 file that best matches orientation."""
-    files = video_obj.get("video_files", [])
-    if not files:
-        return None
-
-    # Filter for mp4 links with valid dimensions
-    valid = [
-        f
-        for f in files
-        if f.get("link")
-        and f.get("width")
-        and f.get("height")
-        and f.get("file_type") == "video/mp4"
-    ]
-    if not valid:
-        valid = [f for f in files if f.get("link")]
-
-    if not valid:
-        return None
-
-    # Sort descending by resolution (width * height) to guarantee crisp 1080p/4K
-    valid.sort(key=lambda x: (x.get("width", 0) * x.get("height", 0)), reverse=True)
-    return valid[0]["link"]
-
-
-def download_stock_video(api_key, query, filename, log_func, orientation):
-    headers = {"Authorization": api_key}
-
-    # Generate search queries: full query, then simplified 2-word fallbacks
-    words = query.strip().split()
-    query_attempts = [query]
-    if len(words) > 2:
-        query_attempts.append(" ".join(words[:2]))
-        query_attempts.append(words[0])
-
-    video_url = None
-    for attempt in query_attempts:
-        log_func(f"🔍 Searching Pexels for: '{attempt}' ({orientation})...")
-        url = (
-            f"https://api.pexels.com/videos/search?query={attempt}"
-            f"&orientation={orientation}&per_page=15&size=large"
-        )
-        response = requests.get(url, headers=headers)
-
-        # Fallback to no orientation filter if portrait search is empty
-        if response.status_code != 200 or len(response.json().get("videos", [])) == 0:
-            url = (
-                f"https://api.pexels.com/videos/search?query={attempt}"
-                f"&per_page=15&size=large"
-            )
-            response = requests.get(url, headers=headers)
-
-        if response.status_code == 200:
-            videos = response.json().get("videos", [])
-            if videos:
-                # Pick the first video with a valid HD stream
-                for v in videos:
-                    best_link = get_best_hd_file(v, orientation)
-                    if best_link:
-                        video_url = best_link
-                        break
-            if video_url:
-                break
-
-    if not video_url:
-        raise Exception(f"No usable stock footage found for query: '{query}'")
-
-    log_func("⬇️ Downloading High-Quality HD stream...")
-    r = requests.get(video_url, stream=True)
-    with open(filename, "wb") as f:
-        for chunk in r.iter_content(chunk_size=1024 * 1024):
-            if chunk:
-                f.write(chunk)
-    return filename
-
-
-def generate_voiceover(text, filename, log_func, voice_choice):
-    voice_map = {
-        "Neural Male": "en-US-GuyNeural",
-        "Neural Female": "en-US-AriaNeural",
-        "Happy/Upbeat (Female)": "en-US-JennyNeural",
-        "Deep/Narrator (Male)": "en-US-ChristopherNeural",
-    }
-
-    voice_code = voice_map.get(voice_choice, "en-US-GuyNeural")
-    log_func(f"🗣️ Generating {voice_choice} Voice: '{text}'")
-
-    # In-process, not "sys.executable -m edge_tts": in a frozen build
-    # sys.executable is AIVideoStudio.exe, which has no -m.  Communicate()'s
-    # rate/pitch are the same knobs the old --rate/--pitch flags drove.
-    # Imported here rather than at module scope because edge_tts pulls in
-    # aiohttp, and the window should appear instantly - same reasoning as
-    # load_moviepy().
-    import asyncio
-    import edge_tts
-
-    try:
-        speaker = edge_tts.Communicate(text, voice_code, rate="+10%", pitch="+5Hz")
-        # Safe: this only ever runs on the render worker thread, which has no
-        # event loop of its own.
-        asyncio.run(speaker.save(filename))
-    except Exception as exc:  # noqa: BLE001 - surfaced to the user
-        raise Exception(f"Voice generation failed! ({exc})") from exc
-
-    if not os.path.exists(filename) or os.path.getsize(filename) == 0:
-        raise Exception(
-            "Voice generation failed! No audio came back from the voice service "
-            "- check your internet connection."
-        )
-    return filename
-
-
-def parse_script(script_text):
-    """Turn the 'Visual:' / 'Voice:' script into a list of scenes."""
-    script_scenes = []
-    current_visual = None
-
-    for line_num, line in enumerate(script_text.split("\n")):
-        line = line.strip()
-        if not line:
-            continue
-
-        if re.match(r"(?i)^visual\s*:", line):
-            current_visual = re.sub(r"(?i)^visual\s*:", "", line).strip()
-        elif re.match(r"(?i)^voice\s*:", line):
-            if current_visual is None:
-                raise Exception(
-                    f"Error near Line {line_num + 1}: Missing 'Visual:' before 'Voice:'"
-                )
-            current_voice = re.sub(r"(?i)^voice\s*:", "", line).strip()
-            script_scenes.append({"visual": current_visual, "voice": current_voice})
-            current_visual = None
-        else:
-            raise Exception(
-                f"Error on Line {line_num + 1}: Line must begin with 'Visual:' or 'Voice:'"
-            )
-
-    if not script_scenes:
-        raise Exception("No valid scenes found.")
-    return script_scenes
-
-
-def count_scenes(script_text):
-    """Non-raising variant used for the live 'Scenes parsed' card."""
-    try:
-        return len(parse_script(script_text))
-    except Exception:
-        return None
-
-
-def resolve_target(aspect: str, resolution: str):
-    """(aspect, quality) -> (width, height, orientation, bitrate)."""
-    target_w, target_h = RESOLUTION_MAP.get(
-        (aspect, resolution), RESOLUTION_MAP[("9:16", "1080p")]
-    )
-    orientation = "landscape" if aspect == "16:9" else "portrait"
-    return target_w, target_h, orientation, BITRATE_MAP.get(resolution, "8000k")
-
-
-# =============================================================================
-#  SECTION 3 - RENDER WORKER  (runs off the UI thread, talks through a queue)
-# =============================================================================
-
-
-class UiBridge:
-    """Thread-safe hand-off from the worker thread to the Tk main loop."""
-
-    def __init__(self, q: queue.Queue):
-        self._q = q
-
-    def _post(self, kind, **payload):
-        self._q.put((kind, payload))
-
-    def log(self, msg):
-        self._post("log", msg=msg)
-
-    def status(self, msg):
-        self._post("status", msg=msg)
-
-    def progress(self, value):
-        self._post("progress", value=value)
-
-    def spinner(self, on):
-        self._post("spinner", on=on)
-
-    def busy(self, on):
-        self._post("busy", on=on)
-
-    def finished(self, ok, title, message):
-        self._post("finished", ok=ok, title=title, message=message)
-
-
-def render_worker(cfg: dict, ui: UiBridge):
-    """The original create_video_thread(), with config passed in as a snapshot."""
-    # Allocated before the try so the finally can always clean it up.
-    work_dir = new_work_dir()
-    try:
-        api_key = cfg["api_key"]
-        voice_choice = cfg["voice"]
-        ratio_choice = cfg["aspect"]
-        resolution_choice = cfg["resolution"]
-        save_path = cfg["output_path"]
-        script_text = cfg["script"]
-
-        if not api_key:
-            raise Exception("API Key cannot be blank.")
-        if not save_path:
-            raise Exception("Save location cannot be blank.")
-        if not script_text:
-            raise Exception("Script cannot be blank.")
-
-        target_w, target_h, orientation, bitrate = resolve_target(
-            ratio_choice, resolution_choice
-        )
-
-        script_scenes = parse_script(script_text)
-
-        VideoFileClip, AudioFileClip, concatenate_videoclips = load_moviepy()
-
-        ui.log(
-            f"🚀 Starting {ratio_choice} render at {target_w}x{target_h} "
-            f"({resolution_choice}, {bitrate})..."
-        )
-        ui.status(f"Rendering {target_w}x{target_h}...")
-
-        final_clips = []
-        source_clips = []
-        total = len(script_scenes)
-
-        for index, scene in enumerate(script_scenes):
-            video_file = os.path.join(work_dir, f"temp_vid_{index}.mp4")
-            audio_file = os.path.join(work_dir, f"temp_aud_{index}.mp3")
-
-            ui.log(f"🎬 Scene {index + 1} of {total}")
-
-            download_stock_video(api_key, scene["visual"], video_file, ui.log, orientation)
-            generate_voiceover(scene["voice"], audio_file, ui.log, voice_choice)
-
-            video_clip = VideoFileClip(video_file)
-            audio_clip = AudioFileClip(audio_file)
-            source_clips.append((video_clip, audio_clip))
-
-            if video_clip.duration < audio_clip.duration:
-                loops = math.ceil(audio_clip.duration / video_clip.duration)
-                video_clip = concatenate_videoclips([video_clip] * loops)
-
-            video_clip = video_clip.subclipped(0, audio_clip.duration)
-            video_clip = video_clip.with_audio(audio_clip)
-
-            # High-Quality Scale & Center Crop
-            scale_factor = max(target_w / video_clip.w, target_h / video_clip.h)
-            video_clip = video_clip.resized(scale_factor)
-
-            video_clip = video_clip.cropped(
-                x_center=video_clip.w / 2,
-                y_center=video_clip.h / 2,
-                width=target_w,
-                height=target_h,
-            )
-
-            final_clips.append(video_clip)
-            ui.progress(0.8 * (index + 1) / total)
-
-        ui.log(f"✂️ Stitching {ratio_choice} scenes at {target_w}x{target_h}...")
-        ui.status("Encoding final video...")
-        ui.spinner(True)
-
-        final_movie = concatenate_videoclips(final_clips, method="compose")
-        final_movie.write_videofile(
-            save_path,
-            codec="libx264",
-            audio_codec="aac",
-            fps=30,
-            preset="fast",
-            bitrate=bitrate,
-            # Without this MoviePy drops TEMP_MPY_wvf_snd.mp3 beside the output.
-            temp_audiofile_path=work_dir,
-            # logger defaults to "bar", whose tqdm writes to sys.stderr - which is
-            # None in a windowed build, killing the render here.  The UI already
-            # shows an indeterminate spinner for this phase.
-            logger=None,
-        )
-
-        ui.spinner(False)
-        ui.progress(0.95)
-        ui.log("🧹 Releasing memory and deleting temp files...")
-        final_movie.close()
-        for clip in final_clips:
-            clip.close()
-        for v_clip, a_clip in source_clips:
-            v_clip.close()
-            a_clip.close()
-
-        ui.progress(1.0)
-        ui.log(f"✅ DONE! {target_w}x{target_h} video saved to:\n{save_path}")
-        ui.finished(
-            True,
-            "Render complete",
-            f"{target_w}x{target_h} video rendered successfully.\n\nSaved at:\n{save_path}",
-        )
-
-    except Exception as e:  # noqa: BLE001 - surfaced to the user verbatim
-        ui.spinner(False)
-        ui.progress(0.0)
-        ui.log(f"❌ ERROR: {str(e)}")
-        ui.finished(False, "Render failed", str(e))
-    finally:
-        # Here rather than on the success path, so a failed render cleans up too.
-        # On the error path the clips may still be open and their files locked;
-        # sweep_old_work_dirs() at startup catches whatever survives.
-        shutil.rmtree(work_dir, ignore_errors=True)
-        ui.busy(False)
 
 
 # =============================================================================
@@ -799,6 +466,8 @@ GLYPHS = {
     "glass": ("", "▨"),
     "info": ("", "ℹ"),
     "script": ("", "✎"),
+    "music": ("\ue8d6", "\u266b"),
+    "timer": ("\ue916", "\u23f1"),
     "eye": ("", "◉"),
 }
 
@@ -831,8 +500,10 @@ def log_severity(message: str) -> str:
         return "success"
     if text.startswith("⚠️"):
         return "warn"
-    if text.startswith(("🚀", "🎬", "✂️", "🧹", "📦", "🪟")):
+    if text.startswith(("🚀", "🎬", "✂️", "🧹", "📦", "🪟", "🎵")):
         return "step"
+    if text.startswith("🎞️"):
+        return "dim"
     return "body"
 
 
@@ -1134,14 +805,26 @@ class App(ctk.CTk):
         self.var_voice = tk.StringVar(value=s["voice"])
         self.var_theme = tk.StringVar(value=s["theme"])
         self.var_translucent = tk.BooleanVar(value=bool(s["translucent"]))
+        self.var_pixabay = tk.StringVar(value=s["pixabay_key"])
+        padding_label = {v: k for k, v in PADDING_OPTIONS.items()}[s["padding"]]
+        self.var_padding = tk.StringVar(value=padding_label)
+        self.var_music_enabled = tk.BooleanVar(value=s["music_enabled"])
+        self.music_path = s["music_path"]
+        self.var_music_track = tk.StringVar(value="")
+        self._tracks = {}
 
         for var in (self.var_api, self.var_output, self.var_aspect,
-                    self.var_resolution, self.var_voice):
+                    self.var_resolution, self.var_voice, self.var_pixabay,
+                    self.var_padding, self.var_music_enabled):
             var.trace_add("write", self._on_setting_changed)
 
     def _collect_settings(self) -> dict:
         return {
             "api_key": self.var_api.get().strip(),
+            "pixabay_key": self.var_pixabay.get().strip(),
+            "padding": PADDING_OPTIONS.get(self.var_padding.get(), DEFAULT_PADDING),
+            "music_enabled": bool(self.var_music_enabled.get()),
+            "music_path": self.music_path,
             "output_path": self.var_output.get().strip(),
             "aspect": self.var_aspect.get(),
             "resolution": self.var_resolution.get(),
@@ -1228,6 +911,8 @@ class App(ctk.CTk):
             item.set_selected(name == key)
         if key == "home":
             self.refresh_home()
+        elif key == "settings":
+            self._refresh_tracks()
 
     # -- page scaffolding ----------------------------------------------------
     def _scroll_page(self):
@@ -1357,7 +1042,8 @@ class App(ctk.CTk):
                      text_color=TEXT_MUTED).pack(side="left", padx=(0, 10))
         ctk.CTkLabel(header, text="Your script", font=self.font_body,
                      text_color=TEXT).pack(side="left")
-        ctk.CTkLabel(header, text="Every line must start with 'Visual:' or 'Voice:'",
+        ctk.CTkLabel(header, text="Visual: and Voice: per scene · optional Duration:, "
+                                  "Padding:, Zoom:",
                      font=self.font_tiny, text_color=TEXT_DIM).pack(side="right")
 
         self.script_box = ctk.CTkTextbox(
@@ -1379,6 +1065,10 @@ class App(ctk.CTk):
         self.status_label = ctk.CTkLabel(top, text="Ready", font=self.font_body,
                                          text_color=TEXT_MUTED, anchor="w")
         self.status_label.grid(row=0, column=0, sticky="w")
+        # Pexels and Pixabay both ask apps to show where footage comes from.
+        ctk.CTkLabel(top, text="Stock footage from Pexels and Pixabay",
+                     font=self.font_tiny, text_color=TEXT_DIM,
+                     anchor="w").grid(row=1, column=0, sticky="w")
 
         self.render_button = ctk.CTkButton(
             top, text=f"{self.icon('play')}   Render Video", font=self.font_bold,
@@ -1498,7 +1188,7 @@ class App(ctk.CTk):
                      text_color=TEXT, anchor="w").pack(anchor="w", padx=18, pady=(16, 2))
         ctk.CTkLabel(
             card,
-            text="Pexels stock footage · edge-tts neural voices · MoviePy render",
+            text="Pexels & Pixabay stock footage · edge-tts neural voices · MoviePy render",
             font=self.font_body, text_color=TEXT_MUTED, anchor="w",
         ).pack(anchor="w", padx=18, pady=(0, 16))
 
@@ -1558,30 +1248,23 @@ class App(ctk.CTk):
         page = self._scroll_page()
         page.grid_columnconfigure(0, weight=1)
 
-        self._caption(page, "PEXELS", 0, pady=(0, 6))
-
-        key_row = SettingRow(page, self, self.icon("key"), "API key",
-                             "Stored locally in settings.json - never in the code")
-        key_row.grid(row=1, column=0, sticky="ew", pady=PAD // 2)
-        self.api_entry = ctk.CTkEntry(
-            key_row.control, textvariable=self.var_api, width=320, height=32,
-            corner_radius=4, font=self.font_body, fg_color=FIELD_BG,
-            border_color=FIELD_BORDER, border_width=1, text_color=TEXT,
-            placeholder_text="Paste your Pexels API key", show="•",
+        self._caption(page, "STOCK FOOTAGE", 0, pady=(0, 6))
+        self.api_entry = self._key_row(
+            page, 1, "Pexels API key",
+            "Stored locally in settings.json - never in the code",
+            self.var_api, "Paste your Pexels API key",
         )
-        self.api_entry.pack(side="left")
-        self.reveal_button = ctk.CTkButton(
-            key_row.control, text=self.icon("eye"), font=self.font_icon, width=34,
-            height=32, corner_radius=4, fg_color=FIELD_BG, hover_color=CARD_HOVER,
-            text_color=TEXT_MUTED, command=self.toggle_key_visibility,
+        self.pixabay_entry = self._key_row(
+            page, 2, "Pixabay API key",
+            "Optional - used when Pexels finds nothing",
+            self.var_pixabay, "Paste your Pixabay API key",
         )
-        self.reveal_button.pack(side="left", padx=(6, 0))
 
-        self._caption(page, "OUTPUT", 2)
+        self._caption(page, "OUTPUT", 3)
 
         path_row = SettingRow(page, self, self.icon("folder"), "Save video to",
                               "Full path of the rendered .mp4")
-        path_row.grid(row=3, column=0, sticky="ew", pady=PAD // 2)
+        path_row.grid(row=4, column=0, sticky="ew", pady=PAD // 2)
         ctk.CTkEntry(
             path_row.control, textvariable=self.var_output, width=300, height=32,
             corner_radius=4, font=self.font_body, fg_color=FIELD_BG,
@@ -1593,35 +1276,26 @@ class App(ctk.CTk):
             text_color=TEXT, command=self.choose_save_location,
         ).pack(side="left", padx=(6, 0))
 
-        self._caption(page, "VIDEO", 4)
+        self._caption(page, "VIDEO", 5)
 
         ratio_row = SettingRow(page, self, self.icon("aspect"), "Aspect ratio",
                                "Portrait for Shorts / TikTok, landscape for YouTube")
-        ratio_row.grid(row=5, column=0, sticky="ew", pady=PAD // 2)
-        ctk.CTkSegmentedButton(
-            ratio_row.control, values=RATIO_OPTIONS, variable=self.var_aspect,
-            font=self.font_body, width=170, height=32, corner_radius=4,
-            selected_color=SEGMENT_SELECTED,
-            selected_hover_color=SEGMENT_SELECTED_HOVER,
-            unselected_color=FIELD_BG, unselected_hover_color=CARD_HOVER,
-            fg_color=FIELD_BG, text_color=TEXT, dynamic_resizing=False,
-        ).pack(side="left")
+        ratio_row.grid(row=6, column=0, sticky="ew", pady=PAD // 2)
+        self._segmented(ratio_row.control, RATIO_OPTIONS, self.var_aspect, 170)
 
         res_row = SettingRow(page, self, self.icon("resolution"), "Resolution",
                              "1080p renders at 8000k, 720p at 5000k")
-        res_row.grid(row=6, column=0, sticky="ew", pady=PAD // 2)
-        ctk.CTkSegmentedButton(
-            res_row.control, values=RESOLUTION_OPTIONS, variable=self.var_resolution,
-            font=self.font_body, width=170, height=32, corner_radius=4,
-            selected_color=SEGMENT_SELECTED,
-            selected_hover_color=SEGMENT_SELECTED_HOVER,
-            unselected_color=FIELD_BG, unselected_hover_color=CARD_HOVER,
-            fg_color=FIELD_BG, text_color=TEXT, dynamic_resizing=False,
-        ).pack(side="left")
+        res_row.grid(row=7, column=0, sticky="ew", pady=PAD // 2)
+        self._segmented(res_row.control, RESOLUTION_OPTIONS, self.var_resolution, 170)
+
+        padding_row = SettingRow(page, self, self.icon("timer"), "Scene padding",
+                                 "Pause after each voice line. A script's Padding: overrides it")
+        padding_row.grid(row=8, column=0, sticky="ew", pady=PAD // 2)
+        self._segmented(padding_row.control, list(PADDING_OPTIONS), self.var_padding, 260)
 
         voice_row = SettingRow(page, self, self.icon("voice"), "Voice engine",
                                "Microsoft Edge neural text-to-speech")
-        voice_row.grid(row=7, column=0, sticky="ew", pady=PAD // 2)
+        voice_row.grid(row=9, column=0, sticky="ew", pady=PAD // 2)
         ctk.CTkOptionMenu(
             voice_row.control, values=VOICE_OPTIONS, variable=self.var_voice,
             width=210, height=32, corner_radius=4, font=self.font_body,
@@ -1630,11 +1304,42 @@ class App(ctk.CTk):
             dropdown_hover_color=CARD_HOVER, dropdown_font=self.font_body,
         ).pack(side="left")
 
-        self._caption(page, "APPEARANCE", 8)
+        self._caption(page, "AUDIO", 10)
+
+        music_row = SettingRow(page, self, self.icon("music"), "Background music",
+                               "Plays under the video and ducks while the voice speaks")
+        music_row.grid(row=11, column=0, sticky="ew", pady=PAD // 2)
+        ctk.CTkSwitch(
+            music_row.control, text="", width=44, variable=self.var_music_enabled,
+            onvalue=True, offvalue=False, progress_color=ACCENT,
+        ).pack(side="left")
+
+        track_row = SettingRow(page, self, self.icon("folder"), "Track",
+                               "Drop tracks in the Music folder, or browse for any file")
+        track_row.grid(row=12, column=0, sticky="ew", pady=PAD // 2)
+        self.music_menu = ctk.CTkOptionMenu(
+            track_row.control, values=["No tracks yet"], variable=self.var_music_track,
+            command=self._pick_track, width=220, height=32, corner_radius=4,
+            font=self.font_body, fg_color=FIELD_BG, button_color=FIELD_BG,
+            button_hover_color=CARD_HOVER, text_color=TEXT, dropdown_fg_color=CARD_BG,
+            dropdown_text_color=TEXT, dropdown_hover_color=CARD_HOVER,
+            dropdown_font=self.font_body, dynamic_resizing=False,
+        )
+        self.music_menu.pack(side="left")
+        for label, command in (("Browse", self.browse_music),
+                               ("Open folder", self.open_music_folder)):
+            ctk.CTkButton(
+                track_row.control, text=label, width=96, height=32, corner_radius=4,
+                font=self.font_body, fg_color=FIELD_BG, hover_color=CARD_HOVER,
+                text_color=TEXT, command=command,
+            ).pack(side="left", padx=(6, 0))
+        self._refresh_tracks()
+
+        self._caption(page, "APPEARANCE", 13)
 
         theme_row = SettingRow(page, self, self.icon("theme"), "Dark theme",
                                "Switches the whole app between dark and light")
-        theme_row.grid(row=9, column=0, sticky="ew", pady=PAD // 2)
+        theme_row.grid(row=14, column=0, sticky="ew", pady=PAD // 2)
         ctk.CTkSwitch(
             theme_row.control, text="", width=44, variable=self.var_theme,
             onvalue="dark", offvalue="light", progress_color=ACCENT,
@@ -1643,7 +1348,7 @@ class App(ctk.CTk):
 
         glass_row = SettingRow(page, self, self.icon("glass"), "Window translucency",
                                "Mica / acrylic where supported, alpha elsewhere")
-        glass_row.grid(row=10, column=0, sticky="ew", pady=(PAD // 2, PAD))
+        glass_row.grid(row=15, column=0, sticky="ew", pady=(PAD // 2, PAD))
         ctk.CTkSwitch(
             glass_row.control, text="", width=44, variable=self.var_translucent,
             onvalue=True, offvalue=False, progress_color=ACCENT,
@@ -1651,9 +1356,84 @@ class App(ctk.CTk):
         ).pack(side="left")
         return page
 
-    def toggle_key_visibility(self):
-        showing = self.api_entry.cget("show") == ""
-        self.api_entry.configure(show="•" if showing else "")
+    def _key_row(self, page, row, title, subtitle, variable, placeholder):
+        """A masked API-key entry with a reveal button. Returns the entry."""
+        key_row = SettingRow(page, self, self.icon("key"), title, subtitle)
+        key_row.grid(row=row, column=0, sticky="ew", pady=PAD // 2)
+        entry = ctk.CTkEntry(
+            key_row.control, textvariable=variable, width=320, height=32,
+            corner_radius=4, font=self.font_body, fg_color=FIELD_BG,
+            border_color=FIELD_BORDER, border_width=1, text_color=TEXT,
+            placeholder_text=placeholder, show="•",
+        )
+        entry.pack(side="left")
+        ctk.CTkButton(
+            key_row.control, text=self.icon("eye"), font=self.font_icon, width=34,
+            height=32, corner_radius=4, fg_color=FIELD_BG, hover_color=CARD_HOVER,
+            text_color=TEXT_MUTED, command=lambda: self.toggle_key_visibility(entry),
+        ).pack(side="left", padx=(6, 0))
+        return entry
+
+    def _segmented(self, parent, values, variable, width):
+        ctk.CTkSegmentedButton(
+            parent, values=values, variable=variable,
+            font=self.font_body, width=width, height=32, corner_radius=4,
+            selected_color=SEGMENT_SELECTED,
+            selected_hover_color=SEGMENT_SELECTED_HOVER,
+            unselected_color=FIELD_BG, unselected_hover_color=CARD_HOVER,
+            fg_color=FIELD_BG, text_color=TEXT, dynamic_resizing=False,
+        ).pack(side="left")
+
+    def toggle_key_visibility(self, entry=None):
+        entry = entry or self.api_entry
+        showing = entry.cget("show") == ""
+        entry.configure(show="•" if showing else "")
+
+    # -- background music ----------------------------------------------------
+    def _refresh_tracks(self):
+        """Re-read the Music folder; a browsed file outside it stays listed."""
+        if not hasattr(self, "music_menu"):
+            return
+        tracks = music_tracks()
+        if self.music_path and os.path.isfile(self.music_path):
+            known = {os.path.normcase(p) for p in tracks.values()}
+            if os.path.normcase(self.music_path) not in known:
+                tracks[f"{os.path.basename(self.music_path)} (browsed)"] = self.music_path
+        self._tracks = tracks
+        self.music_menu.configure(values=list(tracks) or ["No tracks yet"])
+        current = next(
+            (name for name, path in tracks.items()
+             if os.path.normcase(path) == os.path.normcase(self.music_path or "")),
+            None,
+        )
+        self.var_music_track.set(current or ("Choose a track" if tracks else "No tracks yet"))
+
+    def _pick_track(self, name):
+        path = self._tracks.get(name)
+        if not path:
+            return
+        self.music_path = path
+        # Choosing a track means wanting music; don't make them flip the switch too.
+        self.var_music_enabled.set(True)
+        self._on_setting_changed()
+
+    def browse_music(self):
+        start = MUSIC_DIR if os.path.isdir(MUSIC_DIR) else os.path.expanduser("~")
+        chosen = filedialog.askopenfilename(
+            title="Choose background music",
+            initialdir=start,
+            filetypes=[("Audio", " ".join(f"*{ext}" for ext in MUSIC_EXTS)),
+                       ("All Files", "*.*")],
+        )
+        if chosen:
+            self.music_path = os.path.normpath(chosen)
+            self.var_music_enabled.set(True)
+            self._on_setting_changed()
+            self._refresh_tracks()
+
+    def open_music_folder(self):
+        os.makedirs(MUSIC_DIR, exist_ok=True)
+        self._open_folder(MUSIC_DIR)
 
     def choose_save_location(self):
         current = self.var_output.get().strip()
@@ -1688,15 +1468,18 @@ class App(ctk.CTk):
         self.append_log(f"{APP_NAME} {APP_VERSION} ready.")
         self.append_log(f"🪟 Window effect: {self.effect_note}")
         self.append_log(f"🎞️ ffmpeg: {FFMPEG_EXE or 'system / imageio auto-detect'}")
-        if not self.var_api.get().strip():
-            self.append_log("⚠️ No Pexels API key yet - add one in Settings.")
+        if not self.var_api.get().strip() and not self.var_pixabay.get().strip():
+            self.append_log("⚠️ No footage API key yet - add a Pexels or Pixabay key "
+                            "in Settings.")
         self.refresh_home()
         threading.Thread(target=self._warm_moviepy, daemon=True).start()
 
     def _warm_moviepy(self):
         sweep_old_work_dirs()
         try:
-            load_moviepy()
+            # Importing the engine's heavy half pulls in MoviePy, NumPy and PIL.
+            import vidgen.audio  # noqa: F401
+            import vidgen.motion  # noqa: F401
             self.ui.log("📦 MoviePy loaded.")
         except Exception as exc:  # noqa: BLE001
             self.ui.log(f"⚠️ MoviePy not available: {exc}")
@@ -1751,9 +1534,10 @@ class App(ctk.CTk):
         if self.is_rendering:
             return
         # Snapshot every widget value here, on the UI thread.
-        cfg = self._collect_settings()
-        self.settings = cfg
-        save_settings(cfg)
+        settings = self._collect_settings()
+        self.settings = settings
+        save_settings(settings)
+        cfg = dict(settings, cache_dir=SEARCH_CACHE_DIR)
 
         self._set_busy(True)
         self.progress.configure(mode="determinate")
