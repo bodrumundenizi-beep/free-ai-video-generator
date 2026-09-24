@@ -32,6 +32,7 @@ import ctypes
 import json
 import os
 import queue
+import re
 import subprocess
 import sys
 import threading
@@ -129,6 +130,9 @@ except ImportError:  # pragma: no cover - startup guard
 from vidgen.formats import RATIO_OPTIONS, RESOLUTION_OPTIONS, resolve_target  # noqa: E402
 from vidgen.render import UiBridge, render_worker, sweep_old_work_dirs  # noqa: E402
 from vidgen.script import count_scenes  # noqa: E402
+from vidgen import voices  # noqa: E402
+from vidgen.render import TEMP_ROOT  # noqa: E402
+from vidgen.voice import generate_voiceover  # noqa: E402
 
 
 APP_NAME = "AI Video Studio"
@@ -206,12 +210,11 @@ Voice: Here is the fix. Press the Windows key, search for Disk Cleanup, and open
 Visual: mouse click
 Voice: Select your main drive, then click Clean up system files."""
 
-VOICE_OPTIONS = [
-    "Neural Male",
-    "Neural Female",
-    "Happy/Upbeat (Female)",
-    "Deep/Narrator (Male)",
-]
+# Dropdown labels, grouped by persona; settings.json stores the voice ID.
+VOICE_OPTIONS = voices.labels()
+
+PREVIEW_TEXT = "This is how your video will sound."
+PREVIEW_DIR = os.path.join(TEMP_ROOT, "preview")
 
 def default_settings() -> dict:
     return {
@@ -223,7 +226,7 @@ def default_settings() -> dict:
         "output_path": os.path.join(default_output_dir(), "final_video.mp4"),
         "aspect": "9:16",
         "resolution": "1080p",
-        "voice": "Neural Male",
+        "voice": voices.DEFAULT_ID,
         "theme": "dark",
         "translucent": True,
         "script": DEFAULT_SCRIPT,
@@ -262,8 +265,8 @@ def load_settings() -> dict:
         data["aspect"] = "9:16"
     if data["resolution"] not in RESOLUTION_OPTIONS:
         data["resolution"] = "1080p"
-    if data["voice"] not in VOICE_OPTIONS:
-        data["voice"] = "Neural Male"
+    # An ID or an old label; the four original labels are the Classic voices' IDs.
+    data["voice"] = voices.persona(data["voice"]).id
     if data["theme"] not in ("dark", "light"):
         data["theme"] = "dark"
 
@@ -755,6 +758,7 @@ class App(ctk.CTk):
         self._queue: queue.Queue = queue.Queue()
         self.ui = UiBridge(self._queue)
         self.is_rendering = False
+        self._previewing = False
         self.last_render = "Never"
         self.sidebar_collapsed = False
         self.effect_note = ""
@@ -802,7 +806,7 @@ class App(ctk.CTk):
         self.var_output = tk.StringVar(value=s["output_path"])
         self.var_aspect = tk.StringVar(value=s["aspect"])
         self.var_resolution = tk.StringVar(value=s["resolution"])
-        self.var_voice = tk.StringVar(value=s["voice"])
+        self.var_voice = tk.StringVar(value=voices.persona(s["voice"]).label)
         self.var_theme = tk.StringVar(value=s["theme"])
         self.var_translucent = tk.BooleanVar(value=bool(s["translucent"]))
         self.var_pixabay = tk.StringVar(value=s["pixabay_key"])
@@ -828,7 +832,7 @@ class App(ctk.CTk):
             "output_path": self.var_output.get().strip(),
             "aspect": self.var_aspect.get(),
             "resolution": self.var_resolution.get(),
-            "voice": self.var_voice.get(),
+            "voice": voices.persona(self.var_voice.get()).id,
             "theme": self.var_theme.get(),
             "translucent": bool(self.var_translucent.get()),
             "script": self.script_box.get("1.0", "end").strip()
@@ -997,7 +1001,7 @@ class App(ctk.CTk):
         label = "9:16 (Shorts / TikTok)" if aspect == "9:16" else "16:9 (Landscape)"
         self.row_aspect.set_value(label)
         self.row_resolution.set_value(f"{w}x{h}  ·  {quality}")
-        self.row_voice.set_value(self.var_voice.get())
+        self.row_voice.set_value(voices.persona(self.var_voice.get()).short)
         self.row_bitrate.set_value(bitrate)
         self.row_output.set_value(ellipsize(self.var_output.get() or "Not set"))
         self.row_render.set_value("Rendering..." if self.is_rendering else "Idle")
@@ -1058,8 +1062,30 @@ class App(ctk.CTk):
         control_card.grid(row=2, column=0, sticky="ew")
         control_card.grid_columnconfigure(0, weight=1)
 
+        # Same variable as the Settings dropdown, so the two stay in step.
+        voice_bar = ctk.CTkFrame(control_card, fg_color="transparent")
+        voice_bar.grid(row=0, column=0, sticky="ew", padx=16, pady=(14, 0))
+        ctk.CTkLabel(voice_bar, text=self.icon("voice"), font=self.font_icon,
+                     text_color=TEXT_MUTED).pack(side="left", padx=(0, 10))
+        ctk.CTkLabel(voice_bar, text="Voice", font=self.font_body,
+                     text_color=TEXT).pack(side="left", padx=(0, 12))
+        ctk.CTkOptionMenu(
+            voice_bar, values=VOICE_OPTIONS, variable=self.var_voice,
+            width=360, height=32, corner_radius=4, font=self.font_body,
+            fg_color=FIELD_BG, button_color=FIELD_BG, button_hover_color=CARD_HOVER,
+            text_color=TEXT, dropdown_fg_color=CARD_BG, dropdown_text_color=TEXT,
+            dropdown_hover_color=CARD_HOVER, dropdown_font=self.font_body,
+            dynamic_resizing=False,
+        ).pack(side="left")
+        self.preview_button = ctk.CTkButton(
+            voice_bar, text=f"{self.icon('play')}  Preview Voice", width=150,
+            height=32, corner_radius=4, font=self.font_body, fg_color=FIELD_BG,
+            hover_color=CARD_HOVER, text_color=TEXT, command=self.preview_voice,
+        )
+        self.preview_button.pack(side="left", padx=(8, 0))
+
         top = ctk.CTkFrame(control_card, fg_color="transparent")
-        top.grid(row=0, column=0, sticky="ew", padx=16, pady=(14, 8))
+        top.grid(row=1, column=0, sticky="ew", padx=16, pady=(12, 8))
         top.grid_columnconfigure(0, weight=1)
 
         self.status_label = ctk.CTkLabel(top, text="Ready", font=self.font_body,
@@ -1080,7 +1106,7 @@ class App(ctk.CTk):
 
         self.progress = ctk.CTkProgressBar(control_card, height=4, corner_radius=2,
                                            progress_color=ACCENT, fg_color=FIELD_BG)
-        self.progress.grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 16))
+        self.progress.grid(row=2, column=0, sticky="ew", padx=16, pady=(0, 16))
         self.progress.set(0)
         self.progress.grid_remove()
         return page
@@ -1298,7 +1324,7 @@ class App(ctk.CTk):
         voice_row.grid(row=9, column=0, sticky="ew", pady=PAD // 2)
         ctk.CTkOptionMenu(
             voice_row.control, values=VOICE_OPTIONS, variable=self.var_voice,
-            width=210, height=32, corner_radius=4, font=self.font_body,
+            width=360, dynamic_resizing=False, height=32, corner_radius=4, font=self.font_body,
             fg_color=FIELD_BG, button_color=FIELD_BG, button_hover_color=CARD_HOVER,
             text_color=TEXT, dropdown_fg_color=CARD_BG, dropdown_text_color=TEXT,
             dropdown_hover_color=CARD_HOVER, dropdown_font=self.font_body,
@@ -1505,6 +1531,8 @@ class App(ctk.CTk):
                         self.progress.configure(mode="determinate")
                 elif kind == "busy":
                     self._set_busy(payload["on"])
+                elif kind == "preview":
+                    self._preview_done(payload["path"], payload["error"])
                 elif kind == "finished":
                     self.last_render = "Success" if payload["ok"] else "Failed"
                     self.refresh_home()
@@ -1528,6 +1556,52 @@ class App(ctk.CTk):
             self.progress.grid_remove()
             self.status_label.configure(text="Ready")
         self.refresh_home()
+
+    # -- voice preview -------------------------------------------------------
+    def preview_voice(self):
+        """Speak a short sample in the chosen voice, without blocking the window."""
+        if self._previewing:
+            return
+        persona = voices.persona(self.var_voice.get())
+        self._previewing = True
+        self.preview_button.configure(state="disabled", text="Generating...")
+        threading.Thread(target=self._preview_worker, args=(persona.id,),
+                         daemon=True).start()
+
+    def _preview_worker(self, voice_id):
+        """Worker thread: the full voice chain once, cached per voice and version."""
+        try:
+            os.makedirs(PREVIEW_DIR, exist_ok=True)
+            stem = os.path.join(PREVIEW_DIR, re.sub(r"[^\w-]", "_", f"{voice_id}_{APP_VERSION}"))
+            playable = stem + ".play.wav"
+            if not os.path.exists(playable):
+                made = generate_voiceover(PREVIEW_TEXT, stem + ".mp3", self.ui.log, voice_id)
+                # winsound plays WAV only; classic voices arrive as MP3.
+                from vidgen import mastering
+                mastering.run_ffmpeg(["-y", "-i", made, "-ar", "44100", "-ac", "1",
+                                      "-c:a", "pcm_s16le", playable])
+            self._queue.put(("preview", {"path": playable, "error": None}))
+        except Exception as exc:  # noqa: BLE001 - reported in the window
+            self._queue.put(("preview", {"path": None, "error": str(exc)}))
+
+    def _preview_done(self, path, error):
+        self._previewing = False
+        self.preview_button.configure(state="normal",
+                                      text=f"{self.icon('play')}  Preview Voice")
+        if error:
+            self.append_log(f"⚠️ Voice preview failed: {error}")
+            self.status_label.configure(text="Voice preview failed - see the Log")
+            return
+        # The status line mirrors the latest log line, which is the preview's
+        # "Generating..." - don't leave that showing once it's done.
+        if not self.is_rendering:
+            short = voices.persona(self.var_voice.get()).short
+            self.status_label.configure(text=f"Previewing {short}")
+        if sys.platform == "win32":
+            import winsound
+
+            # SND_ASYNC returns at once; the sound plays on its own.
+            winsound.PlaySound(path, winsound.SND_FILENAME | winsound.SND_ASYNC)
 
     # -- render --------------------------------------------------------------
     def start_render(self):
