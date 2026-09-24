@@ -41,7 +41,9 @@ a = Analysis(
         # The engine's heavy half is imported lazily by vidgen.render.
         "vidgen", "vidgen.audio", "vidgen.footage", "vidgen.formats",
         "vidgen.motion", "vidgen.render", "vidgen.script", "vidgen.timeline",
-        "vidgen.voice",
+        "vidgen.voice", "vidgen.voices", "vidgen.mastering",
+        # Voice preview playback; imported only when Preview is clicked.
+        "winsound",
     ],
     hookspath=[],
     hooksconfig={},

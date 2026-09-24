@@ -122,6 +122,24 @@ down just before each line and back up after. Drop tracks into
 `Documents\AI Video Studio\Music` (**Open folder**), or **Browse** for any audio
 file.
 
+### Voices
+
+Pick a voice on the **Create** page and press **▶ Preview Voice** to hear it
+before rendering. All voices are free — no account or key needed.
+
+| Group | Voices | Delivery |
+|---|---|---|
+| Tech / Short-Form Hype | Guy, Jenny, Steffan (US) | a bit faster and brighter, short pauses |
+| Deep / Storyteller | Christopher, Eric, Roger (US) | a bit slower and lower, longer pauses |
+| Professional / Tutorial | Aria, Andrew, Ava (US) | clear, even pace |
+| Accents & Regional | Ryan, Sonia (UK), William (Australia) | natural pace |
+| Classic (low quality) | the four voices from earlier versions | read exactly as before, no studio processing |
+
+The first four groups get **studio processing**: natural breath pauses at
+commas and full stops, then broadcast mastering — low-end warmth, compression
+so every word is audible, and loudness set to −14 LUFS, the level YouTube
+Shorts, Reels and TikTok play at.
+
 ### Footage credits
 
 Next to each video the app writes `<name>.credits.txt`, listing the Pexels or
@@ -137,7 +155,7 @@ description.
 | Aspect ratio | `9:16` for Shorts / TikTok / Reels, `16:9` for YouTube |
 | Resolution | `1080p` (8000k bitrate) or `720p` (5000k) |
 | Scene padding | `0s`, `0.25s` (default), `0.5s` or `1s` of pause after each voice line |
-| Voice | Four Microsoft Edge neural voices, male and female |
+| Voice | 16 free Microsoft Edge neural voices — see **Voices** below |
 | Background music | On or off, with any track; ducks under the voice automatically |
 | Theme | Dark or light, with a Mica backdrop on Windows 11 |
 
