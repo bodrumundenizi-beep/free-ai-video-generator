@@ -13,6 +13,8 @@ copies a tree, and the portable ZIP is that tree.
 
 import os
 
+from PyInstaller.utils.hooks import copy_metadata
+
 ROOT = os.path.abspath(os.path.join(SPECPATH, os.pardir))
 ICON = os.path.join(ROOT, "assets", "icon.ico")
 
@@ -31,7 +33,10 @@ a = Analysis(
     pathex=[os.path.join(ROOT, "src")],
     binaries=[],
     # The window icon, and any bundled music, looked up at runtime by asset_path().
-    datas=[(ICON, "assets")] + MUSIC,
+    # imageio reads its own version from package metadata when imported (the
+    # only bundled library that does); without it the frozen app fails every
+    # render with "No package metadata was found for imageio".
+    datas=[(ICON, "assets")] + MUSIC + copy_metadata("imageio"),
     hiddenimports=[
         # Imported inside a try/except in apply_window_effects(); PyInstaller's
         # scan does find it, but being explicit costs nothing.
