@@ -11,4 +11,4 @@ pywinstyles==1.8
 # Imported directly by the engine (frame maths, Ken Burns resampling), so pinned
 # here rather than left to whatever MoviePy happens to pull in.
 numpy==2.5.2
-pillow==11.3.0
+pillow==10.4.0  # moviepy 2.1.2 requires pillow<11
