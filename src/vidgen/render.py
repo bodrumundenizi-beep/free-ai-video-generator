@@ -215,7 +215,8 @@ def _render(cfg, ui, work_dir, job):
         ui.log(f"🎬 Scene {i + 1} of {total_scenes}")
         if scene.voice:
             voice_path = os.path.join(work_dir, f"voice_{i}.mp3")
-            generate_voiceover(scene.voice, voice_path, ui.log, cfg.get("voice"))
+            # Studio voices come back as a mastered .wav, classic ones as the .mp3.
+            voice_path = generate_voiceover(scene.voice, voice_path, ui.log, cfg.get("voice"))
             # The file is registered for closing; the trimmed copy shares its reader.
             plan.voice = audio.trim_to_speech(job.keep(AudioFileClip(voice_path)))
             plan.voice_len = float(plan.voice.duration)
