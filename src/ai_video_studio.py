@@ -36,6 +36,7 @@ import re
 import subprocess
 import sys
 import threading
+import time
 import tkinter as tk
 from tkinter import filedialog
 from tkinter import font as tkfont
@@ -433,10 +434,17 @@ LOG_TAGS = {
     "dim": ("#767676", "#7A7A7A"),
 }
 
-# The segmented control shares one text colour across all its segments, so the
-# selected fill has to stay readable with the theme's normal text colour.
-SEGMENT_SELECTED = ("#CCE4F7", "#0F6CBD")
-SEGMENT_SELECTED_HOVER = ("#BBD9F2", "#1B7CD6")
+# Segmented control: a sunken track with a raised pill on the chosen option,
+# like the Windows 11 Settings app.
+SEG_TRACK = ("#F3F3F3", "#2B2B2B")
+SEG_HOVER = ("#EAEAEA", "#333333")
+SEG_PILL = ("#FFFFFF", "#454545")
+SEG_PILL_BORDER = ("#E0E0E0", "#505050")
+
+# Motion, in milliseconds.  Fluent's "fast" and "normal" durations.
+ANIM_FAST = 160
+ANIM_PAGE = 220
+PAGE_RISE = 28   # px the incoming page slides up from
 
 SCROLLBAR_BG = "transparent"
 SCROLLBAR_THUMB = ("#D2D2D2", "#3F3F3F")
@@ -519,6 +527,60 @@ def ellipsize(text: str, limit: int = 58) -> str:
     return f"{text[:head]}...{text[-tail:]}"
 
 
+def ease_out(t: float) -> float:
+    """Cubic ease-out: quick start, gentle landing - Fluent's decelerate curve."""
+    return 1 - (1 - t) ** 3
+
+
+class Animation:
+    """Calls ``step(eased)`` from 0 to 1 over ``duration`` ms on the Tk loop.
+
+    Frames are timed by the clock, not counted, so a slow frame shortens the
+    animation instead of stretching it.
+    """
+
+    FRAME_MS = 10
+
+    def __init__(self, widget, duration, step, done=None):
+        self.widget, self.duration, self.step, self.done = widget, duration, step, done
+        self.start = time.perf_counter()
+        self.job = None
+        self._tick()
+
+    def _tick(self):
+        t = min((time.perf_counter() - self.start) * 1000 / self.duration, 1.0)
+        self.step(ease_out(t))
+        if t < 1.0:
+            self.job = self.widget.after(self.FRAME_MS, self._tick)
+        else:
+            self.job = None
+            if self.done:
+                self.done()
+
+    def cancel(self):
+        if self.job:
+            try:
+                self.widget.after_cancel(self.job)
+            except Exception:
+                pass
+            self.job = None
+
+
+def round_rect(canvas, x0, y0, x1, y1, r, **kwargs):
+    """A rounded rectangle as one smoothed polygon (Tk has no native one)."""
+    r = max(0, min(r, (x1 - x0) / 2, (y1 - y0) / 2))
+    points = [x0 + r, y0, x1 - r, y0, x1, y0, x1, y0 + r, x1, y1 - r, x1, y1,
+              x1 - r, y1, x0 + r, y1, x0, y1, x0, y1 - r, x0, y0 + r, x0, y0]
+    return canvas.create_polygon(points, smooth=True, **kwargs)
+
+
+def focus_accent(entry):
+    """Give an entry Fluent's accent-coloured border while it has focus."""
+    entry.bind("<FocusIn>", lambda _e: entry.configure(border_color=ACCENT), add="+")
+    entry.bind("<FocusOut>", lambda _e: entry.configure(border_color=FIELD_BORDER), add="+")
+    return entry
+
+
 class Card(ctk.CTkFrame):
     """Flat rounded surface, the building block of every page."""
 
@@ -527,6 +589,137 @@ class Card(ctk.CTkFrame):
         kwargs.setdefault("fg_color", CARD_BG)
         kwargs.setdefault("border_width", 0)
         super().__init__(master, **kwargs)
+
+
+class FluentSegmented(ctk.CTkFrame):
+    """Windows 11 segmented control bound to a StringVar.
+
+    A sunken track, a raised pill under the chosen option and a short accent
+    bar beneath its label; pill and bar slide when the choice changes.  It is
+    drawn on one Tk canvas because the pill has to pass *under* the labels,
+    which separate CTk widgets can't do.
+    """
+
+    INSET = 3       # gap between the track edge and the pill
+    RADIUS = 6
+    PILL_RADIUS = 4
+    BAR_WIDTH = 16
+
+    def __init__(self, master, app, values, variable, width, height=32):
+        super().__init__(master, fg_color="transparent", width=width, height=height)
+        self.values = list(values)
+        self.variable = variable
+        self.family = app.ui_family
+        self.pos = float(self._index(variable.get()))   # animated pill position
+        self.hover = None
+        self.anim = None
+
+        self.canvas = tk.Canvas(self, highlightthickness=0, bd=0, cursor="hand2")
+        self.canvas.place(x=0, y=0, relwidth=1, relheight=1)
+        self.canvas.bind("<Configure>", lambda _e: self.draw())
+        self.canvas.bind("<Button-1>", self._on_click)
+        self.canvas.bind("<Motion>", self._on_motion)
+        self.canvas.bind("<Leave>", self._on_leave)
+        self._trace = variable.trace_add("write", self._on_variable)
+        self.bind("<Destroy>", self._on_destroy, add="+")
+
+    # -- model -----------------------------------------------------------------
+    def _index(self, value):
+        return self.values.index(value) if value in self.values else 0
+
+    def _segment_at(self, x):
+        width = self.canvas.winfo_width()
+        inner = max(width - 2 * self.INSET, 1)
+        index = int((x - self.INSET) / inner * len(self.values))
+        return max(0, min(index, len(self.values) - 1))
+
+    # -- events ----------------------------------------------------------------
+    def _on_click(self, event):
+        value = self.values[self._segment_at(event.x)]
+        if value != self.variable.get():
+            self.variable.set(value)   # the trace animates the pill
+
+    def _on_motion(self, event):
+        index = self._segment_at(event.x)
+        if index != self.hover:
+            self.hover = index
+            self.draw()
+
+    def _on_leave(self, _event):
+        self.hover = None
+        self.draw()
+
+    def _on_variable(self, *_args):
+        target = float(self._index(self.variable.get()))
+        if self.anim:
+            self.anim.cancel()
+        start = self.pos
+        if not self.winfo_ismapped() or start == target:
+            self.pos = target
+            self.draw()
+            return
+
+        def step(t):
+            self.pos = start + (target - start) * t
+            self.draw()
+
+        self.anim = Animation(self, ANIM_FAST, step)
+
+    def _on_destroy(self, event):
+        if event.widget is self:
+            if self.anim:
+                self.anim.cancel()
+            try:
+                self.variable.trace_remove("write", self._trace)
+            except Exception:
+                pass
+
+    # -- CustomTkinter hooks -----------------------------------------------------
+    def _set_appearance_mode(self, mode_string):
+        super()._set_appearance_mode(mode_string)
+        self.draw()
+
+    def _set_scaling(self, *args, **kwargs):
+        super()._set_scaling(*args, **kwargs)
+        self.draw()
+
+    # -- drawing -----------------------------------------------------------------
+    def draw(self):
+        c = self.canvas
+        w, h = c.winfo_width(), c.winfo_height()
+        if w < 4 or h < 4:
+            return
+        s = self._get_widget_scaling()
+        col = self._apply_appearance_mode
+        c.delete("all")
+        c.configure(bg=col(self._bg_color))
+
+        n = len(self.values)
+        inset = self.INSET * s
+        seg = (w - 2 * inset) / n
+        round_rect(c, 0, 0, w - 1, h - 1, self.RADIUS * s,
+                   fill=col(SEG_TRACK), outline=col(FIELD_BORDER))
+
+        selected = self._index(self.variable.get())
+        if self.hover is not None and self.hover != selected:
+            x0 = inset + self.hover * seg
+            round_rect(c, x0 + 1, inset, x0 + seg - 1, h - inset,
+                       self.PILL_RADIUS * s, fill=col(SEG_HOVER), outline="")
+
+        x0 = inset + self.pos * seg
+        round_rect(c, x0, inset, x0 + seg, h - inset, self.PILL_RADIUS * s,
+                   fill=col(SEG_PILL), outline=col(SEG_PILL_BORDER))
+        mid = x0 + seg / 2
+        bar_y = h - inset - 3 * s
+        c.create_line(mid - self.BAR_WIDTH * s / 2, bar_y, mid + self.BAR_WIDTH * s / 2,
+                      bar_y, fill=col(ACCENT), width=max(3 * s, 2), capstyle="round")
+
+        font = (self.family, -round(13 * s))
+        for index, value in enumerate(self.values):
+            # The label nearest the pill reads as selected throughout the slide.
+            active = abs(index - self.pos) < 0.5
+            c.create_text(inset + (index + 0.5) * seg, h / 2 - 1, text=value, font=font,
+                          fill=col(TEXT if active else TEXT_MUTED))
 
 
 class NavItem(ctk.CTkFrame):
@@ -576,9 +769,13 @@ class NavItem(ctk.CTkFrame):
             self.configure(fg_color="transparent")
 
     def set_selected(self, value: bool):
+        was = self.selected
         self.selected = value
         self.configure(fg_color=NAV_SELECTED if value else "transparent")
         self.bar.configure(fg_color=ACCENT if value else "transparent")
+        if value and not was:
+            # NavigationView's indicator grows in from the middle.
+            Animation(self, ANIM_FAST, lambda t: self.bar.configure(height=4 + 12 * t))
 
     def set_collapsed(self, collapsed: bool):
         if collapsed:
@@ -630,6 +827,7 @@ class ActionRow(Card):
         self.button = ctk.CTkButton(
             self, text=button_glyph, font=app.font_icon, width=34, height=28,
             corner_radius=4, fg_color=FIELD_BG, hover_color=CARD_HOVER,
+            border_width=1, border_color=FIELD_BORDER,
             text_color=ACCENT, command=command,
         )
         self.button.grid(row=0, column=3, padx=(0, 12))
@@ -763,6 +961,8 @@ class App(ctk.CTk):
         self.sidebar_collapsed = False
         self.effect_note = ""
         self._refresh_job = None
+        self.current_page = None
+        self._page_anim = None
 
         self._build_fonts()
         self._build_vars()
@@ -905,18 +1105,62 @@ class App(ctk.CTk):
         self.update_idletasks()
 
     def select_page(self, key: str):
-        for name, page in self.pages.items():
-            if name == key:
-                page.grid(row=0, column=0, sticky="nsew",
-                          padx=(EDGE, EDGE), pady=(14, 14))
-            else:
-                page.grid_remove()
+        if key != self.current_page:
+            self._show_page(key)
+
         for name, item in self.nav_items.items():
             item.set_selected(name == key)
         if key == "home":
             self.refresh_home()
         elif key == "settings":
             self._refresh_tracks()
+
+    def _show_page(self, key):
+        if self._page_anim:
+            self._page_anim.cancel()
+            self._page_anim = None
+        for name, page in self.pages.items():
+            if name != key:
+                page.grid_remove()
+                tk.Frame.place_forget(self._frame_of(page))
+
+        page = self.pages[key]
+        if self.current_page is None:   # first page at startup: no entrance
+            self._grid_page(page)
+        else:
+            self._slide_in(page)
+        self.current_page = key
+
+    @staticmethod
+    def _frame_of(page):
+        """The Tk frame that is actually laid out (a scrollable page wraps one)."""
+        return getattr(page, "_parent_frame", page)
+
+    @staticmethod
+    def _grid_page(page):
+        page.grid(row=0, column=0, sticky="nsew", padx=(EDGE, EDGE), pady=(14, 14))
+
+    def _slide_in(self, page):
+        """Fluent page entrance: rise into place, decelerating.
+
+        While moving, the page is placed at exactly the size the grid gives it,
+        so nothing inside re-lays out; the grid takes over again at the end.
+        CTk's own place() refuses width/height, hence the plain Tk call.
+        """
+        frame = self._frame_of(page)
+        page.grid_remove()
+        s = ctk.ScalingTracker.get_widget_scaling(self)
+
+        def step(t):
+            tk.Frame.place(frame, x=EDGE * s, y=(14 + PAGE_RISE * (1 - t)) * s,
+                           relwidth=1, relheight=1, width=-2 * EDGE * s, height=-28 * s)
+
+        def done():
+            self._page_anim = None
+            tk.Frame.place_forget(frame)
+            self._grid_page(page)
+
+        self._page_anim = Animation(self, ANIM_PAGE, step, done)
 
     # -- page scaffolding ----------------------------------------------------
     def _scroll_page(self):
@@ -1080,7 +1324,8 @@ class App(ctk.CTk):
         self.preview_button = ctk.CTkButton(
             voice_bar, text=f"{self.icon('play')}  Preview Voice", width=150,
             height=32, corner_radius=4, font=self.font_body, fg_color=FIELD_BG,
-            hover_color=CARD_HOVER, text_color=TEXT, command=self.preview_voice,
+            hover_color=CARD_HOVER, border_width=1, border_color=FIELD_BORDER,
+            text_color=TEXT, command=self.preview_voice,
         )
         self.preview_button.pack(side="left", padx=(8, 0))
 
@@ -1146,7 +1391,8 @@ class App(ctk.CTk):
                      text_color=TEXT).pack(side="left")
         ctk.CTkButton(header, text=f"{self.icon('clear')}  Clear", width=88,
                       height=28, corner_radius=4, font=self.font_tiny,
-                      fg_color=FIELD_BG, hover_color=CARD_HOVER, text_color=TEXT,
+                      fg_color=FIELD_BG, hover_color=CARD_HOVER,
+                      border_width=1, border_color=FIELD_BORDER, text_color=TEXT,
                       command=self.clear_log).pack(side="right")
 
         self.log_box = ctk.CTkTextbox(
@@ -1155,6 +1401,13 @@ class App(ctk.CTk):
         )
         self.log_box.grid(row=1, column=0, sticky="nsew", padx=14, pady=(0, 14))
         self._configure_log_tags()
+
+        # Render jumps to this page, so progress has to be visible here too.
+        self.log_progress = ctk.CTkProgressBar(card, height=4, corner_radius=2,
+                                               progress_color=ACCENT, fg_color=FIELD_BG)
+        self.log_progress.grid(row=2, column=0, sticky="ew", padx=16, pady=(0, 14))
+        self.log_progress.set(0)
+        self.log_progress.grid_remove()
 
         self.log_empty = ctk.CTkLabel(
             card, text="Nothing logged yet.", font=self.font_body,
@@ -1243,11 +1496,13 @@ class App(ctk.CTk):
         bar.pack(fill="x", padx=14, pady=14)
         ctk.CTkButton(bar, text=f"{self.icon('folder')}  Open output folder",
                       height=32, corner_radius=4, font=self.font_body,
-                      fg_color=FIELD_BG, hover_color=CARD_HOVER, text_color=TEXT,
+                      fg_color=FIELD_BG, hover_color=CARD_HOVER,
+                      border_width=1, border_color=FIELD_BORDER, text_color=TEXT,
                       command=self.open_output_folder).pack(side="left", padx=(0, 8))
         ctk.CTkButton(bar, text=f"{self.icon('settings')}  Open settings folder",
                       height=32, corner_radius=4, font=self.font_body,
-                      fg_color=FIELD_BG, hover_color=CARD_HOVER, text_color=TEXT,
+                      fg_color=FIELD_BG, hover_color=CARD_HOVER,
+                      border_width=1, border_color=FIELD_BORDER, text_color=TEXT,
                       command=self.open_settings_folder).pack(side="left")
         return page
 
@@ -1291,14 +1546,15 @@ class App(ctk.CTk):
         path_row = SettingRow(page, self, self.icon("folder"), "Save video to",
                               "Full path of the rendered .mp4")
         path_row.grid(row=4, column=0, sticky="ew", pady=PAD // 2)
-        ctk.CTkEntry(
+        focus_accent(ctk.CTkEntry(
             path_row.control, textvariable=self.var_output, width=300, height=32,
             corner_radius=4, font=self.font_body, fg_color=FIELD_BG,
             border_color=FIELD_BORDER, border_width=1, text_color=TEXT,
-        ).pack(side="left")
+        )).pack(side="left")
         ctk.CTkButton(
             path_row.control, text="Browse", width=84, height=32, corner_radius=4,
             font=self.font_body, fg_color=FIELD_BG, hover_color=CARD_HOVER,
+            border_width=1, border_color=FIELD_BORDER,
             text_color=TEXT, command=self.choose_save_location,
         ).pack(side="left", padx=(6, 0))
 
@@ -1357,6 +1613,7 @@ class App(ctk.CTk):
             ctk.CTkButton(
                 track_row.control, text=label, width=96, height=32, corner_radius=4,
                 font=self.font_body, fg_color=FIELD_BG, hover_color=CARD_HOVER,
+                border_width=1, border_color=FIELD_BORDER,
                 text_color=TEXT, command=command,
             ).pack(side="left", padx=(6, 0))
         self._refresh_tracks()
@@ -1392,23 +1649,17 @@ class App(ctk.CTk):
             border_color=FIELD_BORDER, border_width=1, text_color=TEXT,
             placeholder_text=placeholder, show="•",
         )
-        entry.pack(side="left")
+        focus_accent(entry).pack(side="left")
         ctk.CTkButton(
             key_row.control, text=self.icon("eye"), font=self.font_icon, width=34,
             height=32, corner_radius=4, fg_color=FIELD_BG, hover_color=CARD_HOVER,
+            border_width=1, border_color=FIELD_BORDER,
             text_color=TEXT_MUTED, command=lambda: self.toggle_key_visibility(entry),
         ).pack(side="left", padx=(6, 0))
         return entry
 
     def _segmented(self, parent, values, variable, width):
-        ctk.CTkSegmentedButton(
-            parent, values=values, variable=variable,
-            font=self.font_body, width=width, height=32, corner_radius=4,
-            selected_color=SEGMENT_SELECTED,
-            selected_hover_color=SEGMENT_SELECTED_HOVER,
-            unselected_color=FIELD_BG, unselected_hover_color=CARD_HOVER,
-            fg_color=FIELD_BG, text_color=TEXT, dynamic_resizing=False,
-        ).pack(side="left")
+        FluentSegmented(parent, self, values, variable, width).pack(side="left")
 
     def toggle_key_visibility(self, entry=None):
         entry = entry or self.api_entry
@@ -1475,8 +1726,7 @@ class App(ctk.CTk):
     def apply_theme(self):
         ctk.set_appearance_mode(self.var_theme.get())
         self._configure_log_tags()   # text tags hold single colours, not pairs
-        self._on_setting_changed()
-        self.apply_effects()
+        self.apply_effects()         # also saves the settings
 
     def apply_effects(self):
         self.effect_note = apply_window_effects(
@@ -1520,15 +1770,17 @@ class App(ctk.CTk):
                 elif kind == "status":
                     self.status_label.configure(text=payload["msg"])
                 elif kind == "progress":
-                    self.progress.configure(mode="determinate")
-                    self.progress.set(payload["value"])
+                    for bar in self._progress_bars():
+                        bar.configure(mode="determinate")
+                        bar.set(payload["value"])
                 elif kind == "spinner":
-                    if payload["on"]:
-                        self.progress.configure(mode="indeterminate")
-                        self.progress.start()
-                    else:
-                        self.progress.stop()
-                        self.progress.configure(mode="determinate")
+                    for bar in self._progress_bars():
+                        if payload["on"]:
+                            bar.configure(mode="indeterminate")
+                            bar.start()
+                        else:
+                            bar.stop()
+                            bar.configure(mode="determinate")
                 elif kind == "busy":
                     self._set_busy(payload["on"])
                 elif kind == "preview":
@@ -1550,12 +1802,17 @@ class App(ctk.CTk):
             text=f"{self.icon('play')}   {'Rendering...' if busy else 'Render Video'}",
         )
         self.row_render.button.configure(state="disabled" if busy else "normal")
-        if busy:
-            self.progress.grid()
-        else:
-            self.progress.grid_remove()
+        for bar in self._progress_bars():
+            if busy:
+                bar.grid()
+            else:
+                bar.grid_remove()
+        if not busy:
             self.status_label.configure(text="Ready")
         self.refresh_home()
+
+    def _progress_bars(self):
+        return (self.progress, self.log_progress)
 
     # -- voice preview -------------------------------------------------------
     def preview_voice(self):
@@ -1578,8 +1835,12 @@ class App(ctk.CTk):
                 made = generate_voiceover(PREVIEW_TEXT, stem + ".mp3", self.ui.log, voice_id)
                 # winsound plays WAV only; classic voices arrive as MP3.
                 from vidgen import mastering
+                # Convert beside it, then rename: a failed run must not leave a
+                # broken file that every later preview would reuse.
+                partial = stem + ".tmp.wav"
                 mastering.run_ffmpeg(["-y", "-i", made, "-ar", "44100", "-ac", "1",
-                                      "-c:a", "pcm_s16le", playable])
+                                      "-c:a", "pcm_s16le", partial])
+                os.replace(partial, playable)
             self._queue.put(("preview", {"path": playable, "error": None}))
         except Exception as exc:  # noqa: BLE001 - reported in the window
             self._queue.put(("preview", {"path": None, "error": str(exc)}))
@@ -1614,8 +1875,9 @@ class App(ctk.CTk):
         cfg = dict(settings, cache_dir=SEARCH_CACHE_DIR)
 
         self._set_busy(True)
-        self.progress.configure(mode="determinate")
-        self.progress.set(0)
+        for bar in self._progress_bars():
+            bar.configure(mode="determinate")
+            bar.set(0)
         self.select_page("log")
         threading.Thread(target=render_worker, args=(cfg, self.ui), daemon=True).start()
 
