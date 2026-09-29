@@ -11,7 +11,7 @@ voiceover, and renders a 1080p or 720p MP4 in portrait or landscape.
 - **Automated Stock Footage:** Automatically fetches relevant video clips from Pexels API.
 - **Neural AI Voices:** Uses Microsoft Edge-TTS for high-quality, natural-sounding male and female voices.
 - **Smart Script Parser:** Automatically reads your script line-by-line using `Visual:` and `Voice:` tags.
-- **GUI Dashboard:** Windows 11 Fluent interface for API keys, voice selection, resolution and rendering status.
+- **Windows 11 Fluent interface:** Settings-app style segmented controls, smooth page transitions, dark and light themes with Mica, and live render progress.
 - **Portrait or landscape:** 9:16 for Shorts and TikTok, 16:9 for YouTube, at 1080p or 720p.
 - **End-to-End Automation:** Fetches, generates, matches duration, and stitches everything into a final `.mp4`.
 
@@ -37,7 +37,7 @@ You can confirm you have the real file by checking its hash against
 `SHA256SUMS.txt` on the release page:
 
 ```powershell
-Get-FileHash .\AIVideoStudio-3.1.0-setup.exe -Algorithm SHA256
+Get-FileHash .\AIVideoStudio-3.1.1-setup.exe -Algorithm SHA256
 ```
 
 ## First run
@@ -231,7 +231,7 @@ pip install -r requirements.txt -r requirements-build.txt
 python -m pytest
 python packaging/make_icon.py
 pyinstaller --noconfirm --clean packaging/ai_video_studio.spec
-"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion=3.1.0 packaging\installer.iss
+"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion=3.1.1 packaging\installer.iss
 ```
 
 Releases are built automatically by GitHub Actions when a `v*` tag is pushed.
