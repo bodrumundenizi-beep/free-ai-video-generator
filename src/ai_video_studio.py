@@ -1358,8 +1358,34 @@ class App(ctk.CTk):
         )
         self.preview_button.pack(side="left", padx=(8, 0))
 
+        # Captions: the same variables as the Settings section, in compact form.
+        caption_bar = ctk.CTkFrame(control_card, fg_color="transparent")
+        caption_bar.grid(row=1, column=0, sticky="ew", padx=16, pady=(10, 0))
+        ctk.CTkLabel(caption_bar, text=self.icon("captions"), font=self.font_icon,
+                     text_color=TEXT_MUTED).pack(side="left", padx=(0, 10))
+        ctk.CTkLabel(caption_bar, text="Captions", font=self.font_body,
+                     text_color=TEXT).pack(side="left", padx=(0, 12))
+        ctk.CTkSwitch(
+            caption_bar, text="", width=44, variable=self.var_captions,
+            onvalue=True, offvalue=False, progress_color=ACCENT,
+        ).pack(side="left", padx=(0, 6))
+        self.caption_menus = []
+        for key, allowed, _default in CAPTION_SETTINGS:
+            menu = ctk.CTkOptionMenu(
+                caption_bar, values=list(allowed), variable=self.caption_vars[key],
+                width=116, height=32, corner_radius=4, font=self.font_body,
+                fg_color=FIELD_BG, button_color=FIELD_BG, button_hover_color=CARD_HOVER,
+                text_color=TEXT, text_color_disabled=TEXT_DIM, dropdown_fg_color=CARD_BG,
+                dropdown_text_color=TEXT, dropdown_hover_color=CARD_HOVER,
+                dropdown_font=self.font_body, dynamic_resizing=False,
+            )
+            menu.pack(side="left", padx=(6, 0))
+            self.caption_menus.append(menu)
+        self.var_captions.trace_add("write", self._sync_caption_controls)
+        self._sync_caption_controls()
+
         top = ctk.CTkFrame(control_card, fg_color="transparent")
-        top.grid(row=1, column=0, sticky="ew", padx=16, pady=(12, 8))
+        top.grid(row=2, column=0, sticky="ew", padx=16, pady=(12, 8))
         top.grid_columnconfigure(0, weight=1)
 
         self.status_label = ctk.CTkLabel(top, text="Ready", font=self.font_body,
@@ -1380,10 +1406,16 @@ class App(ctk.CTk):
 
         self.progress = ctk.CTkProgressBar(control_card, height=4, corner_radius=2,
                                            progress_color=ACCENT, fg_color=FIELD_BG)
-        self.progress.grid(row=2, column=0, sticky="ew", padx=16, pady=(0, 16))
+        self.progress.grid(row=3, column=0, sticky="ew", padx=16, pady=(0, 16))
         self.progress.set(0)
         self.progress.grid_remove()
         return page
+
+    def _sync_caption_controls(self, *_args):
+        """The caption choices only matter while captions are on."""
+        state = "normal" if self.var_captions.get() else "disabled"
+        for menu in self.caption_menus:
+            menu.configure(state=state)
 
     def _on_script_changed(self, _event=None):
         if self._refresh_job:
@@ -1630,7 +1662,7 @@ class App(ctk.CTk):
              "Highlight the spoken word, show one word at a time, or plain text", 300),
             (13, "caption_size", "font_size", "Size", "How big the caption text is", 260),
             (14, "caption_color", "color", "Highlight colour",
-             "Colour of the word being spoken", 300),
+             "How the word being spoken stands out", 400),
             (15, "caption_position", "position", "Position",
              "Where the captions sit on the video", 260),
         ):

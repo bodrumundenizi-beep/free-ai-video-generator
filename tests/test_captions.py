@@ -3,7 +3,7 @@ import pytest
 
 from vidgen import captions
 from vidgen.captions import (
-    COLORS, HOLD, CaptionOptions, band_height, cue_states, font_pixels, group_words,
+    COLORS, HOLD, CaptionOptions, Highlight, band_height, cue_states, font_pixels, group_words,
     render_state, to_srt,
 )
 
@@ -102,19 +102,62 @@ def rgb(hex_color):
     return tuple(int(hex_color[i:i + 2], 16) for i in (1, 3, 5))
 
 
+def opaque_colours(image):
+    pixels = np.asarray(image)
+    return {tuple(c) for c in pixels[pixels[:, :, 3] == 255][:, :3]}
+
+
+def test_every_highlight_is_a_complete_recipe():
+    assert set(COLORS) == {"Yellow", "Green", "Cyan", "Pink", "White", "Black"}
+    for highlight in COLORS.values():
+        assert isinstance(highlight, Highlight)
+        assert all(len(c) == 7 and c.startswith("#") for c in highlight)
+        # The spoken word must differ from its neighbours somehow.
+        assert (highlight.fill, highlight.stroke) != (highlight.others, "#000000")
+
+
+def test_black_highlight_inverts_the_spoken_word():
+    lit = opaque_colours(render_state(["A", "B"], 0, 400, 60, COLORS["Black"]))
+    # A one-word line has no neighbours: black fill, white outline, nothing else.
+    alone = np.asarray(render_state(["A"], 0, 400, 60, COLORS["Black"]))
+    row = alone[alone.shape[0] // 2]
+    solid = row[row[:, 3] == 255][:, :3]
+    assert (0, 0, 0) in lit and (255, 255, 255) in lit
+    assert tuple(solid[0]) == (255, 255, 255)  # the outline is what you meet first
+    assert (solid == (0, 0, 0)).all(axis=1).any()
+
+
+def main_fill(image, left_half):
+    """The most common fully opaque, non-black colour in one half of ``image``."""
+    pixels = np.asarray(image)
+    half = pixels[:, :pixels.shape[1] // 2] if left_half else pixels[:, pixels.shape[1] // 2:]
+    solid = half[(half[:, :, 3] == 255) & (half[:, :, :3].sum(axis=2) > 0)][:, :3]
+    colours, counts = np.unique(solid, axis=0, return_counts=True)
+    return tuple(int(v) for v in colours[counts.argmax()])
+
+
+def test_white_highlight_dims_the_other_words():
+    # Two equal words, centred: one lands in each half of the image.
+    image = render_state(["MM", "MM"], 0, 400, 60, COLORS["White"])
+    assert main_fill(image, left_half=True) == (255, 255, 255)
+    assert main_fill(image, left_half=False) == rgb(COLORS["White"].others)
+    swapped = render_state(["MM", "MM"], 1, 400, 60, COLORS["White"])
+    assert main_fill(swapped, left_half=True) == rgb(COLORS["White"].others)
+
+
 def test_render_state_is_frame_wide_with_the_active_word_coloured():
     image = render_state(["your", "PC", "is"], 1, 720, 54, COLORS["Yellow"])
     assert image.mode == "RGBA" and image.size == (720, band_height(54))
     pixels = np.asarray(image)
     opaque = pixels[pixels[:, :, 3] == 255][:, :3]
-    assert (opaque == rgb(COLORS["Yellow"])).all(axis=1).any()
+    assert (opaque == rgb(COLORS["Yellow"].fill)).all(axis=1).any()
     assert (opaque == (255, 255, 255)).all(axis=1).any()
 
 
 def test_plain_style_has_no_highlight():
     pixels = np.asarray(render_state(["your", "PC"], 0, 720, 54, None))
     opaque = pixels[pixels[:, :, 3] == 255][:, :3]
-    assert not (opaque == rgb(COLORS["Yellow"])).all(axis=1).any()
+    assert not (opaque == rgb(COLORS["Yellow"].fill)).all(axis=1).any()
 
 
 def test_long_text_is_shrunk_to_stay_inside_the_frame():

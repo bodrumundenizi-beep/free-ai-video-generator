@@ -24,10 +24,32 @@ import math
 import os
 from dataclasses import dataclass
 from functools import lru_cache
+from typing import NamedTuple
+
+FILL = "#FFFFFF"
+STROKE = "#000000"
+
+
+class Highlight(NamedTuple):
+    """How the spoken word is set apart from the words around it."""
+    fill: str  # the spoken word
+    stroke: str = STROKE  # its outline
+    others: str = FILL  # the rest of the line
+
 
 STYLES = ("Highlight", "One word", "Plain")
 SIZES = {"Small": 0.8, "Medium": 1.0, "Large": 1.25}
-COLORS = {"Yellow": "#FFE14D", "Green": "#5CFF7A", "Cyan": "#5CE1FF", "Pink": "#FF6FB5"}
+# White and Black can't simply recolour the word: the line is already white
+# with a black outline. White dims the other words instead; Black inverts the
+# spoken one.
+COLORS = {
+    "Yellow": Highlight("#FFE14D"),
+    "Green": Highlight("#5CFF7A"),
+    "Cyan": Highlight("#5CE1FF"),
+    "Pink": Highlight("#FF6FB5"),
+    "White": Highlight("#FFFFFF", others="#A8A8A8"),
+    "Black": Highlight("#000000", stroke="#FFFFFF"),
+}
 # Vertical centre of the caption, as a fraction of the frame height. "Lower"
 # sits above the buttons and description Shorts, Reels and TikTok draw there.
 POSITIONS = {"Lower": 0.72, "Center": 0.5, "Top": 0.16}
@@ -39,8 +61,6 @@ MAX_WORDS = 3
 MAX_CHARS = 18
 MAX_GAP = 0.2  # a silence longer than this ends the cue: a breath, a full stop
 HOLD = 0.25  # a cue lingers this long after its last word, if nothing follows
-FILL = "#FFFFFF"
-STROKE = "#000000"
 MAX_WIDTH = 0.88  # of the frame; wider text is shrunk to fit
 ONE_WORD_SCALE = 1.35
 FONT_FILES = ("seguibl.ttf", "arialbd.ttf", "impact.ttf")  # heaviest first
@@ -208,11 +228,11 @@ def _stroke(pixels: int) -> int:
     return max(2, round(pixels * 0.09))
 
 
-def render_state(texts, active, frame_w: int, pixels: int, color: str | None):
+def render_state(texts, active, frame_w: int, pixels: int, highlight: Highlight | None):
     """An RGBA image, ``frame_w`` wide, of ``texts`` on one centred line.
 
-    ``active`` is the index of the word to draw in ``color``; pass ``color`` as
-    None for no highlight. Text wider than the frame allows is shrunk to fit,
+    ``active`` is the index of the spoken word, set apart as ``highlight``
+    describes; pass None for no highlight. Text wider than the frame allows is shrunk to fit,
     but the image keeps the height of the full-size font so every caption sits
     on the same line.
     """
@@ -238,9 +258,14 @@ def render_state(texts, active, frame_w: int, pixels: int, color: str | None):
     x = (frame_w - total) / 2 + stroke
     y = height / 2
     for i, (word, width) in enumerate(zip(words, widths)):
-        fill = color if (color and i == active) else FILL
+        if highlight is None:
+            fill, outline = FILL, STROKE
+        elif i == active:
+            fill, outline = highlight.fill, highlight.stroke
+        else:
+            fill, outline = highlight.others, STROKE
         draw.text((x, y), word, font=font, fill=fill, anchor="lm",
-                  stroke_width=stroke, stroke_fill=STROKE)
+                  stroke_width=stroke, stroke_fill=outline)
         x += width + space
     return image
 
@@ -265,7 +290,7 @@ def caption_layer(states, size, options: CaptionOptions, duration: float):
     frame_w, frame_h = size
     pixels = font_pixels(frame_w, frame_h, options)
     height = band_height(pixels)
-    color = None if options.style == "Plain" else COLORS[options.color]
+    highlight = None if options.style == "Plain" else COLORS[options.color]
     starts = [state.start for state in states]
     blank_rgb = np.zeros((height, frame_w, 3), dtype=np.uint8)
     blank_alpha = np.zeros((height, frame_w), dtype=float)
@@ -279,7 +304,7 @@ def caption_layer(states, size, options: CaptionOptions, duration: float):
     def drawn(i):
         state = states[i]
         image = render_state([w[2] for w in state.cue.words], state.active,
-                             frame_w, pixels, color)
+                             frame_w, pixels, highlight)
         rgba = np.asarray(image)
         return rgba[:, :, :3].copy(), rgba[:, :, 3].astype(float) / 255.0
 

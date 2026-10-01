@@ -145,7 +145,8 @@ Shorts, Reels and TikTok play at.
 
 Captions are on by default: the words appear on screen as they are spoken, timed
 from the voice itself, so they stay in sync without any setup. Change how they
-look, or turn them off, under **Settings → Captions**. Scenes without a `Voice:`
+look, or turn them off, in the **Captions** row on the Create page or under
+**Settings → Captions**. Scenes without a `Voice:`
 line have no captions.
 
 The `.srt` file saved next to the video can be uploaded to YouTube as real
@@ -167,7 +168,7 @@ description.
 | Resolution | `1080p` (8000k bitrate) or `720p` (5000k) |
 | Scene padding | `0s`, `0.25s` (default), `0.5s` or `1s` of pause after each voice line |
 | Voice | 16 free Microsoft Edge neural voices — see **Voices** below |
-| Captions | On or off. Style: `Highlight`, `One word` or `Plain`. Size: `Small`, `Medium`, `Large`. Highlight colour: yellow, green, cyan or pink. Position: `Lower`, `Center` or `Top` |
+| Captions | On or off. Style: `Highlight`, `One word` or `Plain`. Size: `Small`, `Medium`, `Large`. Highlight: yellow, green, cyan, pink, white or black. Position: `Lower`, `Center` or `Top` |
 | Background music | On or off, with any track; ducks under the voice automatically |
 | Theme | Dark or light, with a Mica backdrop on Windows 11 |
 
