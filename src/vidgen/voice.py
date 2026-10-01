@@ -80,7 +80,21 @@ def insert_pauses(samples, rate: int, pauses):
     return np.concatenate(pieces)
 
 
-def _synthesise(text, persona, mp3_path, want_words):
+def shift_words(words, pauses):
+    """``words`` moved to where they land once ``pauses`` are spliced in.
+
+    A pause at time t pushes every word starting at or after t later by its
+    length, so caption timings match the paced audio.
+    """
+    pauses = sorted(pauses)
+    shifted = []
+    for start, duration, word in words:
+        delay = sum(seconds for time, seconds in pauses if time <= start)
+        shifted.append((start + delay, duration, word))
+    return shifted
+
+
+def _synthesise(text, persona, mp3_path):
     import asyncio
 
     import edge_tts
@@ -88,7 +102,9 @@ def _synthesise(text, persona, mp3_path, want_words):
     async def run():
         speaker = edge_tts.Communicate(
             text, persona.voice, rate=persona.rate, pitch=persona.pitch,
-            boundary="WordBoundary" if want_words else "SentenceBoundary",
+            # Word timings drive the breath pauses and the captions. They are
+            # metadata only: the audio is the same either way.
+            boundary="WordBoundary",
         )
         words = []
         with open(mp3_path, "wb") as fh:
@@ -114,7 +130,15 @@ def _synthesise(text, persona, mp3_path, want_words):
 
 
 def generate_voiceover(text, filename, log_func, voice_choice):
-    """Voice ``text`` into ``filename``; returns the path actually written.
+    """Voice ``text`` into ``filename``; returns the path actually written."""
+    return generate_voiceover_timed(text, filename, log_func, voice_choice)[0]
+
+
+def generate_voiceover_timed(text, filename, log_func, voice_choice):
+    """Voice ``text`` into ``filename``; returns (path written, word timings).
+
+    Word timings are (start, duration, word) in seconds within the returned
+    file, for captions.
 
     Studio personas produce a mastered WAV beside ``filename`` (same name,
     .wav); classic ones produce the MP3 exactly as before. If mastering fails
@@ -127,7 +151,7 @@ def generate_voiceover(text, filename, log_func, voice_choice):
     base = os.path.splitext(filename)[0]
     mp3_path = base + ".tts.mp3" if persona.enhanced else filename
     try:
-        words = _synthesise(text, persona, mp3_path, want_words=persona.enhanced)
+        words = _synthesise(text, persona, mp3_path) or []
     except Exception as exc:  # noqa: BLE001 - surfaced to the user
         raise Exception(f"Voice generation failed! ({exc})") from exc
 
@@ -137,7 +161,7 @@ def generate_voiceover(text, filename, log_func, voice_choice):
             "- check your internet connection."
         )
     if not persona.enhanced:
-        return mp3_path
+        return mp3_path, words
 
     from . import mastering
 
@@ -148,7 +172,7 @@ def generate_voiceover(text, filename, log_func, voice_choice):
         pauses = plan_pauses(words, text, persona.pause_scale)
         mastering.write_wav(paced, insert_pauses(samples, SYNTH_RATE, pauses), SYNTH_RATE)
         mastering.master(paced, wav_path)
-        return wav_path
+        return wav_path, shift_words(words, pauses)
     except Exception as exc:  # noqa: BLE001
         log_func(f"⚠️ Studio processing failed ({exc}); using the plain voice.")
-        return mp3_path
+        return mp3_path, words

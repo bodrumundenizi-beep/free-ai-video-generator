@@ -9,7 +9,7 @@ Order of work, cheapest check first so mistakes surface before any download:
     2. voiceovers  - each voice decides its scene's length
     3. footage     - search, download, credit
     4. timeline    - where every shot sits, with crossfades centred on cuts
-    5. pictures    - framed, zoomed, faded, composited
+    5. pictures    - framed, zoomed, faded, composited, captions on top
     6. soundtrack  - voices at their scene starts, music ducked beneath them
     7. encode
 """
@@ -26,7 +26,7 @@ from . import footage
 from .formats import resolve_target
 from .script import parse_script
 from .timeline import boundaries, shot_spans
-from .voice import generate_voiceover
+from .voice import generate_voiceover_timed
 
 LONG_SCENE = 6.0  # a voice longer than this gets two clips, cut at the middle
 MIN_SCENE = 0.5
@@ -99,6 +99,7 @@ class _ScenePlan:
     scene: object
     voice: object = None  # AudioFileClip, or None for a silent scene
     voice_len: float = 0.0
+    words: list = field(default_factory=list)  # (start, duration, text) within the voice
     duration: float = 0.0
     parts: int = 1
     sources: list = field(default_factory=list)
@@ -216,10 +217,16 @@ def _render(cfg, ui, work_dir, job):
         if scene.voice:
             voice_path = os.path.join(work_dir, f"voice_{i}.mp3")
             # Studio voices come back as a mastered .wav, classic ones as the .mp3.
-            voice_path = generate_voiceover(scene.voice, voice_path, ui.log, cfg.get("voice"))
+            voice_path, words = generate_voiceover_timed(
+                scene.voice, voice_path, ui.log, cfg.get("voice"))
             # The file is registered for closing; the trimmed copy shares its reader.
-            plan.voice = audio.trim_to_speech(job.keep(AudioFileClip(voice_path)))
+            raw = job.keep(AudioFileClip(voice_path))
+            lead, tail = audio.speech_window(raw)
+            plan.voice = raw if (lead, tail) == (0.0, raw.duration) else raw.subclipped(lead, tail)
             plan.voice_len = float(plan.voice.duration)
+            # Word timings follow the trim, so captions stay on the words.
+            plan.words = [(max(start - lead, 0.0), length, text)
+                          for start, length, text in words]
 
         if scene.duration is None:
             padding = scene.padding if scene.padding is not None else default_padding
@@ -272,6 +279,26 @@ def _render(cfg, ui, work_dir, job):
         if shot.fade_in > 0:
             clip = clip.with_effects([vfx.CrossFadeIn(shot.fade_in)])
         layers.append(clip.with_start(shot.start))
+
+    # Captions sit on top of everything. Like music, they never sink a render.
+    cues = []
+    if cfg.get("captions", True):
+        try:
+            from . import captions
+
+            options = captions.CaptionOptions.from_cfg(cfg)
+            words = _timeline_words(plans, starts)
+            _shown, states = captions.plan(words, options)
+            # The subtitle file reads better in phrases, whatever is on screen.
+            cues = captions.group_words(words)
+            layer = captions.caption_layer(states, (target_w, target_h), options, total)
+            if layer is not None:
+                layers.append(layer)
+                ui.log(f"💬 Captions: {len(words)} words, {options.style.lower()} style")
+        except Exception as exc:  # noqa: BLE001
+            ui.log(f"⚠️ Couldn't add captions ({exc}); rendering without them.")
+            cues = []
+
     video = job.keep(
         CompositeVideoClip(layers, size=(target_w, target_h), bg_color=(0, 0, 0))
         .with_duration(total)
@@ -330,6 +357,13 @@ def _render(cfg, ui, work_dir, job):
         credits_path = footage.write_credits(save_path, credits, providers_used)
         ui.log(f"🎞️ Footage credits saved to {os.path.basename(credits_path)}")
 
+    if cues:
+        try:
+            srt_path = captions.write_srt(save_path, cues)
+            ui.log(f"💬 Subtitles saved to {os.path.basename(srt_path)}")
+        except OSError as exc:
+            ui.log(f"⚠️ Couldn't save the subtitle file ({exc}).")
+
     ui.log("🧹 Releasing memory and deleting temp files...")
     ui.progress(1.0)
     ui.log(f"✅ DONE! {target_w}x{target_h} video saved to:\n{save_path}")
@@ -338,6 +372,22 @@ def _render(cfg, ui, work_dir, job):
         "Render complete",
         f"{target_w}x{target_h} video rendered successfully.\n\nSaved at:\n{save_path}",
     )
+
+
+def _timeline_words(plans, starts):
+    """Every spoken word as (start, duration, text) on the video's timeline.
+
+    Words a forced Duration: cuts off are dropped, and one straddling the cut
+    is shortened, so no caption outlives its voice.
+    """
+    words = []
+    for plan, scene_start in zip(plans, starts):
+        limit = min(plan.voice_len, plan.duration)
+        for start, length, text in plan.words:
+            if start >= limit:
+                break
+            words.append((scene_start + start, min(length, limit - start), text))
+    return words
 
 
 def _acquire_stock(plan, index, search, work_dir, ui, credits, providers_used):

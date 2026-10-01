@@ -2,7 +2,9 @@ import numpy as np
 import pytest
 
 from vidgen import voices
-from vidgen.voice import PAUSE_COMMA, PAUSE_DASH, PAUSE_STOP, insert_pauses, plan_pauses
+from vidgen.voice import (
+    PAUSE_COMMA, PAUSE_DASH, PAUSE_STOP, insert_pauses, plan_pauses, shift_words,
+)
 
 # --- catalog -------------------------------------------------------------------
 
@@ -108,3 +110,18 @@ def test_resampling_happens_before_the_limiter():
     from vidgen.mastering import filter_chain
     chain = filter_chain(0.0)
     assert chain.index("aresample") < chain.index("alimiter")
+
+
+# --- caption timings ---------------------------------------------------------------
+
+def test_shift_words_moves_only_the_words_after_a_pause():
+    words = [(0.0, 0.3, "one"), (0.4, 0.3, "two"), (0.9, 0.3, "three")]
+    shifted = shift_words(words, [(0.35, 0.2), (0.8, 0.1)])
+    assert shifted[0] == (0.0, 0.3, "one")
+    assert shifted[1] == (pytest.approx(0.6), 0.3, "two")
+    assert shifted[2] == (pytest.approx(1.2), 0.3, "three")
+
+
+def test_shift_words_without_pauses_is_unchanged():
+    words = [(0.0, 0.3, "one")]
+    assert shift_words(words, []) == words

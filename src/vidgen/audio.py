@@ -108,14 +108,22 @@ def speech_bounds(samples: np.ndarray, fps: int):
     return loud[0] / fps, (loud[-1] + 1) / fps
 
 
-def trim_to_speech(voice, fps: int = 22050):
-    """``voice`` without the silence edge-tts adds before and after it."""
+def speech_window(voice, fps: int = 22050):
+    """(start, end) seconds of ``voice`` to keep: the speech plus a little air."""
     bounds = speech_bounds(voice.to_soundarray(fps=fps), fps)
     if bounds is None:
-        return voice
+        return 0.0, voice.duration
     start = max(0.0, bounds[0] - SPEECH_HEAD)
     end = min(voice.duration, bounds[1] + SPEECH_TAIL)
     if end - start < 0.1:
+        return 0.0, voice.duration
+    return start, end
+
+
+def trim_to_speech(voice, fps: int = 22050):
+    """``voice`` without the silence edge-tts adds before and after it."""
+    start, end = speech_window(voice, fps)
+    if (start, end) == (0.0, voice.duration):
         return voice
     return voice.subclipped(start, end)
 

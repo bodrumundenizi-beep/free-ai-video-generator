@@ -12,6 +12,7 @@ voiceover, and renders a 1080p or 720p MP4 in portrait or landscape.
 - **Neural AI Voices:** Uses Microsoft Edge-TTS for high-quality, natural-sounding male and female voices.
 - **Smart Script Parser:** Automatically reads your script line-by-line using `Visual:` and `Voice:` tags.
 - **Windows 11 Fluent interface:** Settings-app style segmented controls, smooth page transitions, dark and light themes with Mica, and live render progress.
+- **Auto-captions:** The spoken words are burned into the video, a few at a time, with the word being said highlighted. An `.srt` subtitle file is saved too.
 - **Portrait or landscape:** 9:16 for Shorts and TikTok, 16:9 for YouTube, at 1080p or 720p.
 - **End-to-End Automation:** Fetches, generates, matches duration, and stitches everything into a final `.mp4`.
 
@@ -37,7 +38,7 @@ You can confirm you have the real file by checking its hash against
 `SHA256SUMS.txt` on the release page:
 
 ```powershell
-Get-FileHash .\AIVideoStudio-3.1.1-setup.exe -Algorithm SHA256
+Get-FileHash .\AIVideoStudio-3.2.0-setup.exe -Algorithm SHA256
 ```
 
 ## First run
@@ -140,6 +141,16 @@ commas and full stops, then broadcast mastering — low-end warmth, compression
 so every word is audible, and loudness set to −14 LUFS, the level YouTube
 Shorts, Reels and TikTok play at.
 
+### Captions
+
+Captions are on by default: the words appear on screen as they are spoken, timed
+from the voice itself, so they stay in sync without any setup. Change how they
+look, or turn them off, under **Settings → Captions**. Scenes without a `Voice:`
+line have no captions.
+
+The `.srt` file saved next to the video can be uploaded to YouTube as real
+subtitles (**Subtitles → Upload file → With timing**).
+
 ### Footage credits
 
 Next to each video the app writes `<name>.credits.txt`, listing the Pexels or
@@ -156,6 +167,7 @@ description.
 | Resolution | `1080p` (8000k bitrate) or `720p` (5000k) |
 | Scene padding | `0s`, `0.25s` (default), `0.5s` or `1s` of pause after each voice line |
 | Voice | 16 free Microsoft Edge neural voices — see **Voices** below |
+| Captions | On or off. Style: `Highlight`, `One word` or `Plain`. Size: `Small`, `Medium`, `Large`. Highlight colour: yellow, green, cyan or pink. Position: `Lower`, `Center` or `Top` |
 | Background music | On or off, with any track; ducks under the voice automatically |
 | Theme | Dark or light, with a Mica backdrop on Windows 11 |
 
@@ -169,6 +181,7 @@ Output size follows both settings: 9:16 at 1080p is 1080×1920, 16:9 at 720p is
 | Settings | `%APPDATA%\AIVideoStudio\settings.json` |
 | Rendered video | Your Videos folder by default; change it in Settings |
 | Footage credits | `<video name>.credits.txt`, next to the video |
+| Subtitles | `<video name>.srt`, next to the video (when captions are on) |
 | Your music | `Documents\AI Video Studio\Music` |
 | Search cache | `%APPDATA%\AIVideoStudio\cache`, kept for 24 hours (Pixabay's terms require it) |
 | Temporary clips | `%TEMP%\AIVideoStudio`, deleted after each render |
@@ -231,7 +244,7 @@ pip install -r requirements.txt -r requirements-build.txt
 python -m pytest
 python packaging/make_icon.py
 pyinstaller --noconfirm --clean packaging/ai_video_studio.spec
-"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion=3.1.1 packaging\installer.iss
+"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion=3.2.0 packaging\installer.iss
 ```
 
 Releases are built automatically by GitHub Actions when a `v*` tag is pushed.

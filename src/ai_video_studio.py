@@ -133,11 +133,12 @@ from vidgen.render import UiBridge, render_worker, sweep_old_work_dirs  # noqa: 
 from vidgen.script import count_scenes  # noqa: E402
 from vidgen import voices  # noqa: E402
 from vidgen.render import TEMP_ROOT  # noqa: E402
+from vidgen import captions  # noqa: E402
 from vidgen.voice import generate_voiceover  # noqa: E402
 
 
 APP_NAME = "AI Video Studio"
-APP_VERSION = "3.1.1"
+APP_VERSION = "3.2.0"
 # Must match AppUserModelID in packaging/installer.iss, or a pinned taskbar
 # shortcut will not group with the running window.
 APP_MODEL_ID = "AIVideoStudio.Desktop.3"
@@ -217,6 +218,15 @@ VOICE_OPTIONS = voices.labels()
 PREVIEW_TEXT = "This is how your video will sound."
 PREVIEW_DIR = os.path.join(TEMP_ROOT, "preview")
 
+# (settings key, allowed values, default) for each caption choice.
+CAPTION_SETTINGS = (
+    ("caption_style", captions.STYLES, captions.DEFAULT_STYLE),
+    ("caption_size", tuple(captions.SIZES), captions.DEFAULT_SIZE),
+    ("caption_color", tuple(captions.COLORS), captions.DEFAULT_COLOR),
+    ("caption_position", tuple(captions.POSITIONS), captions.DEFAULT_POSITION),
+)
+
+
 def default_settings() -> dict:
     return {
         "api_key": "",
@@ -228,6 +238,11 @@ def default_settings() -> dict:
         "aspect": "9:16",
         "resolution": "1080p",
         "voice": voices.DEFAULT_ID,
+        "captions": True,
+        "caption_style": captions.DEFAULT_STYLE,
+        "caption_size": captions.DEFAULT_SIZE,
+        "caption_color": captions.DEFAULT_COLOR,
+        "caption_position": captions.DEFAULT_POSITION,
         "theme": "dark",
         "translucent": True,
         "script": DEFAULT_SCRIPT,
@@ -268,6 +283,10 @@ def load_settings() -> dict:
         data["resolution"] = "1080p"
     # An ID or an old label; the four original labels are the Classic voices' IDs.
     data["voice"] = voices.persona(data["voice"]).id
+    data["captions"] = bool(data["captions"])
+    for key, allowed, default in CAPTION_SETTINGS:
+        if data[key] not in allowed:
+            data[key] = default
     if data["theme"] not in ("dark", "light"):
         data["theme"] = "dark"
 
@@ -479,6 +498,10 @@ GLYPHS = {
     "script": ("", "✎"),
     "music": ("\ue8d6", "\u266b"),
     "timer": ("\ue916", "\u23f1"),
+    "captions": ("\ue7f0", "CC"),
+    "font_size": ("\ue8e9", "A"),
+    "color": ("\ue790", "\u25cf"),
+    "position": ("\ue8cb", "\u2195"),
     "eye": ("", "◉"),
 }
 
@@ -1013,13 +1036,17 @@ class App(ctk.CTk):
         padding_label = {v: k for k, v in PADDING_OPTIONS.items()}[s["padding"]]
         self.var_padding = tk.StringVar(value=padding_label)
         self.var_music_enabled = tk.BooleanVar(value=s["music_enabled"])
+        self.var_captions = tk.BooleanVar(value=s["captions"])
+        self.caption_vars = {key: tk.StringVar(value=s[key])
+                             for key, _allowed, _default in CAPTION_SETTINGS}
         self.music_path = s["music_path"]
         self.var_music_track = tk.StringVar(value="")
         self._tracks = {}
 
         for var in (self.var_api, self.var_output, self.var_aspect,
                     self.var_resolution, self.var_voice, self.var_pixabay,
-                    self.var_padding, self.var_music_enabled):
+                    self.var_padding, self.var_music_enabled, self.var_captions,
+                    *self.caption_vars.values()):
             var.trace_add("write", self._on_setting_changed)
 
     def _collect_settings(self) -> dict:
@@ -1033,6 +1060,8 @@ class App(ctk.CTk):
             "aspect": self.var_aspect.get(),
             "resolution": self.var_resolution.get(),
             "voice": voices.persona(self.var_voice.get()).id,
+            "captions": bool(self.var_captions.get()),
+            **{key: var.get() for key, var in self.caption_vars.items()},
             "theme": self.var_theme.get(),
             "translucent": bool(self.var_translucent.get()),
             "script": self.script_box.get("1.0", "end").strip()
@@ -1586,11 +1615,35 @@ class App(ctk.CTk):
             dropdown_hover_color=CARD_HOVER, dropdown_font=self.font_body,
         ).pack(side="left")
 
-        self._caption(page, "AUDIO", 10)
+        self._caption(page, "CAPTIONS", 10)
+
+        captions_row = SettingRow(page, self, self.icon("captions"), "Captions",
+                                  "Burns the spoken words into the video and saves an .srt file")
+        captions_row.grid(row=11, column=0, sticky="ew", pady=PAD // 2)
+        ctk.CTkSwitch(
+            captions_row.control, text="", width=44, variable=self.var_captions,
+            onvalue=True, offvalue=False, progress_color=ACCENT,
+        ).pack(side="left")
+
+        for row, key, glyph, title, subtitle, width in (
+            (12, "caption_style", "script", "Style",
+             "Highlight the spoken word, show one word at a time, or plain text", 300),
+            (13, "caption_size", "font_size", "Size", "How big the caption text is", 260),
+            (14, "caption_color", "color", "Highlight colour",
+             "Colour of the word being spoken", 300),
+            (15, "caption_position", "position", "Position",
+             "Where the captions sit on the video", 260),
+        ):
+            allowed = next(a for k, a, _d in CAPTION_SETTINGS if k == key)
+            option_row = SettingRow(page, self, self.icon(glyph), title, subtitle)
+            option_row.grid(row=row, column=0, sticky="ew", pady=PAD // 2)
+            self._segmented(option_row.control, list(allowed), self.caption_vars[key], width)
+
+        self._caption(page, "AUDIO", 16)
 
         music_row = SettingRow(page, self, self.icon("music"), "Background music",
                                "Plays under the video and ducks while the voice speaks")
-        music_row.grid(row=11, column=0, sticky="ew", pady=PAD // 2)
+        music_row.grid(row=17, column=0, sticky="ew", pady=PAD // 2)
         ctk.CTkSwitch(
             music_row.control, text="", width=44, variable=self.var_music_enabled,
             onvalue=True, offvalue=False, progress_color=ACCENT,
@@ -1598,7 +1651,7 @@ class App(ctk.CTk):
 
         track_row = SettingRow(page, self, self.icon("folder"), "Track",
                                "Drop tracks in the Music folder, or browse for any file")
-        track_row.grid(row=12, column=0, sticky="ew", pady=PAD // 2)
+        track_row.grid(row=18, column=0, sticky="ew", pady=PAD // 2)
         self.music_menu = ctk.CTkOptionMenu(
             track_row.control, values=["No tracks yet"], variable=self.var_music_track,
             command=self._pick_track, width=220, height=32, corner_radius=4,
@@ -1618,11 +1671,11 @@ class App(ctk.CTk):
             ).pack(side="left", padx=(6, 0))
         self._refresh_tracks()
 
-        self._caption(page, "APPEARANCE", 13)
+        self._caption(page, "APPEARANCE", 19)
 
         theme_row = SettingRow(page, self, self.icon("theme"), "Dark theme",
                                "Switches the whole app between dark and light")
-        theme_row.grid(row=14, column=0, sticky="ew", pady=PAD // 2)
+        theme_row.grid(row=20, column=0, sticky="ew", pady=PAD // 2)
         ctk.CTkSwitch(
             theme_row.control, text="", width=44, variable=self.var_theme,
             onvalue="dark", offvalue="light", progress_color=ACCENT,
@@ -1631,7 +1684,7 @@ class App(ctk.CTk):
 
         glass_row = SettingRow(page, self, self.icon("glass"), "Window translucency",
                                "Mica / acrylic where supported, alpha elsewhere")
-        glass_row.grid(row=15, column=0, sticky="ew", pady=(PAD // 2, PAD))
+        glass_row.grid(row=21, column=0, sticky="ew", pady=(PAD // 2, PAD))
         ctk.CTkSwitch(
             glass_row.control, text="", width=44, variable=self.var_translucent,
             onvalue=True, offvalue=False, progress_color=ACCENT,
