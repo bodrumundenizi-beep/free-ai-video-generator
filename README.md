@@ -252,6 +252,27 @@ Releases are built automatically by GitHub Actions when a `v*` tag is pushed.
 
 ![Log](docs/log.png)
 
+## Code signing policy
+
+The Windows builds are **not signed yet**. This project has applied for free code
+signing for open-source projects, provided by [SignPath.io](https://about.signpath.io)
+with a certificate by [SignPath Foundation](https://signpath.org). This section
+will be updated when releases are signed.
+
+- **Builds:** every release is built from this repository by GitHub Actions
+  ([release workflow](.github/workflows/release.yml)); nothing is built or
+  uploaded by hand.
+- **Committers, reviewers and approvers:** the repository owner,
+  [@bodrumundenizi-beep](https://github.com/bodrumundenizi-beep).
+
+### Privacy
+
+This program does not collect or send any personal data. It connects to other
+systems only to do what you ask of it: Pexels and Pixabay to search for and
+download stock footage (using your own API keys), and Microsoft Edge's online
+text-to-speech to generate the voiceover from your script text. Settings and API
+keys stay on your computer.
+
 ## Licence
 
 MIT — see [LICENSE](LICENSE).
