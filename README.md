@@ -5,6 +5,11 @@ into fully edited, high-quality videos. Pick the visuals in words, write the
 narration, and it fetches matching stock footage from Pexels, generates a neural
 voiceover, and renders a 1080p or 720p MP4 in portrait or landscape.
 
+<p align="center">
+  <img src="docs/demo.gif" width="300" alt="A Short made by AI Video Studio: stock footage with word-by-word captions"><br>
+  <em>Made from a six-scene script: footage, voice and captions are automatic.</em>
+</p>
+
 ![Home](docs/home.png)
 
 ## Features
