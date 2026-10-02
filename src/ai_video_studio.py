@@ -29,6 +29,7 @@ Run
 from __future__ import annotations
 
 import ctypes
+import itertools
 import json
 import os
 import queue
@@ -129,7 +130,9 @@ except ImportError:  # pragma: no cover - startup guard
 # The engine. Only light modules load here; MoviePy waits for the first render
 # (or the warm-up thread), so the window still appears instantly.
 from vidgen.formats import RATIO_OPTIONS, RESOLUTION_OPTIONS, resolve_target  # noqa: E402
-from vidgen.render import UiBridge, render_worker, sweep_old_work_dirs  # noqa: E402
+from vidgen.render import (  # noqa: E402
+    UiBridge, next_free_path, render_worker, sweep_old_work_dirs,
+)
 from vidgen.script import count_scenes  # noqa: E402
 from vidgen import voices  # noqa: E402
 from vidgen.render import TEMP_ROOT  # noqa: E402
@@ -138,7 +141,7 @@ from vidgen.voice import generate_voiceover  # noqa: E402
 
 
 APP_NAME = "AI Video Studio"
-APP_VERSION = "3.2.0"
+APP_VERSION = "3.2.1"
 # Must match AppUserModelID in packaging/installer.iss, or a pinned taskbar
 # shortcut will not group with the running window.
 APP_MODEL_ID = "AIVideoStudio.Desktop.3"
@@ -233,6 +236,7 @@ def default_settings() -> dict:
         "pixabay_key": "",
         "padding": DEFAULT_PADDING,
         "music_enabled": False,
+        "ask_save": True,
         "music_path": "",
         "output_path": os.path.join(default_output_dir(), "final_video.mp4"),
         "aspect": "9:16",
@@ -274,6 +278,7 @@ def load_settings() -> dict:
         padding = DEFAULT_PADDING
     data["padding"] = padding if padding in PADDING_OPTIONS.values() else DEFAULT_PADDING
     data["music_enabled"] = bool(data["music_enabled"])
+    data["ask_save"] = bool(data["ask_save"])
     if data["music_path"] and not os.path.isfile(str(data["music_path"])):
         data["music_path"] = ""
 
@@ -1036,6 +1041,7 @@ class App(ctk.CTk):
         padding_label = {v: k for k, v in PADDING_OPTIONS.items()}[s["padding"]]
         self.var_padding = tk.StringVar(value=padding_label)
         self.var_music_enabled = tk.BooleanVar(value=s["music_enabled"])
+        self.var_ask_save = tk.BooleanVar(value=s["ask_save"])
         self.var_captions = tk.BooleanVar(value=s["captions"])
         self.caption_vars = {key: tk.StringVar(value=s[key])
                              for key, _allowed, _default in CAPTION_SETTINGS}
@@ -1046,6 +1052,7 @@ class App(ctk.CTk):
         for var in (self.var_api, self.var_output, self.var_aspect,
                     self.var_resolution, self.var_voice, self.var_pixabay,
                     self.var_padding, self.var_music_enabled, self.var_captions,
+                    self.var_ask_save,
                     *self.caption_vars.values()):
             var.trace_add("write", self._on_setting_changed)
 
@@ -1055,6 +1062,7 @@ class App(ctk.CTk):
             "pixabay_key": self.var_pixabay.get().strip(),
             "padding": PADDING_OPTIONS.get(self.var_padding.get(), DEFAULT_PADDING),
             "music_enabled": bool(self.var_music_enabled.get()),
+            "ask_save": bool(self.var_ask_save.get()),
             "music_path": self.music_path,
             "output_path": self.var_output.get().strip(),
             "aspect": self.var_aspect.get(),
@@ -1589,24 +1597,25 @@ class App(ctk.CTk):
     def _build_settings(self):
         page = self._scroll_page()
         page.grid_columnconfigure(0, weight=1)
+        rows = itertools.count()   # sections and cards, top to bottom
 
-        self._caption(page, "STOCK FOOTAGE", 0, pady=(0, 6))
+        self._caption(page, "STOCK FOOTAGE", next(rows), pady=(0, 6))
         self.api_entry = self._key_row(
-            page, 1, "Pexels API key",
+            page, next(rows), "Pexels API key",
             "Stored locally in settings.json - never in the code",
             self.var_api, "Paste your Pexels API key",
         )
         self.pixabay_entry = self._key_row(
-            page, 2, "Pixabay API key",
+            page, next(rows), "Pixabay API key",
             "Optional - used when Pexels finds nothing",
             self.var_pixabay, "Paste your Pixabay API key",
         )
 
-        self._caption(page, "OUTPUT", 3)
+        self._caption(page, "OUTPUT", next(rows))
 
         path_row = SettingRow(page, self, self.icon("folder"), "Save video to",
-                              "Full path of the rendered .mp4")
-        path_row.grid(row=4, column=0, sticky="ew", pady=PAD // 2)
+                              "Default folder and name for new videos")
+        path_row.grid(row=next(rows), column=0, sticky="ew", pady=PAD // 2)
         focus_accent(ctk.CTkEntry(
             path_row.control, textvariable=self.var_output, width=300, height=32,
             corner_radius=4, font=self.font_body, fg_color=FIELD_BG,
@@ -1619,26 +1628,35 @@ class App(ctk.CTk):
             text_color=TEXT, command=self.choose_save_location,
         ).pack(side="left", padx=(6, 0))
 
-        self._caption(page, "VIDEO", 5)
+        ask_row = SettingRow(page, self, self.icon("folder"), "Ask where to save each video",
+                             "Opens a Save window when you render. Off: saves to the path "
+                             "above, numbering new videos so none is overwritten")
+        ask_row.grid(row=next(rows), column=0, sticky="ew", pady=PAD // 2)
+        ctk.CTkSwitch(
+            ask_row.control, text="", width=44, variable=self.var_ask_save,
+            onvalue=True, offvalue=False, progress_color=ACCENT,
+        ).pack(side="left")
+
+        self._caption(page, "VIDEO", next(rows))
 
         ratio_row = SettingRow(page, self, self.icon("aspect"), "Aspect ratio",
                                "Portrait for Shorts / TikTok, landscape for YouTube")
-        ratio_row.grid(row=6, column=0, sticky="ew", pady=PAD // 2)
+        ratio_row.grid(row=next(rows), column=0, sticky="ew", pady=PAD // 2)
         self._segmented(ratio_row.control, RATIO_OPTIONS, self.var_aspect, 170)
 
         res_row = SettingRow(page, self, self.icon("resolution"), "Resolution",
                              "1080p renders at 8000k, 720p at 5000k")
-        res_row.grid(row=7, column=0, sticky="ew", pady=PAD // 2)
+        res_row.grid(row=next(rows), column=0, sticky="ew", pady=PAD // 2)
         self._segmented(res_row.control, RESOLUTION_OPTIONS, self.var_resolution, 170)
 
         padding_row = SettingRow(page, self, self.icon("timer"), "Scene padding",
                                  "Pause after each voice line. A script's Padding: overrides it")
-        padding_row.grid(row=8, column=0, sticky="ew", pady=PAD // 2)
+        padding_row.grid(row=next(rows), column=0, sticky="ew", pady=PAD // 2)
         self._segmented(padding_row.control, list(PADDING_OPTIONS), self.var_padding, 260)
 
         voice_row = SettingRow(page, self, self.icon("voice"), "Voice engine",
                                "Microsoft Edge neural text-to-speech")
-        voice_row.grid(row=9, column=0, sticky="ew", pady=PAD // 2)
+        voice_row.grid(row=next(rows), column=0, sticky="ew", pady=PAD // 2)
         ctk.CTkOptionMenu(
             voice_row.control, values=VOICE_OPTIONS, variable=self.var_voice,
             width=360, dynamic_resizing=False, height=32, corner_radius=4, font=self.font_body,
@@ -1647,35 +1665,35 @@ class App(ctk.CTk):
             dropdown_hover_color=CARD_HOVER, dropdown_font=self.font_body,
         ).pack(side="left")
 
-        self._caption(page, "CAPTIONS", 10)
+        self._caption(page, "CAPTIONS", next(rows))
 
         captions_row = SettingRow(page, self, self.icon("captions"), "Captions",
                                   "Burns the spoken words into the video and saves an .srt file")
-        captions_row.grid(row=11, column=0, sticky="ew", pady=PAD // 2)
+        captions_row.grid(row=next(rows), column=0, sticky="ew", pady=PAD // 2)
         ctk.CTkSwitch(
             captions_row.control, text="", width=44, variable=self.var_captions,
             onvalue=True, offvalue=False, progress_color=ACCENT,
         ).pack(side="left")
 
-        for row, key, glyph, title, subtitle, width in (
-            (12, "caption_style", "script", "Style",
+        for key, glyph, title, subtitle, width in (
+            ("caption_style", "script", "Style",
              "Highlight the spoken word, show one word at a time, or plain text", 300),
-            (13, "caption_size", "font_size", "Size", "How big the caption text is", 260),
-            (14, "caption_color", "color", "Highlight colour",
+            ("caption_size", "font_size", "Size", "How big the caption text is", 260),
+            ("caption_color", "color", "Highlight colour",
              "How the word being spoken stands out", 400),
-            (15, "caption_position", "position", "Position",
+            ("caption_position", "position", "Position",
              "Where the captions sit on the video", 260),
         ):
             allowed = next(a for k, a, _d in CAPTION_SETTINGS if k == key)
             option_row = SettingRow(page, self, self.icon(glyph), title, subtitle)
-            option_row.grid(row=row, column=0, sticky="ew", pady=PAD // 2)
+            option_row.grid(row=next(rows), column=0, sticky="ew", pady=PAD // 2)
             self._segmented(option_row.control, list(allowed), self.caption_vars[key], width)
 
-        self._caption(page, "AUDIO", 16)
+        self._caption(page, "AUDIO", next(rows))
 
         music_row = SettingRow(page, self, self.icon("music"), "Background music",
                                "Plays under the video and ducks while the voice speaks")
-        music_row.grid(row=17, column=0, sticky="ew", pady=PAD // 2)
+        music_row.grid(row=next(rows), column=0, sticky="ew", pady=PAD // 2)
         ctk.CTkSwitch(
             music_row.control, text="", width=44, variable=self.var_music_enabled,
             onvalue=True, offvalue=False, progress_color=ACCENT,
@@ -1683,7 +1701,7 @@ class App(ctk.CTk):
 
         track_row = SettingRow(page, self, self.icon("folder"), "Track",
                                "Drop tracks in the Music folder, or browse for any file")
-        track_row.grid(row=18, column=0, sticky="ew", pady=PAD // 2)
+        track_row.grid(row=next(rows), column=0, sticky="ew", pady=PAD // 2)
         self.music_menu = ctk.CTkOptionMenu(
             track_row.control, values=["No tracks yet"], variable=self.var_music_track,
             command=self._pick_track, width=220, height=32, corner_radius=4,
@@ -1703,11 +1721,11 @@ class App(ctk.CTk):
             ).pack(side="left", padx=(6, 0))
         self._refresh_tracks()
 
-        self._caption(page, "APPEARANCE", 19)
+        self._caption(page, "APPEARANCE", next(rows))
 
         theme_row = SettingRow(page, self, self.icon("theme"), "Dark theme",
                                "Switches the whole app between dark and light")
-        theme_row.grid(row=20, column=0, sticky="ew", pady=PAD // 2)
+        theme_row.grid(row=next(rows), column=0, sticky="ew", pady=PAD // 2)
         ctk.CTkSwitch(
             theme_row.control, text="", width=44, variable=self.var_theme,
             onvalue="dark", offvalue="light", progress_color=ACCENT,
@@ -1716,7 +1734,7 @@ class App(ctk.CTk):
 
         glass_row = SettingRow(page, self, self.icon("glass"), "Window translucency",
                                "Mica / acrylic where supported, alpha elsewhere")
-        glass_row.grid(row=21, column=0, sticky="ew", pady=(PAD // 2, PAD))
+        glass_row.grid(row=next(rows), column=0, sticky="ew", pady=(PAD // 2, PAD))
         ctk.CTkSwitch(
             glass_row.control, text="", width=44, variable=self.var_translucent,
             onvalue=True, offvalue=False, progress_color=ACCENT,
@@ -1797,16 +1815,26 @@ class App(ctk.CTk):
         os.makedirs(MUSIC_DIR, exist_ok=True)
         self._open_folder(MUSIC_DIR)
 
-    def choose_save_location(self):
-        current = self.var_output.get().strip()
+    def _save_dialog(self, suggested, title):
+        """The Windows Save window, opened on ``suggested``. '' if cancelled."""
         chosen = filedialog.asksaveasfilename(
-            defaultextension=".mp4",
+            parent=self, title=title, defaultextension=".mp4",
             filetypes=[("MP4 Video", "*.mp4"), ("All Files", "*.*")],
-            initialdir=os.path.dirname(current) or default_output_dir(),
-            initialfile=os.path.basename(current) or "final_video.mp4",
+            initialdir=os.path.dirname(suggested) or default_output_dir(),
+            initialfile=os.path.basename(suggested) or "final_video.mp4",
         )
+        return os.path.normpath(chosen) if chosen else ""
+
+    def choose_save_location(self):
+        chosen = self._save_dialog(self.var_output.get().strip(), "Default save location")
         if chosen:
             self.var_output.set(chosen)
+
+    def _ask_save_path(self):
+        """Where this render goes. Suggests a name that isn't taken yet."""
+        current = self.var_output.get().strip() or os.path.join(
+            default_output_dir(), "final_video.mp4")
+        return self._save_dialog(next_free_path(os.path.abspath(current)), "Save video as")
 
     def apply_theme(self):
         ctk.set_appearance_mode(self.var_theme.get())
@@ -1953,11 +1981,21 @@ class App(ctk.CTk):
     def start_render(self):
         if self.is_rendering:
             return
+        # Like a browser download: ask where this one goes, unless told not to.
+        overwrite = False
+        if self.var_ask_save.get():
+            chosen = self._ask_save_path()
+            if not chosen:
+                return   # cancelled: no render
+            self.var_output.set(chosen)
+            # Windows has already asked before replacing an existing file.
+            overwrite = True
+
         # Snapshot every widget value here, on the UI thread.
         settings = self._collect_settings()
         self.settings = settings
         save_settings(settings)
-        cfg = dict(settings, cache_dir=SEARCH_CACHE_DIR)
+        cfg = dict(settings, cache_dir=SEARCH_CACHE_DIR, overwrite=overwrite)
 
         self._set_busy(True)
         for bar in self._progress_bars():

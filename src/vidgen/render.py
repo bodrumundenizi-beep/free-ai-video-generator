@@ -60,6 +60,21 @@ def sweep_old_work_dirs(max_age_hours: int = 24) -> None:
             pass
 
 
+def next_free_path(path: str) -> str:
+    """``path`` if nothing is there yet, else the first free "name (2).ext", "name (3).ext"...
+
+    The way Windows and browsers number downloads, so a new render never
+    replaces an earlier video.
+    """
+    if not os.path.exists(path):
+        return path
+    stem, ext = os.path.splitext(path)
+    number = 2
+    while os.path.exists(f"{stem} ({number}){ext}"):
+        number += 1
+    return f"{stem} ({number}){ext}"
+
+
 class UiBridge:
     """Thread-safe hand-off from the worker thread to the Tk main loop."""
 
@@ -175,6 +190,12 @@ def _render(cfg, ui, work_dir, job):
         ui.log(f"⚠️ {warning}")
 
     save_path = os.path.abspath(save_path)
+    if not cfg.get("overwrite"):
+        free_path = next_free_path(save_path)
+        if free_path != save_path:
+            ui.log(f"💾 {os.path.basename(save_path)} already exists - saving as "
+                   f"{os.path.basename(free_path)}")
+            save_path = free_path
     out_dir = os.path.dirname(save_path)
     os.makedirs(out_dir, exist_ok=True)
 
