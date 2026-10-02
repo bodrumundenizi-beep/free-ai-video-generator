@@ -254,10 +254,10 @@ Releases are built automatically by GitHub Actions when a `v*` tag is pushed.
 
 ## Code signing policy
 
-The Windows builds are **not signed yet**. This project has applied for free code
-signing for open-source projects, provided by [SignPath.io](https://about.signpath.io)
-with a certificate by [SignPath Foundation](https://signpath.org). This section
-will be updated when releases are signed.
+The Windows builds are **not code-signed**, so Windows shows a SmartScreen
+warning the first time you run them (see [Download](#download) for how to get
+past it and how to check the file's SHA-256 hash). Signing is planned once the
+project is established enough to qualify for an open-source signing programme.
 
 - **Builds:** every release is built from this repository by GitHub Actions
   ([release workflow](.github/workflows/release.yml)); nothing is built or
