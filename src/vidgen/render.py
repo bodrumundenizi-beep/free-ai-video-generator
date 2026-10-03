@@ -99,8 +99,9 @@ class UiBridge:
     def busy(self, on):
         self._post("busy", on=on)
 
-    def finished(self, ok, title, message):
-        self._post("finished", ok=ok, title=title, message=message)
+    def finished(self, ok, title, message, path=None):
+        """``path`` is the saved video, so the window can show it."""
+        self._post("finished", ok=ok, title=title, message=message, path=path)
 
 
 @dataclass
@@ -392,6 +393,7 @@ def _render(cfg, ui, work_dir, job):
         True,
         "Render complete",
         f"{target_w}x{target_h} video rendered successfully.\n\nSaved at:\n{save_path}",
+        path=save_path,
     )
 
 

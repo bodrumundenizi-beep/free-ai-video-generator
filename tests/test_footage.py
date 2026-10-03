@@ -239,3 +239,63 @@ def test_resolve_local_errors(tmp_path):
     (tmp_path / "notes.txt").write_text("x")
     with pytest.raises(ValueError, match="not a supported file"):
         resolve_local("notes.txt", str(tmp_path))
+
+
+
+# --- checking a key ----------------------------------------------------------------
+
+class KeySession:
+    """Answers every request with one status, and records what was sent."""
+
+    def __init__(self, status=200, error=None):
+        self.status, self.error, self.sent = status, error, []
+
+    def get(self, url, params=None, headers=None, timeout=None):
+        assert timeout, "every request needs a timeout"
+        self.sent.append((url, dict(params), dict(headers)))
+        if self.error:
+            raise self.error
+        return FakeResponse(self.status, {})
+
+
+def test_check_key_accepts_a_working_pexels_key():
+    session = KeySession(200)
+    assert footage.check_key("Pexels", "  abc  ", session) == (True, "Key works.")
+    url, _params, headers = session.sent[0]
+    assert url == footage.PEXELS_URL and headers == {"Authorization": "abc"}
+
+
+def test_check_key_sends_the_pixabay_key_as_a_parameter():
+    session = KeySession(200)
+    assert footage.check_key("Pixabay", "pk", session)[0] is True
+    url, params, headers = session.sent[0]
+    assert url == footage.PIXABAY_URL and params["key"] == "pk" and headers == {}
+
+
+@pytest.mark.parametrize("status", [400, 401, 403])
+def test_check_key_reports_a_rejected_key(status):
+    ok, message = footage.check_key("Pexels", "bad", KeySession(status))
+    assert ok is False and "rejected" in message
+
+
+def test_check_key_counts_a_rate_limit_as_a_known_key():
+    ok, message = footage.check_key("Pexels", "abc", KeySession(429))
+    assert ok is True and "rate limit" in message
+
+
+def test_check_key_reports_no_connection():
+    import requests
+
+    ok, message = footage.check_key("Pexels", "abc", KeySession(error=requests.ConnectionError()))
+    assert ok is False and "internet" in message
+
+
+def test_check_key_needs_a_key_and_makes_no_request_without_one():
+    session = KeySession(200)
+    assert footage.check_key("Pexels", "   ", session) == (False, "Paste a key first.")
+    assert session.sent == []
+
+
+def test_check_key_rejects_an_unknown_provider():
+    with pytest.raises(ValueError):
+        footage.check_key("Giphy", "abc", KeySession(200))

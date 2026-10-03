@@ -18,6 +18,7 @@ voiceover, and renders a 1080p or 720p MP4 in portrait or landscape.
 - **Smart Script Parser:** Automatically reads your script line-by-line using `Visual:` and `Voice:` tags.
 - **Windows 11 Fluent interface:** Settings-app style segmented controls, smooth page transitions, dark and light themes with Mica, and live render progress.
 - **Auto-captions:** The spoken words are burned into the video, a few at a time, with the word being said highlighted. An `.srt` subtitle file is saved too.
+- **Watch it straight away:** When a render finishes, the video plays inside the app, with sound.
 - **Portrait or landscape:** 9:16 for Shorts and TikTok, 16:9 for YouTube, at 1080p or 720p.
 - **End-to-End Automation:** Fetches, generates, matches duration, and stitches everything into a final `.mp4`.
 
@@ -43,14 +44,16 @@ You can confirm you have the real file by checking its hash against
 `SHA256SUMS.txt` on the release page:
 
 ```powershell
-Get-FileHash .\AIVideoStudio-3.2.1-setup.exe -Algorithm SHA256
+Get-FileHash .\AIVideoStudio-3.3.0-setup.exe -Algorithm SHA256
 ```
 
 ## First run
 
-The app needs a **free Pexels API key** to find stock footage. Get it at
-[pexels.com/api](https://www.pexels.com/api/), then paste it into
-**Settings → Pexels API key**.
+The app needs a **free Pexels API key** to find stock footage. The first time
+you open it, a **Welcome** window walks you through it: open
+[pexels.com/api](https://www.pexels.com/api/), copy your key, paste it in, and
+press **Test key** to check it works. You can reopen the window later from
+**Feedback → Setup guide**, or paste the key into **Settings → Pexels API key**.
 
 A **Pixabay key** is optional: when Pexels has nothing good for a search, the app
 tries Pixabay too. Get one at [pixabay.com/api/docs](https://pixabay.com/api/docs/)
@@ -251,7 +254,7 @@ pip install -r requirements.txt -r requirements-build.txt
 python -m pytest
 python packaging/make_icon.py
 pyinstaller --noconfirm --clean packaging/ai_video_studio.spec
-"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion=3.2.1 packaging\installer.iss
+"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion=3.3.0 packaging\installer.iss
 ```
 
 Releases are built automatically by GitHub Actions when a `v*` tag is pushed.

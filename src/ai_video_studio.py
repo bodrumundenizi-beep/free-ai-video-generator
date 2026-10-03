@@ -36,9 +36,11 @@ import queue
 import re
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import tkinter as tk
+import webbrowser
 from tkinter import filedialog
 from tkinter import font as tkfont
 
@@ -133,15 +135,15 @@ from vidgen.formats import RATIO_OPTIONS, RESOLUTION_OPTIONS, resolve_target  # 
 from vidgen.render import (  # noqa: E402
     UiBridge, next_free_path, render_worker, sweep_old_work_dirs,
 )
-from vidgen.script import count_scenes  # noqa: E402
+from vidgen.script import ScriptError, count_scenes, parse_script  # noqa: E402
 from vidgen import voices  # noqa: E402
 from vidgen.render import TEMP_ROOT  # noqa: E402
-from vidgen import captions  # noqa: E402
+from vidgen import captions, footage, preview  # noqa: E402
 from vidgen.voice import generate_voiceover  # noqa: E402
 
 
 APP_NAME = "AI Video Studio"
-APP_VERSION = "3.2.1"
+APP_VERSION = "3.3.0"
 # Must match AppUserModelID in packaging/installer.iss, or a pinned taskbar
 # shortcut will not group with the running window.
 APP_MODEL_ID = "AIVideoStudio.Desktop.3"
@@ -237,6 +239,7 @@ def default_settings() -> dict:
         "padding": DEFAULT_PADDING,
         "music_enabled": False,
         "ask_save": True,
+        "welcome_seen": False,
         "music_path": "",
         "output_path": os.path.join(default_output_dir(), "final_video.mp4"),
         "aspect": "9:16",
@@ -279,6 +282,7 @@ def load_settings() -> dict:
     data["padding"] = padding if padding in PADDING_OPTIONS.values() else DEFAULT_PADDING
     data["music_enabled"] = bool(data["music_enabled"])
     data["ask_save"] = bool(data["ask_save"])
+    data["welcome_seen"] = bool(data["welcome_seen"])
     if data["music_path"] and not os.path.isfile(str(data["music_path"])):
         data["music_path"] = ""
 
@@ -503,6 +507,7 @@ GLYPHS = {
     "script": ("", "✎"),
     "music": ("\ue8d6", "\u266b"),
     "timer": ("\ue916", "\u23f1"),
+    "stop": ("\ue71a", "\u25a0"),
     "captions": ("\ue7f0", "CC"),
     "font_size": ("\ue8e9", "A"),
     "color": ("\ue790", "\u25cf"),
@@ -947,14 +952,331 @@ class Dialog(ctk.CTkToplevel):
                       text_color=ACCENT_TEXT,
                       command=self.destroy).pack(anchor="e", padx=18, pady=(0, 16))
 
-        self.update_idletasks()
-        x = app.winfo_rootx() + (app.winfo_width() - self.winfo_width()) // 2
-        y = app.winfo_rooty() + (app.winfo_height() - self.winfo_height()) // 3
-        self.geometry(f"+{max(x, 0)}+{max(y, 0)}")
+        centre_on(self, app)
+
+
+PEXELS_KEY_PAGE = "https://www.pexels.com/api/"
+
+
+class WelcomeDialog(ctk.CTkToplevel):
+    """First-run setup: the one thing a new user has to fetch is a Pexels key."""
+
+    def __init__(self, app):
+        super().__init__(app)
+        self.app = app
+        self.title(f"Welcome to {APP_NAME}")
+        self.resizable(False, False)
+        self.configure(fg_color=MAIN_BG)
+        self.transient(app)
+        self.protocol("WM_DELETE_WINDOW", self.skip)
+        self.var_key = tk.StringVar(value=app.var_api.get())
+
+        card = Card(self)
+        card.pack(fill="both", expand=True, padx=14, pady=14)
+
+        ctk.CTkLabel(card, text=f"Welcome to {APP_NAME}", font=app.font_title,
+                     text_color=TEXT, anchor="w").pack(fill="x", padx=20, pady=(18, 4))
+        ctk.CTkLabel(
+            card, font=app.font_body, text_color=TEXT_MUTED, justify="left",
+            wraplength=440, anchor="w",
+            text="The app finds stock footage for your script on Pexels. Pexels gives "
+                 "every user a free key for that. It takes about a minute and needs "
+                 "no payment details.",
+        ).pack(fill="x", padx=20, pady=(0, 14))
+
+        self._step(card, "1", "Get your free key")
+        ctk.CTkLabel(
+            card, font=app.font_tiny, text_color=TEXT_DIM, justify="left",
+            wraplength=410, anchor="w",
+            text="Sign up on the Pexels page, then copy the key shown under "
+                 "\"Your API key\".",
+        ).pack(fill="x", padx=(50, 20))
+        ctk.CTkButton(
+            card, text="Open pexels.com/api", width=180, height=32, corner_radius=4,
+            font=app.font_body, fg_color=FIELD_BG, hover_color=CARD_HOVER,
+            border_width=1, border_color=FIELD_BORDER, text_color=TEXT,
+            command=lambda: webbrowser.open(PEXELS_KEY_PAGE),
+        ).pack(anchor="w", padx=(50, 20), pady=(8, 16))
+
+        self._step(card, "2", "Paste it here")
+        row = ctk.CTkFrame(card, fg_color="transparent")
+        row.pack(fill="x", padx=(50, 20), pady=(6, 0))
+        self.entry = focus_accent(ctk.CTkEntry(
+            row, textvariable=self.var_key, width=300, height=32, corner_radius=4,
+            font=app.font_body, fg_color=FIELD_BG, border_color=FIELD_BORDER,
+            border_width=1, text_color=TEXT, placeholder_text="Your Pexels API key",
+        ))
+        self.entry.pack(side="left")
+        self.test_button = ctk.CTkButton(
+            row, text="Test key", width=92, height=32, corner_radius=4,
+            font=app.font_body, fg_color=FIELD_BG, hover_color=CARD_HOVER,
+            border_width=1, border_color=FIELD_BORDER, text_color=TEXT, command=self.test,
+        )
+        self.test_button.pack(side="left", padx=(6, 0))
+        self.result = ctk.CTkLabel(card, text="", font=app.font_tiny, text_color=TEXT_DIM,
+                                   anchor="w", justify="left", wraplength=410)
+        self.result.pack(fill="x", padx=(50, 20), pady=(6, 14))
+
+        buttons = ctk.CTkFrame(card, fg_color="transparent")
+        buttons.pack(fill="x", padx=20, pady=(0, 18))
+        ctk.CTkButton(
+            buttons, text="Save and continue", width=150, height=32, corner_radius=4,
+            font=app.font_body, fg_color=ACCENT, hover_color=ACCENT_HOVER,
+            text_color=ACCENT_TEXT, command=self.save,
+        ).pack(side="right")
+        ctk.CTkButton(
+            buttons, text="Skip for now", width=110, height=32, corner_radius=4,
+            font=app.font_body, fg_color=FIELD_BG, hover_color=CARD_HOVER,
+            border_width=1, border_color=FIELD_BORDER, text_color=TEXT, command=self.skip,
+        ).pack(side="right", padx=(0, 8))
+
+        centre_on(self, app)
+
+    def _step(self, card, number, title):
+        row = ctk.CTkFrame(card, fg_color="transparent")
+        row.pack(fill="x", padx=20)
+        ctk.CTkLabel(row, text=number, width=22, height=22, corner_radius=11,
+                     font=self.app.font_caption, fg_color=ACCENT,
+                     text_color=ACCENT_TEXT).pack(side="left", padx=(0, 8))
+        ctk.CTkLabel(row, text=title, font=self.app.font_bold, text_color=TEXT,
+                     anchor="w").pack(side="left")
+
+    def show_result(self, ok, message):
+        if self.winfo_exists():
+            self.test_button.configure(state="normal", text="Test key")
+            self.result.configure(text=message, text_color=OK_COLOR if ok else ERR_COLOR)
+
+    def test(self):
+        self.test_button.configure(state="disabled", text="Testing...")
+        self.result.configure(text="")
+        self.app.test_key("Pexels", self.var_key.get(), self.show_result)
+
+    def save(self):
+        key = self.var_key.get().strip()
+        if not key:
+            self.show_result(False, "Paste a key first, or choose Skip for now.")
+            return
+        self.app.welcome_seen = True
+        self.app.var_api.set(key)   # saves the settings through its trace
+        self.app.select_page("create")
+        self.destroy()
+
+    def skip(self):
+        self.app.welcome_seen = True
+        self.app._on_setting_changed()
+        self.destroy()
+
+
+class ResultDialog(ctk.CTkToplevel):
+    """Render complete: the video, playable in the window, with its sound.
+
+    Tk has no video widget, so vidgen.preview decodes small frames and this
+    window shows them on a timer while winsound plays the soundtrack. Play
+    and stop only - the default player is one button away for anything more.
+    """
+
+    def __init__(self, app, title, message, path):
+        super().__init__(app)
+        self.app = app
+        self.path = path
+        self.title(title)
+        self.resizable(False, False)
+        self.configure(fg_color=MAIN_BG)
+        self.transient(app)
+        self.protocol("WM_DELETE_WINDOW", self.close)
+        self.reader = None
+        self.job = None
+        self.wav = None
+        self.playing = False
+        self.poster_photo = None
+        self.photo = None
+
+        card = Card(self)
+        card.pack(fill="both", expand=True, padx=14, pady=14)
+
+        size = self._load_poster()
+        portrait = size is None or size[1] >= size[0]
+        info = ctk.CTkFrame(card, fg_color="transparent")
+        if size is not None:
+            # A plain Tk label: frames are raw pixels, already scaled for the display.
+            self.screen = tk.Label(card, image=self.poster_photo, bd=0, bg="#000000",
+                                   width=size[0], height=size[1])
+            if portrait:
+                self.screen.pack(side="left", padx=(16, 0), pady=16)
+                info.pack(side="left", fill="both", expand=True)
+            else:
+                self.screen.pack(padx=16, pady=(16, 0))
+                info.pack(fill="both", expand=True)
+        else:
+            info.pack(fill="both", expand=True)
+
+        header = ctk.CTkFrame(info, fg_color="transparent")
+        header.pack(fill="x", padx=18, pady=(16, 4))
+        ctk.CTkLabel(header, text=app.icon("status"), font=app.font_icon_lg,
+                     text_color=OK_COLOR).pack(side="left", padx=(0, 10))
+        ctk.CTkLabel(header, text=title, font=app.font_title,
+                     text_color=TEXT).pack(side="left")
+        ctk.CTkLabel(info, text=message, font=app.font_body, text_color=TEXT_MUTED,
+                     justify="left", wraplength=300 if portrait else 440,
+                     anchor="w").pack(fill="x", padx=18, pady=(2, 14))
+
+        def button(text, command, accent=False):
+            widget = ctk.CTkButton(
+                info, text=text, height=34, corner_radius=4, font=app.font_body,
+                fg_color=ACCENT if accent else FIELD_BG,
+                hover_color=ACCENT_HOVER if accent else CARD_HOVER,
+                text_color=ACCENT_TEXT if accent else TEXT,
+                border_width=0 if accent else 1, border_color=FIELD_BORDER, command=command,
+            )
+            widget.pack(fill="x", padx=18, pady=(0, 6))
+            return widget
+
+        self.play_button = None
+        if size is not None:
+            self.play_button = button(self._play_label(), self.toggle, accent=True)
+        button("Open in player", self.open_in_player)
+        button("Show in folder", self.show_in_folder)
+        button("Close", self.close).pack_configure(pady=(0, 16))
+
+        centre_on(self, app)
+
+    # -- picture ---------------------------------------------------------------
+    def _load_poster(self):
+        """Read the video's size and a still frame. None if it can't be previewed."""
         try:
-            self.grab_set()
-        except Exception:
-            pass
+            from PIL import ImageTk
+
+            width, height, self.length = preview.probe(self.path)
+            # Real pixels: follow the display scaling, but never outgrow the screen.
+            scale = min(ctk.ScalingTracker.get_widget_scaling(self.app),
+                        self.winfo_screenheight() * 0.6 / preview.PORTRAIT_BOX[1])
+            self.size = preview.preview_size((width, height), max(scale, 0.5))
+            image = preview.poster(self.path, self.size, at=min(1.0, self.length / 2))
+            self.poster_photo = ImageTk.PhotoImage(image, master=self)
+            return self.size
+        except Exception as exc:  # noqa: BLE001 - the video is saved either way
+            self.app.append_log(f"⚠️ Couldn't show the preview ({exc}).")
+            return None
+
+    def _play_label(self):
+        glyph = self.app.icon("stop" if self.playing else "play")
+        return f"{glyph}   {'Stop' if self.playing else 'Play'}"
+
+    # -- playback --------------------------------------------------------------
+    def toggle(self):
+        if self.playing:
+            self.stop()
+        else:
+            self.play()
+
+    def play(self):
+        self.stop()
+        try:
+            if self.wav is None and sys.platform == "win32":
+                os.makedirs(PREVIEW_DIR, exist_ok=True)
+                handle, wav = tempfile.mkstemp(suffix=".wav", prefix="result_", dir=PREVIEW_DIR)
+                os.close(handle)
+                try:
+                    self.wav = preview.extract_audio(self.path, wav)
+                except Exception:  # noqa: BLE001 - a silent video still plays
+                    os.remove(wav)
+            self.reader = preview.FrameReader(self.path, self.size)
+            first = self.reader.read()   # waits until ffmpeg is really decoding
+        except Exception as exc:  # noqa: BLE001
+            self.app.append_log(f"⚠️ Couldn't play the preview ({exc}).")
+            self.stop()
+            return
+        if first is None:
+            self.stop()
+            return
+        self.playing = True
+        self.play_button.configure(text=self._play_label())
+        self._show(first)
+        # Sound and clock start together, after the first frame is on screen.
+        if self.wav and sys.platform == "win32":
+            import winsound
+
+            winsound.PlaySound(self.wav, winsound.SND_FILENAME | winsound.SND_ASYNC
+                               | winsound.SND_NODEFAULT)
+        self.started = time.perf_counter()
+        self.job = self.after(10, self._tick)
+
+    def _tick(self):
+        self.job = None
+        if not self.playing:
+            return
+        wanted = int((time.perf_counter() - self.started) * preview.FPS)
+        if wanted >= self.reader.index:
+            # Skips frames when the window is behind, so picture follows sound.
+            frame = self.reader.skip_to(wanted)
+            if frame is None:
+                self.stop(silence=False)   # let the last moment of sound finish
+                return
+            self._show(frame)
+        self.job = self.after(10, self._tick)
+
+    def _show(self, frame):
+        from PIL import Image, ImageTk
+
+        self.photo = ImageTk.PhotoImage(Image.frombytes("RGB", self.size, frame), master=self)
+        self.screen.configure(image=self.photo)
+
+    def stop(self, silence=True):
+        self.playing = False
+        if self.job:
+            try:
+                self.after_cancel(self.job)
+            except Exception:
+                pass
+            self.job = None
+        if self.reader:
+            self.reader.close()
+            self.reader = None
+        if silence and sys.platform == "win32":
+            import winsound
+
+            winsound.PlaySound(None, winsound.SND_PURGE)
+        if self.winfo_exists() and self.play_button is not None:
+            self.play_button.configure(text=self._play_label())
+            self.screen.configure(image=self.poster_photo)
+
+    # -- buttons ---------------------------------------------------------------
+    def open_in_player(self):
+        self.stop()
+        try:
+            if sys.platform == "win32":
+                os.startfile(self.path)  # noqa: S606
+            else:
+                subprocess.Popen(["xdg-open", self.path])
+        except OSError as exc:
+            self.app.append_log(f"⚠️ Couldn't open the video ({exc}).")
+
+    def show_in_folder(self):
+        if sys.platform == "win32":
+            subprocess.Popen(["explorer", "/select,", os.path.normpath(self.path)])
+        else:
+            self.app._open_folder(os.path.dirname(self.path))
+
+    def close(self):
+        self.stop()
+        if self.wav:
+            try:
+                os.remove(self.wav)
+            except OSError:
+                pass
+        self.destroy()
+
+
+def centre_on(window, app):
+    """Place a dialog over the main window and make it modal."""
+    window.update_idletasks()
+    x = app.winfo_rootx() + (app.winfo_width() - window.winfo_width()) // 2
+    y = app.winfo_rooty() + (app.winfo_height() - window.winfo_height()) // 3
+    window.geometry(f"+{max(x, 0)}+{max(y, 0)}")
+    try:
+        window.grab_set()
+    except Exception:
+        pass
 
 
 # =============================================================================
@@ -991,6 +1313,7 @@ class App(ctk.CTk):
         self._refresh_job = None
         self.current_page = None
         self._page_anim = None
+        self._key_tests = {}   # token -> callback(ok, message)
 
         self._build_fonts()
         self._build_vars()
@@ -1042,6 +1365,7 @@ class App(ctk.CTk):
         self.var_padding = tk.StringVar(value=padding_label)
         self.var_music_enabled = tk.BooleanVar(value=s["music_enabled"])
         self.var_ask_save = tk.BooleanVar(value=s["ask_save"])
+        self.welcome_seen = s["welcome_seen"]
         self.var_captions = tk.BooleanVar(value=s["captions"])
         self.caption_vars = {key: tk.StringVar(value=s[key])
                              for key, _allowed, _default in CAPTION_SETTINGS}
@@ -1063,6 +1387,7 @@ class App(ctk.CTk):
             "padding": PADDING_OPTIONS.get(self.var_padding.get(), DEFAULT_PADDING),
             "music_enabled": bool(self.var_music_enabled.get()),
             "ask_save": bool(self.var_ask_save.get()),
+            "welcome_seen": self.welcome_seen,
             "music_path": self.music_path,
             "output_path": self.var_output.get().strip(),
             "aspect": self.var_aspect.get(),
@@ -1572,7 +1897,12 @@ class App(ctk.CTk):
                       height=32, corner_radius=4, font=self.font_body,
                       fg_color=FIELD_BG, hover_color=CARD_HOVER,
                       border_width=1, border_color=FIELD_BORDER, text_color=TEXT,
-                      command=self.open_settings_folder).pack(side="left")
+                      command=self.open_settings_folder).pack(side="left", padx=(0, 8))
+        ctk.CTkButton(bar, text=f"{self.icon('key')}  Setup guide",
+                      height=32, corner_radius=4, font=self.font_body,
+                      fg_color=FIELD_BG, hover_color=CARD_HOVER,
+                      border_width=1, border_color=FIELD_BORDER, text_color=TEXT,
+                      command=lambda: WelcomeDialog(self)).pack(side="left")
         return page
 
     def open_output_folder(self):
@@ -1601,12 +1931,12 @@ class App(ctk.CTk):
 
         self._caption(page, "STOCK FOOTAGE", next(rows), pady=(0, 6))
         self.api_entry = self._key_row(
-            page, next(rows), "Pexels API key",
+            page, next(rows), "Pexels", "Pexels API key",
             "Stored locally in settings.json - never in the code",
             self.var_api, "Paste your Pexels API key",
         )
         self.pixabay_entry = self._key_row(
-            page, next(rows), "Pixabay API key",
+            page, next(rows), "Pixabay", "Pixabay API key",
             "Optional - used when Pexels finds nothing",
             self.var_pixabay, "Paste your Pixabay API key",
         )
@@ -1742,12 +2072,12 @@ class App(ctk.CTk):
         ).pack(side="left")
         return page
 
-    def _key_row(self, page, row, title, subtitle, variable, placeholder):
-        """A masked API-key entry with a reveal button. Returns the entry."""
+    def _key_row(self, page, row, provider, title, subtitle, variable, placeholder):
+        """A masked API-key entry with reveal and test buttons. Returns the entry."""
         key_row = SettingRow(page, self, self.icon("key"), title, subtitle)
         key_row.grid(row=row, column=0, sticky="ew", pady=PAD // 2)
         entry = ctk.CTkEntry(
-            key_row.control, textvariable=variable, width=320, height=32,
+            key_row.control, textvariable=variable, width=260, height=32,
             corner_radius=4, font=self.font_body, fg_color=FIELD_BG,
             border_color=FIELD_BORDER, border_width=1, text_color=TEXT,
             placeholder_text=placeholder, show="•",
@@ -1759,7 +2089,38 @@ class App(ctk.CTk):
             border_width=1, border_color=FIELD_BORDER,
             text_color=TEXT_MUTED, command=lambda: self.toggle_key_visibility(entry),
         ).pack(side="left", padx=(6, 0))
+        test = ctk.CTkButton(
+            key_row.control, text="Test", width=64, height=32, corner_radius=4,
+            font=self.font_body, fg_color=FIELD_BG, hover_color=CARD_HOVER,
+            border_width=1, border_color=FIELD_BORDER, text_color=TEXT,
+        )
+        test.pack(side="left", padx=(6, 0))
+
+        def done(ok, message):
+            test.configure(state="normal", text="Works" if ok else "Failed",
+                           text_color=OK_COLOR if ok else ERR_COLOR)
+            self.append_log(f"{'✅' if ok else '⚠️'} {provider} key: {message}")
+
+        def run():
+            test.configure(state="disabled", text="...", text_color=TEXT)
+            self.test_key(provider, variable.get(), done)
+
+        test.configure(command=run)
         return entry
+
+    def test_key(self, provider, key, callback):
+        """Check a footage key off the UI thread; ``callback(ok, message)`` on it."""
+        token = object()
+        self._key_tests[token] = callback
+
+        def worker():
+            try:
+                ok, message = footage.check_key(provider, key)
+            except Exception as exc:  # noqa: BLE001 - reported in the window
+                ok, message = False, f"The test failed ({exc})."
+            self._queue.put(("keytest", {"token": token, "ok": ok, "message": message}))
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _segmented(self, parent, values, variable, width):
         FluentSegmented(parent, self, values, variable, width).pack(side="left")
@@ -1862,6 +2223,19 @@ class App(ctk.CTk):
                             "in Settings.")
         self.refresh_home()
         threading.Thread(target=self._warm_moviepy, daemon=True).start()
+        if not self._has_footage_key() and not self.welcome_seen:
+            self.after(300, lambda: WelcomeDialog(self))
+
+    def _has_footage_key(self) -> bool:
+        return bool(self.var_api.get().strip() or self.var_pixabay.get().strip())
+
+    def _needs_stock_footage(self) -> bool:
+        """Whether the script has a scene that isn't the user's own file."""
+        try:
+            scenes = parse_script(self.script_box.get("1.0", "end"))
+        except ScriptError:
+            return False   # let the render report the script problem itself
+        return any(not scene.is_local for scene in scenes)
 
     def _warm_moviepy(self):
         sweep_old_work_dirs()
@@ -1898,11 +2272,22 @@ class App(ctk.CTk):
                     self._set_busy(payload["on"])
                 elif kind == "preview":
                     self._preview_done(payload["path"], payload["error"])
+                elif kind == "keytest":
+                    callback = self._key_tests.pop(payload["token"], None)
+                    if callback:
+                        try:
+                            callback(payload["ok"], payload["message"])
+                        except tk.TclError:
+                            pass   # its window was closed meanwhile
                 elif kind == "finished":
                     self.last_render = "Success" if payload["ok"] else "Failed"
                     self.refresh_home()
-                    Dialog(self, payload["title"], payload["message"],
-                           ok=payload["ok"])
+                    path = payload.get("path")
+                    if payload["ok"] and path and os.path.isfile(path):
+                        ResultDialog(self, payload["title"], payload["message"], path)
+                    else:
+                        Dialog(self, payload["title"], payload["message"],
+                               ok=payload["ok"])
         except queue.Empty:
             pass
         finally:
@@ -1981,6 +2366,11 @@ class App(ctk.CTk):
     def start_render(self):
         if self.is_rendering:
             return
+        # No key yet: walk the user through getting one instead of failing.
+        if not self._has_footage_key() and self._needs_stock_footage():
+            WelcomeDialog(self)
+            return
+
         # Like a browser download: ask where this one goes, unless told not to.
         overwrite = False
         if self.var_ask_save.get():

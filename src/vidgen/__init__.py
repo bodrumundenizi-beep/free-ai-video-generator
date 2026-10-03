@@ -5,3 +5,8 @@ library, so the window can use them at startup and the tests can run without
 MoviePy or a display. ``motion`` and ``audio`` pull in MoviePy and are imported
 lazily by ``render``, which keeps the window appearing instantly.
 """
+
+from . import net
+
+# Before anything connects: see net.py for the 20-second stall this avoids.
+net.prefer_ipv4()

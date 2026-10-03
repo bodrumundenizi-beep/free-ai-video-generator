@@ -322,6 +322,35 @@ class FootageSearch:
             self.log(f"⚠️ {provider}: {reason}. Skipping it for the rest of this render.")
 
 
+def check_key(provider: str, key: str, session=None) -> tuple[bool, str]:
+    """Ask ``provider`` whether ``key`` is accepted: (ok, a sentence for the user).
+
+    One tiny search, never cached. A rate-limit reply still means the key is
+    known to the provider, so it counts as working.
+    """
+    key = (key or "").strip()
+    if not key:
+        return False, "Paste a key first."
+    if provider == "Pexels":
+        url, params, headers = PEXELS_URL, {"query": "nature", "per_page": 1}, {"Authorization": key}
+    elif provider == "Pixabay":
+        url, params, headers = PIXABAY_URL, {"key": key, "q": "nature", "per_page": 3}, {}
+    else:
+        raise ValueError(f"unknown provider: {provider}")
+    try:
+        response = (session or requests).get(url, params=params, headers=headers,
+                                             timeout=TIMEOUT)
+    except requests.RequestException:
+        return False, f"Couldn't reach {provider} - check your internet connection."
+    if response.status_code == 200:
+        return True, "Key works."
+    if response.status_code == 429:
+        return True, f"Key accepted, but {provider}'s rate limit is reached - try again later."
+    if response.status_code in (400, 401, 403):
+        return False, f"{provider} rejected this key - check it was copied in full."
+    return False, f"{provider} answered HTTP {response.status_code} - try again in a moment."
+
+
 def download(url: str, dest: str, session=None) -> str:
     """Stream ``url`` to ``dest``. Raises on HTTP errors or an empty body."""
     http = session or requests
