@@ -138,12 +138,12 @@ from vidgen.render import (  # noqa: E402
 from vidgen.script import ScriptError, count_scenes, parse_script  # noqa: E402
 from vidgen import voices  # noqa: E402
 from vidgen.render import TEMP_ROOT  # noqa: E402
-from vidgen import captions, footage, preview  # noqa: E402
+from vidgen import captions, footage, preview, updates  # noqa: E402
 from vidgen.voice import generate_voiceover  # noqa: E402
 
 
 APP_NAME = "AI Video Studio"
-APP_VERSION = "3.3.0"
+APP_VERSION = "3.4.0"
 # Must match AppUserModelID in packaging/installer.iss, or a pinned taskbar
 # shortcut will not group with the running window.
 APP_MODEL_ID = "AIVideoStudio.Desktop.3"
@@ -240,6 +240,7 @@ def default_settings() -> dict:
         "music_enabled": False,
         "ask_save": True,
         "welcome_seen": False,
+        "check_updates": True,
         "music_path": "",
         "output_path": os.path.join(default_output_dir(), "final_video.mp4"),
         "aspect": "9:16",
@@ -283,6 +284,7 @@ def load_settings() -> dict:
     data["music_enabled"] = bool(data["music_enabled"])
     data["ask_save"] = bool(data["ask_save"])
     data["welcome_seen"] = bool(data["welcome_seen"])
+    data["check_updates"] = bool(data["check_updates"])
     if data["music_path"] and not os.path.isfile(str(data["music_path"])):
         data["music_path"] = ""
 
@@ -1366,6 +1368,7 @@ class App(ctk.CTk):
         self.var_music_enabled = tk.BooleanVar(value=s["music_enabled"])
         self.var_ask_save = tk.BooleanVar(value=s["ask_save"])
         self.welcome_seen = s["welcome_seen"]
+        self.var_check_updates = tk.BooleanVar(value=s["check_updates"])
         self.var_captions = tk.BooleanVar(value=s["captions"])
         self.caption_vars = {key: tk.StringVar(value=s[key])
                              for key, _allowed, _default in CAPTION_SETTINGS}
@@ -1376,7 +1379,7 @@ class App(ctk.CTk):
         for var in (self.var_api, self.var_output, self.var_aspect,
                     self.var_resolution, self.var_voice, self.var_pixabay,
                     self.var_padding, self.var_music_enabled, self.var_captions,
-                    self.var_ask_save,
+                    self.var_ask_save, self.var_check_updates,
                     *self.caption_vars.values()):
             var.trace_add("write", self._on_setting_changed)
 
@@ -1388,6 +1391,7 @@ class App(ctk.CTk):
             "music_enabled": bool(self.var_music_enabled.get()),
             "ask_save": bool(self.var_ask_save.get()),
             "welcome_seen": self.welcome_seen,
+            "check_updates": bool(self.var_check_updates.get()),
             "music_path": self.music_path,
             "output_path": self.var_output.get().strip(),
             "aspect": self.var_aspect.get(),
@@ -1409,11 +1413,11 @@ class App(ctk.CTk):
     # -- shell ---------------------------------------------------------------
     def _build_shell(self):
         self.grid_columnconfigure(1, weight=1)
-        self.grid_rowconfigure(0, weight=1)
+        self.grid_rowconfigure(1, weight=1)   # row 0 is the update bar, when shown
 
         self.sidebar = ctk.CTkFrame(self, width=SIDEBAR_WIDTH, corner_radius=0,
                                     fg_color=SIDEBAR_BG)
-        self.sidebar.grid(row=0, column=0, sticky="nsw")
+        self.sidebar.grid(row=0, column=0, rowspan=2, sticky="nsw")
         # Children here are packed, so pack_propagate() is what stops them from
         # dictating the sidebar's width (grid_propagate would be a no-op).
         self.sidebar.pack_propagate(False)
@@ -1450,8 +1454,31 @@ class App(ctk.CTk):
             item.pack(fill="x", padx=6, pady=1)
             self.nav_items[key] = item
 
+        # Shown only when a newer release exists; see check_for_updates().
+        self.update_url = updates.RELEASES_PAGE
+        self.update_bar = Card(self)
+        self.update_bar.grid(row=0, column=1, sticky="ew", padx=EDGE, pady=(14, 0))
+        self.update_bar.grid_columnconfigure(1, weight=1)
+        ctk.CTkLabel(self.update_bar, text=self.icon("info"), font=self.font_icon,
+                     text_color=ACCENT).grid(row=0, column=0, padx=(16, 10), pady=10)
+        self.update_bar_label = ctk.CTkLabel(self.update_bar, text="", font=self.font_body,
+                                             text_color=TEXT, anchor="w")
+        self.update_bar_label.grid(row=0, column=1, sticky="w")
+        ctk.CTkButton(
+            self.update_bar, text="Download", width=96, height=30, corner_radius=4,
+            font=self.font_body, fg_color=ACCENT, hover_color=ACCENT_HOVER,
+            text_color=ACCENT_TEXT, command=self.open_update_page,
+        ).grid(row=0, column=2, padx=(8, 0))
+        ctk.CTkButton(
+            self.update_bar, text="Later", width=72, height=30, corner_radius=4,
+            font=self.font_body, fg_color=FIELD_BG, hover_color=CARD_HOVER,
+            border_width=1, border_color=FIELD_BORDER, text_color=TEXT,
+            command=self.update_bar.grid_remove,
+        ).grid(row=0, column=3, padx=(6, 12))
+        self.update_bar.grid_remove()
+
         self.content = ctk.CTkFrame(self, fg_color="transparent")
-        self.content.grid(row=0, column=1, sticky="nsew")
+        self.content.grid(row=1, column=1, sticky="nsew")
         self.content.grid_rowconfigure(0, weight=1)
         self.content.grid_columnconfigure(0, weight=1)
 
@@ -1863,7 +1890,19 @@ class App(ctk.CTk):
             card,
             text="Pexels & Pixabay stock footage · edge-tts neural voices · MoviePy render",
             font=self.font_body, text_color=TEXT_MUTED, anchor="w",
-        ).pack(anchor="w", padx=18, pady=(0, 16))
+        ).pack(anchor="w", padx=18, pady=(0, 10))
+        update_row = ctk.CTkFrame(card, fg_color="transparent")
+        update_row.pack(fill="x", padx=18, pady=(0, 16))
+        self.update_button = ctk.CTkButton(
+            update_row, text="Check for updates", width=140, height=30, corner_radius=4,
+            font=self.font_body, fg_color=FIELD_BG, hover_color=CARD_HOVER,
+            border_width=1, border_color=FIELD_BORDER, text_color=TEXT,
+            command=lambda: self.check_for_updates(manual=True),
+        )
+        self.update_button.pack(side="left")
+        self.update_status = ctk.CTkLabel(update_row, text="", font=self.font_body,
+                                          text_color=TEXT_MUTED, anchor="w")
+        self.update_status.pack(side="left", padx=(12, 0))
 
         self._caption(page, "SYSTEM", 2)
 
@@ -2064,11 +2103,22 @@ class App(ctk.CTk):
 
         glass_row = SettingRow(page, self, self.icon("glass"), "Window translucency",
                                "Mica / acrylic where supported, alpha elsewhere")
-        glass_row.grid(row=next(rows), column=0, sticky="ew", pady=(PAD // 2, PAD))
+        glass_row.grid(row=next(rows), column=0, sticky="ew", pady=PAD // 2)
         ctk.CTkSwitch(
             glass_row.control, text="", width=44, variable=self.var_translucent,
             onvalue=True, offvalue=False, progress_color=ACCENT,
             command=self.apply_effects,
+        ).pack(side="left")
+
+        self._caption(page, "UPDATES", next(rows))
+
+        updates_row = SettingRow(page, self, self.icon("info"), "Check for updates on startup",
+                                 "Asks GitHub for the latest version number. Nothing is "
+                                 "installed automatically")
+        updates_row.grid(row=next(rows), column=0, sticky="ew", pady=(PAD // 2, PAD))
+        ctk.CTkSwitch(
+            updates_row.control, text="", width=44, variable=self.var_check_updates,
+            onvalue=True, offvalue=False, progress_color=ACCENT,
         ).pack(side="left")
         return page
 
@@ -2225,6 +2275,50 @@ class App(ctk.CTk):
         threading.Thread(target=self._warm_moviepy, daemon=True).start()
         if not self._has_footage_key() and not self.welcome_seen:
             self.after(300, lambda: WelcomeDialog(self))
+        if self.var_check_updates.get():
+            self.check_for_updates()
+
+    # -- updates -------------------------------------------------------------
+    def check_for_updates(self, manual=False):
+        """Ask GitHub for the latest release, off the UI thread.
+
+        ``manual`` is the Check button: only then is a failed check mentioned.
+        """
+        if manual:
+            self.update_button.configure(state="disabled")
+            self.update_status.configure(text="Checking...", text_color=TEXT_MUTED)
+
+        def worker():
+            try:
+                found = updates.latest_release(APP_VERSION)
+            except Exception:  # noqa: BLE001 - an update check never interrupts
+                found = None
+            self._queue.put(("update", {"found": found, "manual": manual}))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _update_checked(self, found, manual):
+        self.update_button.configure(state="normal")
+        if found is None:
+            if manual:
+                self.update_status.configure(
+                    text="Couldn't check right now - try again later.", text_color=TEXT_MUTED)
+            return
+        tag, page = found
+        if updates.is_newer(tag, APP_VERSION):
+            version = tag.lstrip("vV")
+            self.update_url = page
+            self.update_bar_label.configure(
+                text=f"Version {version} is available. You have {APP_VERSION}.")
+            self.update_bar.grid()
+            self.update_status.configure(text=f"Version {version} is available.",
+                                         text_color=ACCENT)
+        else:
+            self.update_status.configure(text="You have the latest version.",
+                                         text_color=OK_COLOR)
+
+    def open_update_page(self):
+        webbrowser.open(self.update_url)
 
     def _has_footage_key(self) -> bool:
         return bool(self.var_api.get().strip() or self.var_pixabay.get().strip())
@@ -2272,6 +2366,8 @@ class App(ctk.CTk):
                     self._set_busy(payload["on"])
                 elif kind == "preview":
                     self._preview_done(payload["path"], payload["error"])
+                elif kind == "update":
+                    self._update_checked(payload["found"], payload["manual"])
                 elif kind == "keytest":
                     callback = self._key_tests.pop(payload["token"], None)
                     if callback:

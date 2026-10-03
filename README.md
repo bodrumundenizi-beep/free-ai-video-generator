@@ -32,6 +32,9 @@ Get the latest [release](../../releases/latest):
 | **`AIVideoStudio-x.y.z-portable.zip`** | No install. Unzip anywhere and run `AIVideoStudio.exe`. |
 
 **No Python, no pip, no separate FFmpeg install** — everything is in the download.
+
+**Updating:** the app tells you when a newer version is out and links to it. Run
+the new installer over the old one; your settings and API keys are kept.
 (Running from source still needs all three; see below.)
 
 ### Windows will warn you the first time
@@ -44,7 +47,7 @@ You can confirm you have the real file by checking its hash against
 `SHA256SUMS.txt` on the release page:
 
 ```powershell
-Get-FileHash .\AIVideoStudio-3.3.0-setup.exe -Algorithm SHA256
+Get-FileHash .\AIVideoStudio-3.4.0-setup.exe -Algorithm SHA256
 ```
 
 ## First run
@@ -254,7 +257,7 @@ pip install -r requirements.txt -r requirements-build.txt
 python -m pytest
 python packaging/make_icon.py
 pyinstaller --noconfirm --clean packaging/ai_video_studio.spec
-"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion=3.3.0 packaging\installer.iss
+"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion=3.4.0 packaging\installer.iss
 ```
 
 Releases are built automatically by GitHub Actions when a `v*` tag is pushed.
@@ -279,8 +282,10 @@ project is established enough to qualify for an open-source signing programme.
 This program does not collect or send any personal data. It connects to other
 systems only to do what you ask of it: Pexels and Pixabay to search for and
 download stock footage (using your own API keys), and Microsoft Edge's online
-text-to-speech to generate the voiceover from your script text. Settings and API
-keys stay on your computer.
+text-to-speech to generate the voiceover from your script text. On startup it
+also asks GitHub for this project's latest version number, to tell you about
+updates; that request contains nothing about you, and you can turn it off under
+**Settings → Updates**. Settings and API keys stay on your computer.
 
 ## Licence
 
