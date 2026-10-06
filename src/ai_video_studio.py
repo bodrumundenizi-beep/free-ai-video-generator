@@ -138,12 +138,12 @@ from vidgen.render import (  # noqa: E402
 from vidgen.script import ScriptError, count_scenes, parse_script  # noqa: E402
 from vidgen import voices  # noqa: E402
 from vidgen.render import TEMP_ROOT  # noqa: E402
-from vidgen import captions, footage, preview, updates  # noqa: E402
+from vidgen import captions, footage, paths, preview, updates  # noqa: E402
 from vidgen.voice import generate_voiceover  # noqa: E402
 
 
 APP_NAME = "AI Video Studio"
-APP_VERSION = "3.4.0"
+APP_VERSION = "3.4.1"
 # Must match AppUserModelID in packaging/installer.iss, or a pinned taskbar
 # shortcut will not group with the running window.
 APP_MODEL_ID = "AIVideoStudio.Desktop.3"
@@ -159,34 +159,15 @@ SETTINGS_DIR = os.path.join(
 SETTINGS_FILE = os.path.join(SETTINGS_DIR, "settings.json")
 
 
-def _known_folder(csidl: int, fallback: str) -> str:
-    """A shell folder, honouring a OneDrive redirect, with a home-dir fallback.
-
-    SHGetFolderPathW is superseded by SHGetKnownFolderPath, but it is still
-    present on Windows 11, it follows folder redirection, and it needs no GUID
-    struct - which makes it the cheapest correct option here.
-    """
-    if sys.platform == "win32":
-        try:
-            buffer = ctypes.create_unicode_buffer(260)
-            # SHGFP_TYPE_CURRENT = 0
-            if ctypes.windll.shell32.SHGetFolderPathW(None, csidl, None, 0, buffer) == 0:
-                if buffer.value and os.path.isdir(buffer.value):
-                    return buffer.value
-        except Exception:
-            pass
-    guess = os.path.join(os.path.expanduser("~"), fallback)
-    return guess if os.path.isdir(guess) else os.path.expanduser("~")
-
-
 def default_output_dir() -> str:
     """The user's Videos folder."""
-    return _known_folder(14, "Videos")  # CSIDL_MYVIDEO
+    return paths.known_folder(paths.CSIDL_VIDEOS, "Videos")
 
 
 # Tracks dropped in here appear in Settings > Background music. Documents rather
 # than %APPDATA%, because people need to be able to find it.
-MUSIC_DIR = os.path.join(_known_folder(5, "Documents"), "AI Video Studio", "Music")
+MUSIC_DIR = os.path.join(paths.known_folder(paths.CSIDL_DOCUMENTS, "Documents"),
+                         "AI Video Studio", "Music")
 MUSIC_EXTS = (".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac")
 SEARCH_CACHE_DIR = os.path.join(SETTINGS_DIR, "cache", "search")
 PADDING_OPTIONS = {"0s": 0.0, "0.25s": 0.25, "0.5s": 0.5, "1s": 1.0}
@@ -301,11 +282,11 @@ def load_settings() -> dict:
     if data["theme"] not in ("dark", "light"):
         data["theme"] = "dark"
 
-    # Repair a path saved by an older build, or one that pointed at a folder the
-    # installed app cannot write to.
-    out_dir = os.path.dirname(str(data.get("output_path") or ""))
-    if not out_dir or not os.path.isdir(out_dir) or not os.access(out_dir, os.W_OK):
-        data["output_path"] = os.path.join(default_output_dir(), "final_video.mp4")
+    # A saved folder that is gone - another PC's profile, a removed drive - is
+    # replaced now. Whether a folder that exists also takes files is tested
+    # when rendering (see vidgen.paths), not here on every launch.
+    data["output_path"] = paths.repair_output_path(data.get("output_path"),
+                                                   default_output_dir())
     return data
 
 
@@ -957,11 +938,31 @@ class Dialog(ctk.CTkToplevel):
         centre_on(self, app)
 
 
-PEXELS_KEY_PAGE = "https://www.pexels.com/api/"
+# The two footage services, for the Welcome window. ``setting`` is the App
+# variable the key is stored in.
+KEY_PROVIDERS = {
+    "Pixabay": {
+        "page": "https://pixabay.com/api/docs/",
+        "button": "Open pixabay.com/api/docs",
+        "hint": "Sign up or log in on the Pixabay page. Your key is then shown on that "
+                "page, next to \"key (required)\".",
+        "setting": "var_pixabay",
+    },
+    "Pexels": {
+        "page": "https://www.pexels.com/api/",
+        "button": "Open pexels.com/api",
+        "hint": "Sign up on the Pexels page, then copy the key shown under "
+                "\"Your API key\".",
+        "setting": "var_api",
+    },
+}
 
 
 class WelcomeDialog(ctk.CTkToplevel):
-    """First-run setup: the one thing a new user has to fetch is a Pexels key."""
+    """First-run setup: the one thing a new user has to fetch is a footage key.
+
+    Either service will do, so the window offers both and starts on Pixabay.
+    """
 
     def __init__(self, app):
         super().__init__(app)
@@ -971,7 +972,11 @@ class WelcomeDialog(ctk.CTkToplevel):
         self.configure(fg_color=MAIN_BG)
         self.transient(app)
         self.protocol("WM_DELETE_WINDOW", self.skip)
-        self.var_key = tk.StringVar(value=app.var_api.get())
+        # One box per service, so switching doesn't lose what was typed.
+        self.keys = {name: tk.StringVar(value=getattr(app, info["setting"]).get())
+                     for name, info in KEY_PROVIDERS.items()}
+        only_pexels = self.keys["Pexels"].get().strip() and not self.keys["Pixabay"].get().strip()
+        self.var_provider = tk.StringVar(value="Pexels" if only_pexels else "Pixabay")
 
         card = Card(self)
         card.pack(fill="both", expand=True, padx=14, pady=14)
@@ -981,32 +986,32 @@ class WelcomeDialog(ctk.CTkToplevel):
         ctk.CTkLabel(
             card, font=app.font_body, text_color=TEXT_MUTED, justify="left",
             wraplength=440, anchor="w",
-            text="The app finds stock footage for your script on Pexels. Pexels gives "
-                 "every user a free key for that. It takes about a minute and needs "
-                 "no payment details.",
-        ).pack(fill="x", padx=20, pady=(0, 14))
+            text="The app finds stock footage for your script on Pixabay or Pexels. "
+                 "Each gives every user a free key for that, with no payment details. "
+                 "One key is enough - pick either.",
+        ).pack(fill="x", padx=20, pady=(0, 12))
+        FluentSegmented(card, app, list(KEY_PROVIDERS), self.var_provider, 220).pack(
+            anchor="w", padx=20, pady=(0, 16))
 
         self._step(card, "1", "Get your free key")
-        ctk.CTkLabel(
-            card, font=app.font_tiny, text_color=TEXT_DIM, justify="left",
-            wraplength=410, anchor="w",
-            text="Sign up on the Pexels page, then copy the key shown under "
-                 "\"Your API key\".",
-        ).pack(fill="x", padx=(50, 20))
-        ctk.CTkButton(
-            card, text="Open pexels.com/api", width=180, height=32, corner_radius=4,
+        self.hint = ctk.CTkLabel(card, font=app.font_tiny, text_color=TEXT_DIM,
+                                 justify="left", wraplength=410, anchor="w", height=30)
+        self.hint.pack(fill="x", padx=(50, 20))
+        self.open_button = ctk.CTkButton(
+            card, width=210, height=32, corner_radius=4,
             font=app.font_body, fg_color=FIELD_BG, hover_color=CARD_HOVER,
             border_width=1, border_color=FIELD_BORDER, text_color=TEXT,
-            command=lambda: webbrowser.open(PEXELS_KEY_PAGE),
-        ).pack(anchor="w", padx=(50, 20), pady=(8, 16))
+            command=lambda: webbrowser.open(KEY_PROVIDERS[self.var_provider.get()]["page"]),
+        )
+        self.open_button.pack(anchor="w", padx=(50, 20), pady=(8, 16))
 
         self._step(card, "2", "Paste it here")
         row = ctk.CTkFrame(card, fg_color="transparent")
         row.pack(fill="x", padx=(50, 20), pady=(6, 0))
         self.entry = focus_accent(ctk.CTkEntry(
-            row, textvariable=self.var_key, width=300, height=32, corner_radius=4,
+            row, width=300, height=32, corner_radius=4,
             font=app.font_body, fg_color=FIELD_BG, border_color=FIELD_BORDER,
-            border_width=1, text_color=TEXT, placeholder_text="Your Pexels API key",
+            border_width=1, text_color=TEXT,
         ))
         self.entry.pack(side="left")
         self.test_button = ctk.CTkButton(
@@ -1032,7 +1037,20 @@ class WelcomeDialog(ctk.CTkToplevel):
             border_width=1, border_color=FIELD_BORDER, text_color=TEXT, command=self.skip,
         ).pack(side="right", padx=(0, 8))
 
+        self._trace = self.var_provider.trace_add("write", self._show_provider)
+        self._show_provider()
         centre_on(self, app)
+
+    def _show_provider(self, *_args):
+        """Point step 1 and the key box at the chosen service."""
+        if not self.winfo_exists():
+            return
+        name = self.var_provider.get()
+        info = KEY_PROVIDERS[name]
+        self.hint.configure(text=info["hint"])
+        self.open_button.configure(text=info["button"])
+        self.entry.configure(textvariable=self.keys[name])
+        self.result.configure(text="")
 
     def _step(self, card, number, title):
         row = ctk.CTkFrame(card, fg_color="transparent")
@@ -1051,15 +1069,18 @@ class WelcomeDialog(ctk.CTkToplevel):
     def test(self):
         self.test_button.configure(state="disabled", text="Testing...")
         self.result.configure(text="")
-        self.app.test_key("Pexels", self.var_key.get(), self.show_result)
+        name = self.var_provider.get()
+        self.app.test_key(name, self.keys[name].get(), self.show_result)
 
     def save(self):
-        key = self.var_key.get().strip()
+        name = self.var_provider.get()
+        key = self.keys[name].get().strip()
         if not key:
             self.show_result(False, "Paste a key first, or choose Skip for now.")
             return
         self.app.welcome_seen = True
-        self.app.var_api.set(key)   # saves the settings through its trace
+        # Saves the settings through the variable's trace.
+        getattr(self.app, KEY_PROVIDERS[name]["setting"]).set(key)
         self.app.select_page("create")
         self.destroy()
 
@@ -1619,7 +1640,7 @@ class App(ctk.CTk):
         self.tile_size.grid(row=3, column=2, sticky="ew",
                             padx=PAD // 2, pady=(PAD, PAD // 2))
 
-        self.tile_key = Tile(page, self, self.icon("key"), "Pexels key", "Missing")
+        self.tile_key = Tile(page, self, self.icon("key"), "Footage key", "Missing")
         self.tile_key.grid(row=3, column=3, sticky="ew",
                            padx=(PAD // 2, 0), pady=(PAD, PAD // 2))
         return page
@@ -1656,7 +1677,7 @@ class App(ctk.CTk):
 
         self.tile_size.set_value(f"{w}x{h}")
         self.tile_size.set_corner(quality)
-        has_key = bool(self.var_api.get().strip())
+        has_key = self._has_footage_key()   # Pexels or Pixabay: either is enough
         self.tile_key.set_value("Set" if has_key else "Missing",
                                 OK_COLOR if has_key else ERR_COLOR)
 
@@ -1949,8 +1970,16 @@ class App(ctk.CTk):
         self._open_folder(target)
 
     def open_settings_folder(self):
-        os.makedirs(SETTINGS_DIR, exist_ok=True)
-        self._open_folder(SETTINGS_DIR)
+        self._open_made_folder(SETTINGS_DIR)
+
+    def _open_made_folder(self, folder):
+        """Open ``folder`` in Explorer, creating it first; say so if it can't be."""
+        try:
+            os.makedirs(folder, exist_ok=True)
+        except OSError as exc:
+            self.append_log(f"⚠️ Couldn't create {folder} ({exc.strerror or exc}).")
+            return
+        self._open_folder(folder)
 
     @staticmethod
     def _open_folder(path):
@@ -1971,12 +2000,12 @@ class App(ctk.CTk):
         self._caption(page, "STOCK FOOTAGE", next(rows), pady=(0, 6))
         self.api_entry = self._key_row(
             page, next(rows), "Pexels", "Pexels API key",
-            "Stored locally in settings.json - never in the code",
+            "One footage key is enough. Stored locally in settings.json",
             self.var_api, "Paste your Pexels API key",
         )
         self.pixabay_entry = self._key_row(
             page, next(rows), "Pixabay", "Pixabay API key",
-            "Optional - used when Pexels finds nothing",
+            "Works on its own, or as a backup when Pexels finds nothing",
             self.var_pixabay, "Paste your Pixabay API key",
         )
 
@@ -2223,18 +2252,45 @@ class App(ctk.CTk):
             self._refresh_tracks()
 
     def open_music_folder(self):
-        os.makedirs(MUSIC_DIR, exist_ok=True)
-        self._open_folder(MUSIC_DIR)
+        self._open_made_folder(MUSIC_DIR)
 
     def _save_dialog(self, suggested, title):
-        """The Windows Save window, opened on ``suggested``. '' if cancelled."""
-        chosen = filedialog.asksaveasfilename(
-            parent=self, title=title, defaultextension=".mp4",
-            filetypes=[("MP4 Video", "*.mp4"), ("All Files", "*.*")],
-            initialdir=os.path.dirname(suggested) or default_output_dir(),
-            initialfile=os.path.basename(suggested) or "final_video.mp4",
-        )
-        return os.path.normpath(chosen) if chosen else ""
+        """The Windows Save window, opened on ``suggested``. '' if cancelled.
+
+        It opens in a folder that exists and takes files - Windows' own Save
+        window answers "file not found" in a protected one - and it never
+        hands back a path into a folder that isn't there.
+        """
+        suggested = suggested or os.path.join(default_output_dir(), "final_video.mp4")
+        folder = os.path.dirname(os.path.abspath(suggested))
+        name = os.path.basename(suggested) or "final_video.mp4"
+        try:
+            usable, moved = paths.usable_output(os.path.join(folder, name), paths.safe_folders())
+        except paths.SaveError as exc:
+            Dialog(self, "Can't save here", str(exc), ok=False)
+            return ""
+        if moved:
+            self.append_log(f"⚠️ Couldn't save to {folder} - using "
+                            f"{os.path.dirname(usable)} instead.")
+            usable = next_free_path(usable)
+        try:
+            chosen = filedialog.asksaveasfilename(
+                parent=self, title=title, defaultextension=".mp4",
+                filetypes=[("MP4 Video", "*.mp4"), ("All Files", "*.*")],
+                initialdir=paths.existing_dir(os.path.dirname(usable), default_output_dir()),
+                initialfile=os.path.basename(usable),
+            )
+        except tk.TclError as exc:
+            self.append_log(f"⚠️ The Save window couldn't open ({exc}).")
+            return ""
+        if not chosen:
+            return ""
+        chosen = os.path.normpath(chosen)
+        if not paths.is_writable(os.path.dirname(chosen)):
+            Dialog(self, "Can't save here",
+                   paths.cannot_save_message(os.path.dirname(chosen)), ok=False)
+            return ""
+        return chosen
 
     def choose_save_location(self):
         chosen = self._save_dialog(self.var_output.get().strip(), "Default save location")

@@ -11,7 +11,7 @@ Order of work, cheapest check first so mistakes surface before any download:
     4. timeline    - where every shot sits, with crossfades centred on cuts
     5. pictures    - framed, zoomed, faded, composited, captions on top
     6. soundtrack  - voices at their scene starts, music ducked beneath them
-    7. encode
+    7. encode      - into the temp folder, then moved into place (see paths.py)
 """
 
 from __future__ import annotations
@@ -22,8 +22,9 @@ import tempfile
 import time
 from dataclasses import dataclass, field
 
-from . import footage
+from . import footage, paths
 from .formats import resolve_target
+from .paths import next_free_path  # noqa: F401 - re-exported for the window and tests
 from .script import parse_script
 from .timeline import boundaries, shot_spans
 from .voice import generate_voiceover_timed
@@ -58,21 +59,6 @@ def sweep_old_work_dirs(max_age_hours: int = 24) -> None:
                 shutil.rmtree(path, ignore_errors=True)
         except OSError:
             pass
-
-
-def next_free_path(path: str) -> str:
-    """``path`` if nothing is there yet, else the first free "name (2).ext", "name (3).ext"...
-
-    The way Windows and browsers number downloads, so a new render never
-    replaces an earlier video.
-    """
-    if not os.path.exists(path):
-        return path
-    stem, ext = os.path.splitext(path)
-    number = 2
-    while os.path.exists(f"{stem} ({number}){ext}"):
-        number += 1
-    return f"{stem} ({number}){ext}"
 
 
 class UiBridge:
@@ -152,6 +138,19 @@ def _as_float(value, default):
         return default
 
 
+class RenderError(Exception):
+    """A failure with a plain message for the user and the raw cause for the Log."""
+
+    def __init__(self, message: str, detail: str = ""):
+        super().__init__(message)
+        self.detail = detail
+
+
+def _one_line(error, limit: int = 600) -> str:
+    text = " ".join(str(error).split())
+    return text if len(text) <= limit else text[:limit - 3] + "..."
+
+
 def render_worker(cfg: dict, ui: UiBridge):
     """Render ``cfg["script"]`` to ``cfg["output_path"]``, reporting through ``ui``."""
     # Allocated before the try so the finally can always clean it up.
@@ -159,10 +158,14 @@ def render_worker(cfg: dict, ui: UiBridge):
     job = _Render()
     try:
         _render(cfg, ui, work_dir, job)
-    except Exception as e:  # noqa: BLE001 - surfaced to the user verbatim
+    except Exception as e:  # noqa: BLE001 - surfaced to the user
         ui.spinner(False)
         ui.progress(0.0)
         ui.log(f"❌ ERROR: {str(e)}")
+        detail = getattr(e, "detail", "")
+        if detail:
+            # The raw tool output helps a bug report; it doesn't belong in the popup.
+            ui.log(f"🎞️ Technical details: {detail}")
         ui.finished(False, "Render failed", str(e))
     finally:
         # Close before deleting: an open reader would keep its file locked.
@@ -191,14 +194,23 @@ def _render(cfg, ui, work_dir, job):
         ui.log(f"⚠️ {warning}")
 
     save_path = os.path.abspath(save_path)
-    if not cfg.get("overwrite"):
+    # Relative local: files are looked up beside where the user asked to save,
+    # even if the video itself ends up somewhere else.
+    out_dir = os.path.dirname(save_path)
+
+    # Find out now, not after ten minutes of rendering, whether the folder
+    # takes files. Raises a plain SaveError if nowhere does.
+    fallbacks = paths.safe_folders()
+    usable, moved = paths.usable_output(save_path, fallbacks)
+    if moved:
+        ui.log(f"⚠️ Couldn't save to {out_dir} - using {os.path.dirname(usable)} instead.")
+        save_path = usable
+    if moved or not cfg.get("overwrite"):
         free_path = next_free_path(save_path)
         if free_path != save_path:
             ui.log(f"💾 {os.path.basename(save_path)} already exists - saving as "
                    f"{os.path.basename(free_path)}")
             save_path = free_path
-    out_dir = os.path.dirname(save_path)
-    os.makedirs(out_dir, exist_ok=True)
 
     plans = [_ScenePlan(scene) for scene in scenes]
     for plan in plans:
@@ -216,7 +228,7 @@ def _render(cfg, ui, work_dir, job):
     needs_stock = [p.scene for p in plans if not p.scene.is_local]
     if needs_stock and not search.providers:
         raise Exception(
-            "API Key cannot be blank. Add a Pexels or Pixabay API key in Settings "
+            "Add a stock footage key (Pexels or Pixabay) in Settings "
             f"- the scene at line {needs_stock[0].line} needs stock footage."
         )
 
@@ -356,28 +368,24 @@ def _render(cfg, ui, work_dir, job):
     # 7. Encode.
     ui.status("Encoding final video...")
     ui.spinner(True)
-    video.write_videofile(
-        save_path,
-        codec="libx264",
-        audio_codec="aac",
-        audio=soundtrack is not None,
-        audio_fps=44100,
-        fps=30,
-        preset="fast",
-        bitrate=bitrate,
-        # Without this MoviePy drops TEMP_MPY_wvf_snd.mp3 beside the output.
-        temp_audiofile_path=work_dir,
-        # logger defaults to "bar", whose tqdm writes to sys.stderr - which is
-        # None in a windowed build, killing the render here.  The UI already
-        # shows an indeterminate spinner for this phase.
-        logger=None,
-    )
+    # Encoded here, in the temp folder, then moved: ffmpeg is a separate
+    # program, and folder protection may refuse it where it allows this app.
+    encoded = os.path.join(work_dir, "output.mp4")
+    try:
+        _encode(video, encoded, soundtrack is not None, bitrate, work_dir)
+    except Exception as exc:  # noqa: BLE001
+        raise RenderError("Couldn't encode the video. The Log has the technical details.",
+                          _one_line(exc)) from exc
+    save_path = paths.deliver(encoded, save_path, fallbacks, ui.log)
     ui.spinner(False)
     ui.progress(0.95)
 
     if credits:
-        credits_path = footage.write_credits(save_path, credits, providers_used)
-        ui.log(f"🎞️ Footage credits saved to {os.path.basename(credits_path)}")
+        try:
+            credits_path = footage.write_credits(save_path, credits, providers_used)
+            ui.log(f"🎞️ Footage credits saved to {os.path.basename(credits_path)}")
+        except OSError as exc:
+            ui.log(f"⚠️ Couldn't save the footage credits file ({exc}).")
 
     if cues:
         try:
@@ -394,6 +402,25 @@ def _render(cfg, ui, work_dir, job):
         "Render complete",
         f"{target_w}x{target_h} video rendered successfully.\n\nSaved at:\n{save_path}",
         path=save_path,
+    )
+
+
+def _encode(video, path, with_audio, bitrate, work_dir):
+    video.write_videofile(
+        path,
+        codec="libx264",
+        audio_codec="aac",
+        audio=with_audio,
+        audio_fps=44100,
+        fps=30,
+        preset="fast",
+        bitrate=bitrate,
+        # Without this MoviePy drops TEMP_MPY_wvf_snd.mp3 beside the output.
+        temp_audiofile_path=work_dir,
+        # logger defaults to "bar", whose tqdm writes to sys.stderr - which is
+        # None in a windowed build, killing the render here.  The UI already
+        # shows an indeterminate spinner for this phase.
+        logger=None,
     )
 
 

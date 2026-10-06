@@ -47,21 +47,22 @@ You can confirm you have the real file by checking its hash against
 `SHA256SUMS.txt` on the release page:
 
 ```powershell
-Get-FileHash .\AIVideoStudio-3.4.0-setup.exe -Algorithm SHA256
+Get-FileHash .\AIVideoStudio-3.4.1-setup.exe -Algorithm SHA256
 ```
 
 ## First run
 
-The app needs a **free Pexels API key** to find stock footage. The first time
-you open it, a **Welcome** window walks you through it: open
-[pexels.com/api](https://www.pexels.com/api/), copy your key, paste it in, and
-press **Test key** to check it works. You can reopen the window later from
-**Feedback → Setup guide**, or paste the key into **Settings → Pexels API key**.
+The app needs **one free stock footage key**, from either
+[Pixabay](https://pixabay.com/api/docs/) or [Pexels](https://www.pexels.com/api/).
+Neither is required: one of the two is enough. The first time you open the app,
+a **Welcome** window walks you through it: choose Pixabay or Pexels, open its
+page, copy your key, paste it in, and press **Test key** to check it works. You
+can reopen the window later from **Feedback → Setup guide**, or paste a key into
+**Settings**.
 
-A **Pixabay key** is optional: when Pexels has nothing good for a search, the app
-tries Pixabay too. Get one at [pixabay.com/api/docs](https://pixabay.com/api/docs/)
-and paste it into **Settings → Pixabay API key**. Scripts that only use your own
-files (see `local:` below) need no key at all.
+With both keys set, the app searches Pexels first and falls back to Pixabay when
+Pexels has nothing good. Scripts that only use your own files (see `local:`
+below) need no key at all.
 
 Keys are stored in plain text in `%APPDATA%\AIVideoStudio\settings.json`.
 
@@ -199,6 +200,18 @@ Output size follows both settings: 9:16 at 1080p is 1080×1920, 16:9 at 720p is
 | Search cache | `%APPDATA%\AIVideoStudio\cache`, kept for 24 hours (Pixabay's terms require it) |
 | Temporary clips | `%TEMP%\AIVideoStudio`, deleted after each render |
 
+## If the video can't be saved
+
+If the folder you chose refuses the file, the app does not lose the render. It
+saves the video to your Videos folder, then Desktop, then Downloads, then a temp
+folder, and the Log says which one it used.
+
+The usual cause on school and work PCs is Windows **Controlled folder access**
+(ransomware protection), which blocks unknown programs from writing to Videos,
+Documents and Desktop, and makes Save windows answer "file not found". Saving to
+Downloads or another folder works, or an administrator can allow the app under
+**Windows Security → Virus & threat protection → Ransomware protection**.
+
 ## Needs an internet connection
 
 Stock footage (Pexels, Pixabay) and the voiceover (Microsoft Edge's online
@@ -257,7 +270,7 @@ pip install -r requirements.txt -r requirements-build.txt
 python -m pytest
 python packaging/make_icon.py
 pyinstaller --noconfirm --clean packaging/ai_video_studio.spec
-"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion=3.4.0 packaging\installer.iss
+"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion=3.4.1 packaging\installer.iss
 ```
 
 Releases are built automatically by GitHub Actions when a `v*` tag is pushed.

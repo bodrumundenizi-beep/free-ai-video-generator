@@ -125,8 +125,12 @@ class SearchCache:
         self.folder = folder
         self.ttl = ttl
         if folder:
-            os.makedirs(folder, exist_ok=True)
-            self._prune()
+            try:
+                os.makedirs(folder, exist_ok=True)
+            except OSError:
+                self.folder = None   # search still works, just uncached
+            else:
+                self._prune()
 
     def _path(self, provider: str, params: dict) -> str:
         public = {k: v for k, v in sorted(params.items()) if k != "key"}
