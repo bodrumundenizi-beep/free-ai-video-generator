@@ -245,6 +245,7 @@ def _render(cfg, ui, work_dir, job):
     total_scenes = len(plans)
 
     # 2. Voiceovers. Each one decides its scene's length.
+    clock = [time.perf_counter()]   # a mark at the start of each timed phase
     for i, plan in enumerate(plans):
         scene = plan.scene
         ui.log(f"🎬 Scene {i + 1} of {total_scenes}")
@@ -281,6 +282,7 @@ def _render(cfg, ui, work_dir, job):
         ui.progress(0.35 * (i + 1) / total_scenes)
 
     # 3. Footage.
+    clock.append(time.perf_counter())
     credits, providers_used = [], set()
     for i, plan in enumerate(plans):
         if plan.scene.is_local:
@@ -290,6 +292,7 @@ def _render(cfg, ui, work_dir, job):
         ui.progress(0.35 + 0.4 * (i + 1) / total_scenes)
 
     # 4. Timeline.
+    clock.append(time.perf_counter())
     durations = [p.duration for p in plans]
     starts = boundaries(durations)
     total = starts[-1]
@@ -366,6 +369,7 @@ def _render(cfg, ui, work_dir, job):
         video = video.with_audio(job.keep(soundtrack))
 
     # 7. Encode.
+    clock.append(time.perf_counter())
     ui.status("Encoding final video...")
     ui.spinner(True)
     # Encoded here, in the temp folder, then moved: ffmpeg is a separate
@@ -394,6 +398,10 @@ def _render(cfg, ui, work_dir, job):
         except OSError as exc:
             ui.log(f"⚠️ Couldn't save the subtitle file ({exc}).")
 
+    done = time.perf_counter()
+    # Where the time went: the first thing asked when a render "feels slow".
+    ui.log(f"⏱️ Voices {clock[1] - clock[0]:.1f} s · footage {clock[2] - clock[1]:.1f} s · "
+           f"encode {done - clock[3]:.1f} s · total {done - clock[0]:.1f} s")
     ui.log("🧹 Releasing memory and deleting temp files...")
     ui.progress(1.0)
     ui.log(f"✅ DONE! {target_w}x{target_h} video saved to:\n{save_path}")

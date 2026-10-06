@@ -47,7 +47,7 @@ You can confirm you have the real file by checking its hash against
 `SHA256SUMS.txt` on the release page:
 
 ```powershell
-Get-FileHash .\AIVideoStudio-3.4.1-setup.exe -Algorithm SHA256
+Get-FileHash .\AIVideoStudio-3.5.0-setup.exe -Algorithm SHA256
 ```
 
 ## First run
@@ -197,6 +197,7 @@ Output size follows both settings: 9:16 at 1080p is 1080×1920, 16:9 at 720p is
 | Footage credits | `<video name>.credits.txt`, next to the video |
 | Subtitles | `<video name>.srt`, next to the video (when captions are on) |
 | Your music | `Documents\AI Video Studio\Music` |
+| Log file | `%APPDATA%\AIVideoStudio\logs\app.log`. It stays on your PC |
 | Search cache | `%APPDATA%\AIVideoStudio\cache`, kept for 24 hours (Pixabay's terms require it) |
 | Temporary clips | `%TEMP%\AIVideoStudio`, deleted after each render |
 
@@ -211,6 +212,18 @@ The usual cause on school and work PCs is Windows **Controlled folder access**
 Documents and Desktop, and makes Save windows answer "file not found". Saving to
 Downloads or another folder works, or an administrator can allow the app under
 **Windows Security → Virus & threat protection → Ransomware protection**.
+
+## Reporting a problem
+
+When a render fails, the error window has a **Report this** button, and
+**Feedback → Report a problem** works at any time. Both open a report you can
+read and edit before anything happens: the app version, your Windows version,
+a few settings, the error, and the last lines of the log. API keys, your Windows
+user name and the spoken lines of your script are removed first.
+
+Nothing is sent by the app. **Open GitHub issue** opens a prefilled issue in
+your browser for you to submit, and **Copy to clipboard** lets you paste the
+report anywhere else.
 
 ## Needs an internet connection
 
@@ -270,7 +283,7 @@ pip install -r requirements.txt -r requirements-build.txt
 python -m pytest
 python packaging/make_icon.py
 pyinstaller --noconfirm --clean packaging/ai_video_studio.spec
-"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion=3.4.1 packaging\installer.iss
+"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion=3.5.0 packaging\installer.iss
 ```
 
 Releases are built automatically by GitHub Actions when a `v*` tag is pushed.
@@ -299,6 +312,10 @@ text-to-speech to generate the voiceover from your script text. On startup it
 also asks GitHub for this project's latest version number, to tell you about
 updates; that request contains nothing about you, and you can turn it off under
 **Settings → Updates**. Settings and API keys stay on your computer.
+
+The app keeps a log file on your PC to help with problems. It is never sent
+anywhere by the app; a problem report quotes from it only when you choose to
+send one, and you see the text first.
 
 ## Licence
 

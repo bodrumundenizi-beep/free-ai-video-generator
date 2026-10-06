@@ -28,6 +28,7 @@ Run
 
 from __future__ import annotations
 
+import collections
 import ctypes
 import itertools
 import json
@@ -40,6 +41,7 @@ import tempfile
 import threading
 import time
 import tkinter as tk
+import traceback
 import webbrowser
 from tkinter import filedialog
 from tkinter import font as tkfont
@@ -138,12 +140,12 @@ from vidgen.render import (  # noqa: E402
 from vidgen.script import ScriptError, count_scenes, parse_script  # noqa: E402
 from vidgen import voices  # noqa: E402
 from vidgen.render import TEMP_ROOT  # noqa: E402
-from vidgen import captions, footage, paths, preview, updates  # noqa: E402
+from vidgen import captions, diagnostics, footage, paths, preview, updates  # noqa: E402
 from vidgen.voice import generate_voiceover  # noqa: E402
 
 
 APP_NAME = "AI Video Studio"
-APP_VERSION = "3.4.1"
+APP_VERSION = "3.5.0"
 # Must match AppUserModelID in packaging/installer.iss, or a pinned taskbar
 # shortcut will not group with the running window.
 APP_MODEL_ID = "AIVideoStudio.Desktop.3"
@@ -170,6 +172,9 @@ MUSIC_DIR = os.path.join(paths.known_folder(paths.CSIDL_DOCUMENTS, "Documents"),
                          "AI Video Studio", "Music")
 MUSIC_EXTS = (".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac")
 SEARCH_CACHE_DIR = os.path.join(SETTINGS_DIR, "cache", "search")
+# Stays on this PC. Only a report the user sends themselves ever quotes from it.
+LOG_DIR = os.path.join(SETTINGS_DIR, "logs")
+LOG_FILE = os.path.join(LOG_DIR, "app.log")
 PADDING_OPTIONS = {"0s": 0.0, "0.25s": 0.25, "0.5s": 0.5, "1s": 1.0}
 DEFAULT_PADDING = 0.25
 
@@ -907,7 +912,7 @@ class SettingRow(Card):
 class Dialog(ctk.CTkToplevel):
     """Small themed modal replacing tkinter.messagebox."""
 
-    def __init__(self, app, title, message, ok=True):
+    def __init__(self, app, title, message, ok=True, on_report=None):
         super().__init__(app)
         self.title(title)
         self.resizable(False, False)
@@ -930,10 +935,20 @@ class Dialog(ctk.CTkToplevel):
                      text_color=TEXT_MUTED, justify="left", wraplength=420,
                      anchor="w").pack(fill="x", padx=18, pady=(2, 16))
 
-        ctk.CTkButton(wrapper, text="OK", width=96, height=32, corner_radius=4,
+        buttons = ctk.CTkFrame(wrapper, fg_color="transparent")
+        buttons.pack(fill="x", padx=18, pady=(0, 16))
+        ctk.CTkButton(buttons, text="OK", width=96, height=32, corner_radius=4,
                       font=app.font_body, fg_color=ACCENT, hover_color=ACCENT_HOVER,
-                      text_color=ACCENT_TEXT,
-                      command=self.destroy).pack(anchor="e", padx=18, pady=(0, 16))
+                      text_color=ACCENT_TEXT, command=self.destroy).pack(side="right")
+        if on_report:
+            def report():
+                self.destroy()
+                on_report()
+
+            ctk.CTkButton(buttons, text="Report this", width=110, height=32, corner_radius=4,
+                          font=app.font_body, fg_color=FIELD_BG, hover_color=CARD_HOVER,
+                          border_width=1, border_color=FIELD_BORDER, text_color=TEXT,
+                          command=report).pack(side="right", padx=(0, 8))
 
         centre_on(self, app)
 
@@ -1290,6 +1305,79 @@ class ResultDialog(ctk.CTkToplevel):
         self.destroy()
 
 
+class ReportDialog(ctk.CTkToplevel):
+    """A problem report the user reads, edits and sends themselves.
+
+    The app sends nothing: the buttons open a prefilled GitHub issue in the
+    browser, or copy the text.
+    """
+
+    def __init__(self, app, report, error=""):
+        super().__init__(app)
+        self.app = app
+        self.error = error
+        self.title("Report a problem")
+        self.resizable(False, False)
+        self.configure(fg_color=MAIN_BG)
+        self.transient(app)
+
+        card = Card(self)
+        card.pack(fill="both", expand=True, padx=14, pady=14)
+        ctk.CTkLabel(card, text="Report a problem", font=app.font_title,
+                     text_color=TEXT, anchor="w").pack(fill="x", padx=20, pady=(18, 4))
+        ctk.CTkLabel(
+            card, font=app.font_body, text_color=TEXT_MUTED, justify="left",
+            wraplength=580, anchor="w",
+            text="This is exactly what will be shared. Nothing is sent until you press a "
+                 "button. API keys, your Windows user name and the spoken lines of your "
+                 "script have been removed; search words are kept. You can edit the text.",
+        ).pack(fill="x", padx=20, pady=(0, 10))
+
+        self.box = ctk.CTkTextbox(card, width=600, height=320, font=app.font_mono_sm,
+                                  corner_radius=4, fg_color=FIELD_BG, text_color=TEXT,
+                                  border_width=0, wrap="word")
+        self.box.pack(padx=20)
+        self.box.insert("1.0", report)
+
+        self.status = ctk.CTkLabel(card, text="", font=app.font_tiny, text_color=TEXT_DIM,
+                                   anchor="w", justify="left", wraplength=580)
+        self.status.pack(fill="x", padx=20, pady=(8, 8))
+
+        buttons = ctk.CTkFrame(card, fg_color="transparent")
+        buttons.pack(fill="x", padx=20, pady=(0, 18))
+        ctk.CTkButton(
+            buttons, text="Open GitHub issue", width=150, height=32, corner_radius=4,
+            font=app.font_body, fg_color=ACCENT, hover_color=ACCENT_HOVER,
+            text_color=ACCENT_TEXT, command=self.open_issue,
+        ).pack(side="right")
+        for text, command in (("Copy to clipboard", self.copy), ("Close", self.destroy)):
+            ctk.CTkButton(
+                buttons, text=text, width=130, height=32, corner_radius=4,
+                font=app.font_body, fg_color=FIELD_BG, hover_color=CARD_HOVER,
+                border_width=1, border_color=FIELD_BORDER, text_color=TEXT, command=command,
+            ).pack(side="right", padx=(0, 8))
+
+        centre_on(self, app)
+
+    def text(self) -> str:
+        return self.box.get("1.0", "end").strip()
+
+    def copy(self, quiet=False):
+        self.app.clipboard_clear()
+        self.app.clipboard_append(self.text())
+        if not quiet:
+            self.status.configure(text="Copied. Paste it into an email or a message.")
+
+    def open_issue(self):
+        self.copy(quiet=True)   # the fallback if the link has to leave the log out
+        first = (self.error or "").strip().splitlines()[0:1]
+        title = f"Render failed: {first[0][:80]}" if first else "Problem report"
+        webbrowser.open(diagnostics.issue_url(self.app.scrub(title), self.text()))
+        self.status.configure(
+            text="GitHub opened in your browser. Press \"Submit new issue\" there to send "
+                 "it (you need a GitHub account). The report is also on your clipboard.")
+
+
 def centre_on(window, app):
     """Place a dialog over the main window and make it modal."""
     window.update_idletasks()
@@ -1311,6 +1399,9 @@ class App(ctk.CTk):
     def __init__(self):
         super().__init__()
 
+        self._launched = time.perf_counter()
+        self.session_log = diagnostics.SessionLog(LOG_FILE)
+        self.recent_lines = collections.deque(maxlen=300)   # what a report quotes from
         self.settings = load_settings()
         ctk.set_appearance_mode(self.settings["theme"])
         ctk.set_default_color_theme("blue")
@@ -1878,6 +1969,8 @@ class App(ctk.CTk):
 
     def append_log(self, message: str):
         """Main-thread only.  Worker threads go through UiBridge.log()."""
+        self.session_log.write(message)
+        self.recent_lines.extend(message.split("\n"))
         severity = log_severity(message)
         self.log_box.configure(state="normal")
         for index, line in enumerate(message.split("\n")):
@@ -1963,11 +2056,78 @@ class App(ctk.CTk):
                       fg_color=FIELD_BG, hover_color=CARD_HOVER,
                       border_width=1, border_color=FIELD_BORDER, text_color=TEXT,
                       command=lambda: WelcomeDialog(self)).pack(side="left")
+        help_bar = ctk.CTkFrame(actions, fg_color="transparent")
+        help_bar.pack(fill="x", padx=14, pady=(0, 14))
+        ctk.CTkButton(help_bar, text=f"{self.icon('feedback')}  Report a problem",
+                      height=32, corner_radius=4, font=self.font_body,
+                      fg_color=FIELD_BG, hover_color=CARD_HOVER,
+                      border_width=1, border_color=FIELD_BORDER, text_color=TEXT,
+                      command=self.open_report).pack(side="left", padx=(0, 8))
+        ctk.CTkButton(help_bar, text=f"{self.icon('log')}  Open log folder",
+                      height=32, corner_radius=4, font=self.font_body,
+                      fg_color=FIELD_BG, hover_color=CARD_HOVER,
+                      border_width=1, border_color=FIELD_BORDER, text_color=TEXT,
+                      command=lambda: self._open_made_folder(LOG_DIR)).pack(side="left")
         return page
 
     def open_output_folder(self):
         target = os.path.dirname(self.var_output.get().strip()) or default_output_dir()
         self._open_folder(target)
+
+    # -- problem reports ------------------------------------------------------
+    def scrub(self, text: str) -> str:
+        """``text`` without keys or the names this PC's user goes by."""
+        text = diagnostics.redact(text, [self.var_api.get(), self.var_pixabay.get()],
+                                  os.environ.get("USERNAME", ""))
+        # The profile folder can be named differently from the account.
+        return diagnostics.redact(text, user_name=os.path.basename(os.path.expanduser("~")))
+
+    def open_report(self, error=""):
+        """Show the report window. Nothing leaves the PC unless the user sends it."""
+        report = diagnostics.build_report(
+            APP_VERSION, IS_FROZEN, self._collect_settings(), list(self.recent_lines),
+            error, os.environ.get("USERNAME", ""))
+        ReportDialog(self, self.scrub(report), error)
+
+    def report_callback_exception(self, exc, val, tb):
+        """Tk calls this for an error in a button or timer: keep it, don't lose it."""
+        trace = "".join(traceback.format_exception(exc, val, tb))
+        self.session_log.write(trace)
+        self._unexpected(trace)
+
+    def _unexpected(self, trace: str):
+        """Main thread. Put an already-logged trace on the Log page and into reports."""
+        try:
+            self.recent_lines.extend(trace.rstrip().split("\n"))
+            last = trace.strip().splitlines()[-1] if trace.strip() else "unknown"
+            self.append_log(f"❌ Unexpected error: {last}")
+        except Exception:
+            pass   # reporting an error must never raise another
+
+    def _install_error_hooks(self):
+        """Keep uncaught errors from any thread.
+
+        The trace is written to the log file at once, in case the app is going
+        down, then handed to the window through the UI queue. The normal
+        handlers still run, so a console shows the error as before.
+        """
+        usual_thread_hook, usual_hook = threading.excepthook, sys.excepthook
+
+        def keep(trace):
+            self.session_log.write(trace)
+            self._queue.put(("crash", {"trace": trace}))
+
+        def from_thread(args):
+            keep("".join(traceback.format_exception(
+                args.exc_type, args.exc_value, args.exc_traceback)))
+            usual_thread_hook(args)
+
+        def from_main(exc, val, tb):
+            keep("".join(traceback.format_exception(exc, val, tb)))
+            usual_hook(exc, val, tb)
+
+        threading.excepthook = from_thread
+        sys.excepthook = from_main
 
     def open_settings_folder(self):
         self._open_made_folder(SETTINGS_DIR)
@@ -2321,7 +2481,9 @@ class App(ctk.CTk):
     # -- startup / queue -----------------------------------------------------
     def _post_init(self):
         self.apply_effects()
+        self._install_error_hooks()
         self.append_log(f"{APP_NAME} {APP_VERSION} ready.")
+        self.append_log(f"⏱️ Window ready in {time.perf_counter() - self._launched:.1f} s")
         self.append_log(f"🪟 Window effect: {self.effect_note}")
         self.append_log(f"🎞️ ffmpeg: {FFMPEG_EXE or 'system / imageio auto-detect'}")
         if not self.var_api.get().strip() and not self.var_pixabay.get().strip():
@@ -2422,6 +2584,8 @@ class App(ctk.CTk):
                     self._set_busy(payload["on"])
                 elif kind == "preview":
                     self._preview_done(payload["path"], payload["error"])
+                elif kind == "crash":
+                    self._unexpected(payload["trace"])
                 elif kind == "update":
                     self._update_checked(payload["found"], payload["manual"])
                 elif kind == "keytest":
@@ -2438,8 +2602,10 @@ class App(ctk.CTk):
                     if payload["ok"] and path and os.path.isfile(path):
                         ResultDialog(self, payload["title"], payload["message"], path)
                     else:
-                        Dialog(self, payload["title"], payload["message"],
-                               ok=payload["ok"])
+                        message = payload["message"]
+                        Dialog(self, payload["title"], message, ok=payload["ok"],
+                               on_report=None if payload["ok"] else
+                               (lambda: self.open_report(message)))
         except queue.Empty:
             pass
         finally:
