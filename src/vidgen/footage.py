@@ -208,9 +208,13 @@ def parse_pixabay(data: dict, target_w: int, target_h: int) -> list[Candidate]:
         ]
         best = choose_file(files, target_w, target_h)
         if best:
-            # Every rendition carries the same still; the smallest file's is enough.
-            stills = [r.get("thumbnail") for r in (hit.get("videos") or {}).values()
-                      if isinstance(r, dict) and r.get("thumbnail")]
+            # Every rendition has a still at its own size, the largest over a
+            # megabyte. A preview needs the smallest.
+            renditions = sorted(
+                (r for r in (hit.get("videos") or {}).values()
+                 if isinstance(r, dict) and r.get("thumbnail")),
+                key=lambda r: r.get("width") or 10 ** 9)
+            stills = [r["thumbnail"] for r in renditions]
             found.append(Candidate(
                 "Pixabay", str(hit.get("id")), best["url"], best["width"], best["height"],
                 None, hit.get("pageURL") or "", hit.get("user") or "",

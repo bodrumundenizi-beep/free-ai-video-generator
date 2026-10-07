@@ -35,6 +35,7 @@ import json
 import os
 import queue
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -140,12 +141,14 @@ from vidgen.render import (  # noqa: E402
 from vidgen.script import ScriptError, count_scenes, parse_script  # noqa: E402
 from vidgen import voices  # noqa: E402
 from vidgen.render import TEMP_ROOT  # noqa: E402
-from vidgen import captions, diagnostics, footage, paths, preview, updates  # noqa: E402
+from vidgen import (  # noqa: E402
+    captions, diagnostics, footage, pacing, paths, preview, scenes, updates,
+)
 from vidgen.voice import generate_voiceover  # noqa: E402
 
 
 APP_NAME = "AI Video Studio"
-APP_VERSION = "3.5.0"
+APP_VERSION = "3.6.0"
 # Must match AppUserModelID in packaging/installer.iss, or a pinned taskbar
 # shortcut will not group with the running window.
 APP_MODEL_ID = "AIVideoStudio.Desktop.3"
@@ -208,6 +211,8 @@ VOICE_OPTIONS = voices.labels()
 
 PREVIEW_TEXT = "This is how your video will sound."
 PREVIEW_DIR = os.path.join(TEMP_ROOT, "preview")
+THUMB_DIR = os.path.join(PREVIEW_DIR, "thumbs")   # stills for the scene preview
+VERSION_OPTIONS = ("1", "2")
 
 # (settings key, allowed values, default) for each caption choice.
 CAPTION_SETTINGS = (
@@ -227,6 +232,8 @@ def default_settings() -> dict:
         "ask_save": True,
         "welcome_seen": False,
         "check_updates": True,
+        "versions": 1,
+        "target_length": pacing.DEFAULT_TARGET,
         "music_path": "",
         "output_path": os.path.join(default_output_dir(), "final_video.mp4"),
         "aspect": "9:16",
@@ -271,6 +278,9 @@ def load_settings() -> dict:
     data["ask_save"] = bool(data["ask_save"])
     data["welcome_seen"] = bool(data["welcome_seen"])
     data["check_updates"] = bool(data["check_updates"])
+    data["versions"] = 2 if str(data["versions"]) == "2" else 1
+    if data["target_length"] not in pacing.TARGETS:
+        data["target_length"] = pacing.DEFAULT_TARGET
     if data["music_path"] and not os.path.isfile(str(data["music_path"])):
         data["music_path"] = ""
 
@@ -496,6 +506,7 @@ GLYPHS = {
     "music": ("\ue8d6", "\u266b"),
     "timer": ("\ue916", "\u23f1"),
     "stop": ("\ue71a", "\u25a0"),
+    "warning": ("\ue7ba", "\u26a0"),
     "captions": ("\ue7f0", "CC"),
     "font_size": ("\ue8e9", "A"),
     "color": ("\ue790", "\u25cf"),
@@ -924,7 +935,7 @@ class Dialog(ctk.CTkToplevel):
 
         header = ctk.CTkFrame(wrapper, fg_color="transparent")
         header.pack(fill="x", padx=18, pady=(16, 4))
-        ctk.CTkLabel(header, text=app.icon("status" if ok else "clear"),
+        ctk.CTkLabel(header, text=app.icon("status" if ok else "warning"),
                      font=app.font_icon_lg,
                      text_color=OK_COLOR if ok else ERR_COLOR).pack(side="left",
                                                                     padx=(0, 10))
@@ -1113,10 +1124,11 @@ class ResultDialog(ctk.CTkToplevel):
     and stop only - the default player is one button away for anything more.
     """
 
-    def __init__(self, app, title, message, path):
+    def __init__(self, app, title, message, paths):
         super().__init__(app)
         self.app = app
-        self.path = path
+        self.paths = list(paths)
+        self.path = self.paths[0]
         self.title(title)
         self.resizable(False, False)
         self.configure(fg_color=MAIN_BG)
@@ -1154,6 +1166,13 @@ class ResultDialog(ctk.CTkToplevel):
                      text_color=OK_COLOR).pack(side="left", padx=(0, 10))
         ctk.CTkLabel(header, text=title, font=app.font_title,
                      text_color=TEXT).pack(side="left")
+        if len(self.paths) > 1:
+            # Both versions, side by side in time: switch, play, compare.
+            self.version_names = [f"Version {n}" for n in range(1, len(self.paths) + 1)]
+            self.var_version = tk.StringVar(value=self.version_names[0])
+            FluentSegmented(info, app, self.version_names, self.var_version,
+                            110 * len(self.paths)).pack(anchor="w", padx=18, pady=(6, 6))
+            self.var_version.trace_add("write", self._select_version)
         ctk.CTkLabel(info, text=message, font=app.font_body, text_color=TEXT_MUTED,
                      justify="left", wraplength=300 if portrait else 440,
                      anchor="w").pack(fill="x", padx=18, pady=(2, 14))
@@ -1195,6 +1214,24 @@ class ResultDialog(ctk.CTkToplevel):
         except Exception as exc:  # noqa: BLE001 - the video is saved either way
             self.app.append_log(f"⚠️ Couldn't show the preview ({exc}).")
             return None
+
+    def _select_version(self, *_args):
+        """Point the preview and the buttons at the chosen version's file."""
+        if not self.winfo_exists():
+            return
+        self.stop()
+        self.path = self.paths[self.version_names.index(self.var_version.get())]
+        self._forget_sound()
+        if self.play_button is not None and self._load_poster() is not None:
+            self.screen.configure(image=self.poster_photo)
+
+    def _forget_sound(self):
+        if self.wav:
+            try:
+                os.remove(self.wav)
+            except OSError:
+                pass
+            self.wav = None
 
     def _play_label(self):
         glyph = self.app.icon("stop" if self.playing else "play")
@@ -1297,11 +1334,190 @@ class ResultDialog(ctk.CTkToplevel):
 
     def close(self):
         self.stop()
-        if self.wav:
-            try:
-                os.remove(self.wav)
-            except OSError:
-                pass
+        self._forget_sound()
+        self.destroy()
+
+
+class ScenePreviewDialog(ctk.CTkToplevel):
+    """The clip chosen for each scene, before rendering, with "Try another".
+
+    Searching and fetching stills happen on worker threads and come back
+    through the app's UI queue; this window only draws what arrives.
+    """
+
+    def __init__(self, app, rows, picker, frame_size):
+        super().__init__(app)
+        self.app = app
+        self.rows = rows
+        self.picker = picker
+        self.stopping = threading.Event()
+        # Read on this thread: workers must not touch Tk variables.
+        self.search = app.new_footage_search()
+        self.local_base = os.path.dirname(app.var_output.get().strip())
+        portrait = frame_size[1] >= frame_size[0]
+        self.box = (72, 128) if portrait else (160, 90)
+        self.widgets = {}   # row index -> {"picture", "status", "button"}
+        self.images = {}    # row index -> CTkImage, kept so Tk doesn't drop it
+        self.title("Preview scenes")
+        self.resizable(False, False)
+        self.configure(fg_color=MAIN_BG)
+        self.transient(app)
+        self.protocol("WM_DELETE_WINDOW", self.close)
+
+        card = Card(self)
+        card.pack(fill="both", expand=True, padx=14, pady=14)
+        ctk.CTkLabel(card, text="Preview scenes", font=app.font_title, text_color=TEXT,
+                     anchor="w").pack(fill="x", padx=20, pady=(18, 2))
+        ctk.CTkLabel(
+            card, font=app.font_body, text_color=TEXT_MUTED, justify="left",
+            wraplength=600, anchor="w",
+            text="These are the clips the video will use. Press Try another on any scene "
+                 "you don't like.",
+        ).pack(fill="x", padx=20, pady=(0, 10))
+
+        row_height = self.box[1] + 22
+        listing = ctk.CTkScrollableFrame(
+            card, width=620, height=min(len(rows) * row_height, 430), fg_color="transparent",
+            scrollbar_fg_color=SCROLLBAR_BG, scrollbar_button_color=SCROLLBAR_THUMB,
+            scrollbar_button_hover_color=SCROLLBAR_THUMB_HOVER)
+        listing.pack(padx=12)
+        listing.grid_columnconfigure(1, weight=1)
+        for position, row in enumerate(rows):
+            picture = ctk.CTkLabel(listing, text="", width=self.box[0], height=self.box[1],
+                                   fg_color=FIELD_BG, corner_radius=4)
+            picture.grid(row=position, column=0, padx=(8, 12), pady=6)
+            words = ctk.CTkFrame(listing, fg_color="transparent")
+            words.grid(row=position, column=1, sticky="w")
+            shown = os.path.basename(row.visual) if row.is_local else row.visual
+            ctk.CTkLabel(words, text=f"Scene {row.index + 1} · {ellipsize(shown, 44)}",
+                         font=app.font_bold, text_color=TEXT, anchor="w").pack(anchor="w")
+            if row.voice:
+                ctk.CTkLabel(words, text=row.voice, font=app.font_tiny, text_color=TEXT_MUTED,
+                             anchor="w", justify="left", wraplength=320).pack(anchor="w")
+            status = ctk.CTkLabel(words, text="Your own file" if row.is_local else "Searching...",
+                                  font=app.font_tiny, text_color=TEXT_DIM, anchor="w")
+            status.pack(anchor="w")
+            button = None
+            if not row.is_local:
+                button = ctk.CTkButton(
+                    listing, text="Try another", width=104, height=30, corner_radius=4,
+                    font=app.font_body, fg_color=FIELD_BG, hover_color=CARD_HOVER,
+                    border_width=1, border_color=FIELD_BORDER, text_color=TEXT, state="disabled",
+                    command=lambda index=row.index: self.try_another(index))
+                button.grid(row=position, column=2, padx=(8, 12))
+            self.widgets[row.index] = {"picture": picture, "status": status, "button": button}
+
+        buttons = ctk.CTkFrame(card, fg_color="transparent")
+        buttons.pack(fill="x", padx=20, pady=(12, 18))
+        self.render_button = ctk.CTkButton(
+            buttons, text="Render with these clips", width=190, height=32, corner_radius=4,
+            font=app.font_body, fg_color=ACCENT, hover_color=ACCENT_HOVER,
+            text_color=ACCENT_TEXT, state="disabled", command=self.render)
+        self.render_button.pack(side="right")
+        ctk.CTkButton(
+            buttons, text="Close", width=96, height=32, corner_radius=4,
+            font=app.font_body, fg_color=FIELD_BG, hover_color=CARD_HOVER,
+            border_width=1, border_color=FIELD_BORDER, text_color=TEXT, command=self.close,
+        ).pack(side="right", padx=(0, 8))
+
+        centre_on(self, app)
+        threading.Thread(target=self._load, daemon=True).start()
+
+    # -- worker threads: never touch a widget ------------------------------------
+    def _post(self, **payload):
+        self.app._queue.put(("scene_preview", dict(payload, dialog=self)))
+
+    def _load(self):
+        """Find clips for the stock scenes, then a still for every scene."""
+        try:
+            for row in self.rows:
+                if self.stopping.is_set():
+                    return
+                if not row.is_local and row.index not in self.picker.options:
+                    scenes.find_options(self.search, [row], self.picker,
+                                        stop=self.stopping.is_set)
+                self._post(event="found", index=row.index)
+                self._still(row)
+        except Exception as exc:  # noqa: BLE001 - shown in the window, not raised in a thread
+            self._post(event="failed", message=str(exc))
+        self._post(event="done")
+
+    def _still(self, row):
+        """Fetch the still for the row's current clip and hand it to the window."""
+        key, path = "", None
+        try:
+            if row.is_local:
+                found, kind = footage.resolve_local(row.visual, self.local_base)
+                if kind == "image":
+                    path = found
+                else:
+                    width, height, _length = preview.probe(found)
+                    still = preview.poster(found, preview.fit((width, height), (320, 320)), at=0.5)
+                    os.makedirs(THUMB_DIR, exist_ok=True)
+                    path = os.path.join(THUMB_DIR, f"local_{row.index}.jpg")
+                    still.save(path)
+            else:
+                clip = self.picker.current(row.index)
+                if clip is not None:
+                    key, path = clip.key, scenes.fetch_thumb(clip, THUMB_DIR)
+        except Exception:  # noqa: BLE001 - a missing still is not worth an error
+            path = None
+        self._post(event="still", index=row.index, key=key, path=path)
+
+    # -- UI thread ---------------------------------------------------------------
+    def on_event(self, payload):
+        if not self.winfo_exists():
+            return
+        event, index = payload["event"], payload.get("index")
+        if event == "found":
+            widgets = self.widgets[index]
+            if widgets["button"] is not None:
+                total = self.picker.count(index)
+                widgets["status"].configure(
+                    text=self.picker.label(index) if total else "No clips found for these words",
+                    text_color=TEXT_DIM if total else ERR_COLOR)
+                widgets["button"].configure(state="normal" if total > 1 else "disabled")
+        elif event == "still":
+            clip = self.picker.current(index)
+            # A slow still for a clip the user has already stepped past is dropped.
+            if payload["key"] and (clip is None or clip.key != payload["key"]):
+                return
+            self._show(index, payload["path"])
+        elif event == "failed":
+            self.app.append_log(f"⚠️ Scene preview: {payload['message']}")
+        elif event == "done":
+            self.render_button.configure(state="normal")
+
+    def _show(self, index, path):
+        from PIL import Image, ImageOps
+
+        picture = self.widgets[index]["picture"]
+        try:
+            with Image.open(path) as opened:
+                # Twice the box, so it stays sharp on a scaled display.
+                fitted = ImageOps.fit(opened.convert("RGB"), (self.box[0] * 2, self.box[1] * 2))
+            self.images[index] = ctk.CTkImage(light_image=fitted, dark_image=fitted, size=self.box)
+            picture.configure(image=self.images[index], text="")
+        except Exception:  # noqa: BLE001 - no path, or not a picture
+            self.images.pop(index, None)
+            picture.configure(image=None, text="No picture", font=self.app.font_tiny,
+                              text_color=TEXT_DIM)
+
+    def try_another(self, index):
+        if self.picker.next(index) is None:
+            return
+        self.widgets[index]["status"].configure(text=self.picker.label(index))
+        row = next(r for r in self.rows if r.index == index)
+        threading.Thread(target=self._still, args=(row,), daemon=True).start()
+
+    def render(self):
+        self.close()
+        self.app.start_render()
+
+    def close(self):
+        """Keep the choices: Render Video on the Create page uses them too."""
+        self.stopping.set()
+        self.app.scene_picker = self.picker
         self.destroy()
 
 
@@ -1428,6 +1644,8 @@ class App(ctk.CTk):
         self.current_page = None
         self._page_anim = None
         self._key_tests = {}   # token -> callback(ok, message)
+        self._cancel = None    # threading.Event of the render in progress
+        self.scene_picker = None   # clips chosen in the scene preview
 
         self._build_fonts()
         self._build_vars()
@@ -1481,6 +1699,8 @@ class App(ctk.CTk):
         self.var_ask_save = tk.BooleanVar(value=s["ask_save"])
         self.welcome_seen = s["welcome_seen"]
         self.var_check_updates = tk.BooleanVar(value=s["check_updates"])
+        self.var_versions = tk.StringVar(value=str(s["versions"]))
+        self.var_target = tk.StringVar(value=s["target_length"])
         self.var_captions = tk.BooleanVar(value=s["captions"])
         self.caption_vars = {key: tk.StringVar(value=s[key])
                              for key, _allowed, _default in CAPTION_SETTINGS}
@@ -1491,7 +1711,8 @@ class App(ctk.CTk):
         for var in (self.var_api, self.var_output, self.var_aspect,
                     self.var_resolution, self.var_voice, self.var_pixabay,
                     self.var_padding, self.var_music_enabled, self.var_captions,
-                    self.var_ask_save, self.var_check_updates,
+                    self.var_ask_save, self.var_check_updates, self.var_versions,
+                    self.var_target,
                     *self.caption_vars.values()):
             var.trace_add("write", self._on_setting_changed)
 
@@ -1504,6 +1725,8 @@ class App(ctk.CTk):
             "ask_save": bool(self.var_ask_save.get()),
             "welcome_seen": self.welcome_seen,
             "check_updates": bool(self.var_check_updates.get()),
+            "versions": 2 if self.var_versions.get() == "2" else 1,
+            "target_length": self.var_target.get(),
             "music_path": self.music_path,
             "output_path": self.var_output.get().strip(),
             "aspect": self.var_aspect.get(),
@@ -1771,6 +1994,24 @@ class App(ctk.CTk):
         has_key = self._has_footage_key()   # Pexels or Pixabay: either is enough
         self.tile_key.set_value("Set" if has_key else "Missing",
                                 OK_COLOR if has_key else ERR_COLOR)
+        self.refresh_estimate()
+
+    def refresh_estimate(self):
+        """About how long the script is, and whether a chosen length is in reach."""
+        if not hasattr(self, "estimate_label"):
+            return
+        try:
+            parsed = parse_script(self.script_box.get("1.0", "end"))
+        except ScriptError:
+            self.estimate_label.configure(text="")
+            return
+        guess = pacing.estimate(
+            parsed, voices.persona(self.var_voice.get()),
+            PADDING_OPTIONS.get(self.var_padding.get(), DEFAULT_PADDING))
+        text, warning = pacing.describe(guess, len(parsed),
+                                        pacing.TARGETS.get(self.var_target.get()))
+        self.estimate_label.configure(text=text,
+                                      text_color=WARN_COLOR if warning else TEXT_MUTED)
 
     # -------------------------------------------------------------- CREATE --
     def _build_create(self):
@@ -1856,8 +2097,23 @@ class App(ctk.CTk):
         self.var_captions.trace_add("write", self._sync_caption_controls)
         self._sync_caption_controls()
 
+        # Length and versions, with a running estimate of how long the script is.
+        pace_bar = ctk.CTkFrame(control_card, fg_color="transparent")
+        pace_bar.grid(row=2, column=0, sticky="ew", padx=16, pady=(10, 0))
+        ctk.CTkLabel(pace_bar, text=self.icon("timer"), font=self.font_icon,
+                     text_color=TEXT_MUTED).pack(side="left", padx=(0, 10))
+        ctk.CTkLabel(pace_bar, text="Length", font=self.font_body,
+                     text_color=TEXT).pack(side="left", padx=(0, 12))
+        FluentSegmented(pace_bar, self, list(pacing.TARGETS), self.var_target, 232).pack(side="left")
+        ctk.CTkLabel(pace_bar, text="Versions", font=self.font_body,
+                     text_color=TEXT).pack(side="left", padx=(18, 12))
+        FluentSegmented(pace_bar, self, list(VERSION_OPTIONS), self.var_versions, 84).pack(side="left")
+        self.estimate_label = ctk.CTkLabel(pace_bar, text="", font=self.font_tiny,
+                                           text_color=TEXT_MUTED, anchor="e")
+        self.estimate_label.pack(side="right")
+
         top = ctk.CTkFrame(control_card, fg_color="transparent")
-        top.grid(row=2, column=0, sticky="ew", padx=16, pady=(12, 8))
+        top.grid(row=3, column=0, sticky="ew", padx=16, pady=(12, 8))
         top.grid_columnconfigure(0, weight=1)
 
         self.status_label = ctk.CTkLabel(top, text="Ready", font=self.font_body,
@@ -1874,11 +2130,18 @@ class App(ctk.CTk):
             hover_color=ACCENT_HOVER, text_color=ACCENT_TEXT,
             command=self.start_render,
         )
-        self.render_button.grid(row=0, column=1, sticky="e")
+        self.render_button.grid(row=0, column=2, sticky="e")
+        self.scenes_button = ctk.CTkButton(
+            top, text=f"{self.icon('scenes')}   Preview scenes", font=self.font_body,
+            width=150, height=38, corner_radius=4, fg_color=FIELD_BG, hover_color=CARD_HOVER,
+            border_width=1, border_color=FIELD_BORDER, text_color=TEXT,
+            command=self.open_scene_preview,
+        )
+        self.scenes_button.grid(row=0, column=1, sticky="e", padx=(0, 8))
 
         self.progress = ctk.CTkProgressBar(control_card, height=4, corner_radius=2,
                                            progress_color=ACCENT, fg_color=FIELD_BG)
-        self.progress.grid(row=3, column=0, sticky="ew", padx=16, pady=(0, 16))
+        self.progress.grid(row=4, column=0, sticky="ew", padx=16, pady=(0, 16))
         self.progress.set(0)
         self.progress.grid_remove()
         return page
@@ -1927,6 +2190,12 @@ class App(ctk.CTk):
                       fg_color=FIELD_BG, hover_color=CARD_HOVER,
                       border_width=1, border_color=FIELD_BORDER, text_color=TEXT,
                       command=self.clear_log).pack(side="right")
+        # Packed only while a render is running (see _set_busy).
+        self.log_cancel = ctk.CTkButton(
+            header, text=f"{self.icon('stop')}  Cancel", width=88, height=28, corner_radius=4,
+            font=self.font_tiny, fg_color=FIELD_BG, hover_color=CARD_HOVER,
+            border_width=1, border_color=FIELD_BORDER, text_color=TEXT,
+            command=self.cancel_render)
 
         self.log_box = ctk.CTkTextbox(
             card, font=self.font_body, corner_radius=4, fg_color=FIELD_BG,
@@ -2551,6 +2820,7 @@ class App(ctk.CTk):
 
     def _warm_moviepy(self):
         sweep_old_work_dirs()
+        shutil.rmtree(THUMB_DIR, ignore_errors=True)   # last session's preview stills
         try:
             # Importing the engine's heavy half pulls in MoviePy, NumPy and PIL.
             import vidgen.audio  # noqa: F401
@@ -2584,6 +2854,14 @@ class App(ctk.CTk):
                     self._set_busy(payload["on"])
                 elif kind == "preview":
                     self._preview_done(payload["path"], payload["error"])
+                elif kind == "cancelled":
+                    self.last_render = "Cancelled"
+                    self.refresh_home()
+                elif kind == "scene_preview":
+                    try:
+                        payload["dialog"].on_event(payload)
+                    except tk.TclError:
+                        pass   # the preview window was closed meanwhile
                 elif kind == "crash":
                     self._unexpected(payload["trace"])
                 elif kind == "update":
@@ -2598,9 +2876,10 @@ class App(ctk.CTk):
                 elif kind == "finished":
                     self.last_render = "Success" if payload["ok"] else "Failed"
                     self.refresh_home()
-                    path = payload.get("path")
-                    if payload["ok"] and path and os.path.isfile(path):
-                        ResultDialog(self, payload["title"], payload["message"], path)
+                    made = [p for p in (payload.get("paths") or [payload.get("path")])
+                            if p and os.path.isfile(p)]
+                    if payload["ok"] and made:
+                        ResultDialog(self, payload["title"], payload["message"], made)
                     else:
                         message = payload["message"]
                         Dialog(self, payload["title"], message, ok=payload["ok"],
@@ -2613,10 +2892,17 @@ class App(ctk.CTk):
 
     def _set_busy(self, busy: bool):
         self.is_rendering = busy
-        self.render_button.configure(
-            state="disabled" if busy else "normal",
-            text=f"{self.icon('play')}   {'Rendering...' if busy else 'Render Video'}",
-        )
+        # While rendering, the Render button is the way to stop.
+        if busy:
+            self.render_button.configure(state="normal", text=f"{self.icon('stop')}   Cancel",
+                                         command=self.cancel_render)
+            self.log_cancel.configure(state="normal", text=f"{self.icon('stop')}  Cancel")
+            self.log_cancel.pack(side="right", padx=(0, 8))
+        else:
+            self.render_button.configure(state="normal", command=self.start_render,
+                                         text=f"{self.icon('play')}   Render Video")
+            self.log_cancel.pack_forget()
+        self.scenes_button.configure(state="disabled" if busy else "normal")
         self.row_render.button.configure(state="disabled" if busy else "normal")
         for bar in self._progress_bars():
             if busy:
@@ -2629,6 +2915,47 @@ class App(ctk.CTk):
 
     def _progress_bars(self):
         return (self.progress, self.log_progress)
+
+    def cancel_render(self):
+        """Ask the render to stop. It does so at its next safe point."""
+        if not self.is_rendering or self._cancel is None or self._cancel.is_set():
+            return
+        self._cancel.set()
+        self.render_button.configure(state="disabled", text="Cancelling...")
+        self.log_cancel.configure(state="disabled", text="Cancelling...")
+        self.status_label.configure(text="Cancelling...")
+
+    # -- scene preview -------------------------------------------------------
+    def frame_label(self) -> str:
+        return f"{self.var_aspect.get()} {self.var_resolution.get()}"
+
+    def new_footage_search(self):
+        """A stock search for the current keys and frame, quiet (no Log lines)."""
+        width, height, orientation, _bitrate = resolve_target(
+            self.var_aspect.get(), self.var_resolution.get())
+        return footage.FootageSearch(
+            self.var_api.get(), self.var_pixabay.get(), width, height, orientation,
+            self.var_resolution.get(), SEARCH_CACHE_DIR, lambda _message: None)
+
+    def open_scene_preview(self):
+        if self.is_rendering:
+            return
+        script = self.script_box.get("1.0", "end")
+        try:
+            rows = scenes.plan_preview(script)
+        except ScriptError as exc:
+            Dialog(self, "Check your script", str(exc), ok=False)
+            return
+        if not self._has_footage_key() and any(not row.is_local for row in rows):
+            WelcomeDialog(self)
+            return
+        # Reopening keeps the clips already chosen, as long as nothing changed.
+        picker = self.scene_picker
+        if picker is None or not picker.matches(script, self.frame_label()):
+            picker = scenes.ScenePicker(script, self.frame_label())
+        width, height, _orientation, _bitrate = resolve_target(
+            self.var_aspect.get(), self.var_resolution.get())
+        ScenePreviewDialog(self, rows, picker, (width, height))
 
     # -- voice preview -------------------------------------------------------
     def preview_voice(self):
@@ -2703,9 +3030,21 @@ class App(ctk.CTk):
         settings = self._collect_settings()
         self.settings = settings
         save_settings(settings)
-        cfg = dict(settings, cache_dir=SEARCH_CACHE_DIR, overwrite=overwrite)
+        self._cancel = threading.Event()
+        # Clips picked in the scene preview hold only for this script and frame.
+        choices = {}
+        if self.scene_picker is not None:
+            if self.scene_picker.matches(settings["script"], self.frame_label()):
+                choices = self.scene_picker.choices()
+            else:
+                self.scene_picker = None
+        cfg = dict(settings, cache_dir=SEARCH_CACHE_DIR, overwrite=overwrite,
+                   cancel=self._cancel, clip_choices=choices,
+                   target_length=pacing.TARGETS.get(settings["target_length"]))
 
         self._set_busy(True)
+        if choices:
+            self.append_log("🎬 Using the clips chosen in the scene preview.")
         for bar in self._progress_bars():
             bar.configure(mode="determinate")
             bar.set(0)
