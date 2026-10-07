@@ -119,12 +119,22 @@ def test_describe_plain_fitted_and_warning():
     guess = estimate([scene(LINE)] * 6, GUY, 0.25)
     text, warn = describe(guess, 6, None)
     assert text == f"About {round(guess.total)} s · 6 scenes" and not warn
-    text, warn = describe(guess, 6, 30.0)
+    comfortable = estimate([scene(LINE)] * 8, GUY, 0.25)   # about 29 s as written
+    text, warn = describe(comfortable, 8, 30.0)
     assert "will be fitted to 30 s" in text and not warn
     text, warn = describe(guess, 6, 15.0)
     assert "too long for 15 s" in text and warn
     text, warn = describe(estimate([scene("Hi.")], GUY, 0.25), 1, 60.0)
     assert "too short for 60 s" in text and warn and "1 scene" in text
+
+
+def test_describe_does_not_cry_wolf_near_the_limit():
+    # An estimate can be 15% out, so a script that only just misses on paper
+    # is called close, not too long.
+    borderline = pacing.Estimate(total=36.5, voice=35.0, flexible=6, fixed=0.0)
+    assert not fit(35.0, 6, 0.0, 30.0).reached
+    text, warn = describe(borderline, 6, 30.0)
+    assert "close to the limit for 30 s" in text and not warn
 
 
 def test_targets_table():

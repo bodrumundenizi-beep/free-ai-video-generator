@@ -26,9 +26,13 @@ PAD_MIN, PAD_MAX = 0.1, 1.0
 TEMPO_MIN, TEMPO_MAX = 0.87, 1.15
 CLOSE_ENOUGH = 0.3  # seconds: nobody notices, and encoders round to a frame anyway
 
-# Measured from real voice lines (see tests): a neural voice at its normal
-# rate reads about this many characters a second, pauses not included.
-CHARS_PER_SECOND = 15.6
+# Measured over 32 real voice lines: at its normal rate a neural voice reads
+# about this many characters a second, pauses not included. No property of the
+# text predicts a single line better than about 12% - the voice paces a
+# question, a list and a long word differently - so everything built on this
+# says "about", and warnings allow for the error.
+CHARS_PER_SECOND = 17.2
+ESTIMATE_ERROR = 0.15
 # What the voice engine inserts, before the persona's pause scale (voice.py).
 PAUSE_STOP, PAUSE_COMMA = 0.26, 0.12
 
@@ -140,9 +144,13 @@ def describe(guess: Estimate, scenes: int, target: float | None) -> tuple[str, b
     base = f"About {round(guess.total)} s · {scenes} {plural}"
     if target is None or scenes == 0:
         return base, False
-    # The same rules the render applies, run on the estimate.
-    result = fit(guess.voice, guess.flexible, guess.fixed, target)
-    if result.reached:
+    # The same rules the render applies, run on the estimate - and on the
+    # estimate's likely range, so a warning is only given when it is deserved.
+    low, high = (fit(guess.voice * scale, guess.flexible, guess.fixed, target)
+                 for scale in (1 - ESTIMATE_ERROR, 1 + ESTIMATE_ERROR))
+    if low.reached and high.reached:
         return f"{base} · will be fitted to {target:g} s", False
-    problem = "too long" if result.achieved > target else "too short"
-    return f"{base} · {problem} for {target:g} s", True
+    if not low.reached and not high.reached and (low.achieved > target) == (high.achieved > target):
+        problem = "too long" if low.achieved > target else "too short"
+        return f"{base} · {problem} for {target:g} s", True
+    return f"{base} · close to the limit for {target:g} s", False
