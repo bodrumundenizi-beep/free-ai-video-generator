@@ -129,6 +129,15 @@ def next_free_path(path: str) -> str:
     return f"{stem} ({number}){ext}"
 
 
+def version_path(path: str, number: int) -> str:
+    """The file name for the ``number``-th version of a video: the first keeps
+    its name, the second becomes "name (version 2).ext"."""
+    if number <= 1:
+        return path
+    stem, ext = os.path.splitext(path)
+    return f"{stem} (version {number}){ext}"
+
+
 def deliver(finished: str, destination: str, candidates, log=lambda message: None) -> str:
     """Move the ``finished`` file to ``destination``; returns where it ended up.
 

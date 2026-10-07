@@ -176,3 +176,12 @@ def test_safe_folders_end_in_the_temp_folder_and_start_somewhere_real():
     folders = paths.safe_folders()
     assert os.path.isdir(folders[0])
     assert folders[-1].endswith(os.path.join("AIVideoStudio", "Videos"))
+
+
+# --- versions --------------------------------------------------------------------
+
+def test_version_one_keeps_its_name_and_two_is_labelled():
+    assert paths.version_path(r"C:\Videos\clip.mp4", 1) == r"C:\Videos\clip.mp4"
+    assert paths.version_path(r"C:\Videos\clip.mp4", 2) == r"C:\Videos\clip (version 2).mp4"
+    assert paths.version_path("take.one.MOV", 2) == "take.one (version 2).MOV"
+

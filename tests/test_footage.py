@@ -299,3 +299,78 @@ def test_check_key_needs_a_key_and_makes_no_request_without_one():
 def test_check_key_rejects_an_unknown_provider():
     with pytest.raises(ValueError):
         footage.check_key("Giphy", "abc", KeySession(200))
+
+
+# --- stills for the scene preview ---------------------------------------------------
+
+def test_pexels_candidates_carry_the_preview_picture():
+    data = {"videos": [{"id": 1, "url": "https://pexels.com/v/1", "image": "https://img/1.jpg",
+                        "user": {"name": "Ann"},
+                        "video_files": [{"link": "https://v/1.mp4", "width": 1920, "height": 1080}]}]}
+    (clip,) = parse_pexels(data, 1920, 1080)
+    assert clip.thumb == "https://img/1.jpg"
+
+
+def test_pixabay_candidates_carry_a_rendition_thumbnail():
+    data = {"hits": [{"id": 7, "pageURL": "https://pixabay.com/v/7", "user": "Bo", "videos": {
+        "large": {"url": "https://p/l.mp4", "width": 1920, "height": 1080, "thumbnail": "https://t/l.jpg"},
+        "tiny": {"url": "https://p/t.mp4", "width": 640, "height": 360, "thumbnail": "https://t/t.jpg"}}}]}
+    (clip,) = parse_pixabay(data, 1920, 1080)
+    assert clip.thumb in ("https://t/l.jpg", "https://t/t.jpg")
+
+
+def test_results_without_a_picture_still_parse():
+    # Older cached replies, and clips the service has no still for.
+    data = {"videos": [{"id": 1, "video_files": [{"link": "https://v/1.mp4", "width": 1920,
+                                                   "height": 1080}]}]}
+    (clip,) = parse_pexels(data, 1920, 1080)
+    assert clip.thumb == ""
+    (old,) = parse_pixabay(PIXABAY, 1280, 720)[:1]
+    assert old.thumb == ""
+
+
+# --- stopping a download ------------------------------------------------------------
+
+class ChunkedResponse:
+    def __init__(self, chunks):
+        self.chunks = chunks
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def raise_for_status(self):
+        pass
+
+    def iter_content(self, chunk_size=None):
+        yield from self.chunks
+
+
+class ChunkedSession:
+    def __init__(self, chunks):
+        self.chunks = chunks
+
+    def get(self, url, stream=None, timeout=None):
+        return ChunkedResponse(self.chunks)
+
+
+def test_download_writes_every_chunk(tmp_path):
+    dest = str(tmp_path / "clip.mp4")
+    footage.download("https://x/clip.mp4", dest, ChunkedSession([b"ab", b"cd"]))
+    assert open(dest, "rb").read() == b"abcd"
+
+
+def test_download_stops_when_asked(tmp_path):
+    dest = str(tmp_path / "clip.mp4")
+    asked = []
+
+    def stop_after_two():
+        asked.append(1)
+        return len(asked) > 2
+
+    with pytest.raises(footage.Stopped):
+        footage.download("https://x/clip.mp4", dest, ChunkedSession([b"a"] * 10), stop_after_two)
+    assert open(dest, "rb").read() == b"aa"
+

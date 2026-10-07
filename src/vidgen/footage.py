@@ -57,6 +57,7 @@ class Candidate:
     fps: float | None = None
     page_url: str = ""
     creator: str = ""
+    thumb: str = ""  # a small still of the clip, for the scene preview
 
     @property
     def key(self) -> str:
@@ -191,6 +192,7 @@ def parse_pexels(data: dict, target_w: int, target_h: int) -> list[Candidate]:
             found.append(Candidate(
                 "Pexels", str(video.get("id")), best["url"], best["width"], best["height"],
                 best.get("fps"), video.get("url") or "", (video.get("user") or {}).get("name", ""),
+                video.get("image") or "",
             ))
     return found
 
@@ -206,9 +208,13 @@ def parse_pixabay(data: dict, target_w: int, target_h: int) -> list[Candidate]:
         ]
         best = choose_file(files, target_w, target_h)
         if best:
+            # Every rendition carries the same still; the smallest file's is enough.
+            stills = [r.get("thumbnail") for r in (hit.get("videos") or {}).values()
+                      if isinstance(r, dict) and r.get("thumbnail")]
             found.append(Candidate(
                 "Pixabay", str(hit.get("id")), best["url"], best["width"], best["height"],
                 None, hit.get("pageURL") or "", hit.get("user") or "",
+                stills[0] if stills else "",
             ))
     return found
 
@@ -355,13 +361,23 @@ def check_key(provider: str, key: str, session=None) -> tuple[bool, str]:
     return False, f"{provider} answered HTTP {response.status_code} - try again in a moment."
 
 
-def download(url: str, dest: str, session=None) -> str:
-    """Stream ``url`` to ``dest``. Raises on HTTP errors or an empty body."""
+class Stopped(Exception):
+    """A download was abandoned because the caller asked it to stop."""
+
+
+def download(url: str, dest: str, session=None, should_stop=None) -> str:
+    """Stream ``url`` to ``dest``. Raises on HTTP errors or an empty body.
+
+    ``should_stop`` is asked between chunks; when it says yes the download is
+    abandoned with Stopped, so a cancelled render doesn't finish a 50 MB clip.
+    """
     http = session or requests
     with http.get(url, stream=True, timeout=DOWNLOAD_TIMEOUT) as response:
         response.raise_for_status()
         with open(dest, "wb") as fh:
             for chunk in response.iter_content(chunk_size=1024 * 1024):
+                if should_stop is not None and should_stop():
+                    raise Stopped()
                 if chunk:
                     fh.write(chunk)
     if os.path.getsize(dest) == 0:
