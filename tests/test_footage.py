@@ -316,7 +316,7 @@ def test_pixabay_candidates_carry_a_rendition_thumbnail():
         "large": {"url": "https://p/l.mp4", "width": 1920, "height": 1080, "thumbnail": "https://t/l.jpg"},
         "tiny": {"url": "https://p/t.mp4", "width": 640, "height": 360, "thumbnail": "https://t/t.jpg"}}}]}
     (clip,) = parse_pixabay(data, 1920, 1080)
-    assert clip.thumb in ("https://t/l.jpg", "https://t/t.jpg")
+    assert clip.thumb == "https://t/t.jpg"   # the smallest: the large one is over a megabyte
 
 
 def test_results_without_a_picture_still_parse():

@@ -13,7 +13,10 @@ voiceover, and renders a 1080p or 720p MP4 in portrait or landscape.
 ![Home](docs/home.png)
 
 ## Features
-- **Automated Stock Footage:** Automatically fetches relevant video clips from Pexels API.
+- **Automated Stock Footage:** Automatically fetches relevant video clips from Pexels or Pixabay.
+- **Preview and choose your clips:** See the clip picked for each scene before rendering, and swap any you don't like with one click.
+- **Two versions in one go:** Optionally render the same script twice with different clips, and keep the better one.
+- **Pick a length:** Fit the video to 15, 30 or 60 seconds, with a live estimate as you type.
 - **Neural AI Voices:** Uses Microsoft Edge-TTS for high-quality, natural-sounding male and female voices.
 - **Smart Script Parser:** Automatically reads your script line-by-line using `Visual:` and `Voice:` tags.
 - **Windows 11 Fluent interface:** Settings-app style segmented controls, smooth page transitions, dark and light themes with Mica, and live render progress.
@@ -47,7 +50,7 @@ You can confirm you have the real file by checking its hash against
 `SHA256SUMS.txt` on the release page:
 
 ```powershell
-Get-FileHash .\AIVideoStudio-3.5.0-setup.exe -Algorithm SHA256
+Get-FileHash .\AIVideoStudio-3.6.0-setup.exe -Algorithm SHA256
 ```
 
 ## First run
@@ -153,6 +156,44 @@ commas and full stops, then broadcast mastering — low-end warmth, compression
 so every word is audible, and loudness set to −14 LUFS, the level YouTube
 Shorts, Reels and TikTok play at.
 
+### Choosing your clips
+
+Press **Preview scenes** on the Create page to see the clip the app picked for
+each scene, next to the line spoken over it. **Try another** steps through up to
+six clips for that scene. When they all look right, press **Render with these
+clips**. If you close the window instead, **Render Video** still uses your
+choices, until you edit the script.
+
+A long voice line uses two clips: the preview chooses the first, and the second
+is the next clip in the list.
+
+![Preview scenes](docs/preview.png)
+
+### Two versions
+
+Set **Versions** to `2` and the app renders the script twice: the same voice and
+captions, different clips in every stock scene. They are saved as `name.mp4` and
+`name (version 2).mp4`, each with its own subtitles and credits file, and the
+Render complete window lets you play both. The voice is made once, so two
+versions take well under twice as long as one.
+
+### Video length
+
+The Create page shows about how long your script will be, and updates as you
+type. It is an estimate: the voice paces every line a little differently.
+
+Set **Length** to `15 s`, `30 s` or `60 s` to fit the video to that length. The
+app adjusts the pauses between scenes first. If that is not enough, it speeds
+the voice up or slows it down by at most 15%, keeping its pitch, and the
+captions follow. A script that is far too long or too short is rendered as
+close as it gets, and the Log tells you roughly how many words to cut or add.
+Scenes with their own `Duration:` or `Padding:` line are left exactly as written.
+
+### Stopping a render
+
+While a video is rendering, the Render button becomes **Cancel**. The render
+stops within a second or two and leaves no unfinished file behind.
+
 ### Captions
 
 Captions are on by default: the words appear on screen as they are spoken, timed
@@ -180,6 +221,8 @@ description.
 | Resolution | `1080p` (8000k bitrate) or `720p` (5000k) |
 | Scene padding | `0s`, `0.25s` (default), `0.5s` or `1s` of pause after each voice line |
 | Voice | 16 free Microsoft Edge neural voices — see **Voices** below |
+| Length | `Auto` (default), or fit to `15 s`, `30 s` or `60 s` — see **Video length** below |
+| Versions | `1` (default) or `2`: the same video twice, with different clips |
 | Saving | **Ask where to save each video** (default): a Save window opens for every render, like a browser download. Off: videos go to the default path and are numbered `name (2).mp4`, `name (3).mp4`… so none is overwritten |
 | Captions | On or off. Style: `Highlight`, `One word` or `Plain`. Size: `Small`, `Medium`, `Large`. Highlight: yellow, green, cyan, pink, white or black. Position: `Lower`, `Center` or `Top` |
 | Background music | On or off, with any track; ducks under the voice automatically |
@@ -283,7 +326,7 @@ pip install -r requirements.txt -r requirements-build.txt
 python -m pytest
 python packaging/make_icon.py
 pyinstaller --noconfirm --clean packaging/ai_video_studio.spec
-"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion=3.5.0 packaging\installer.iss
+"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion=3.6.0 packaging\installer.iss
 ```
 
 Releases are built automatically by GitHub Actions when a `v*` tag is pushed.
