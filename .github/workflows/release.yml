@@ -62,6 +62,11 @@ jobs:
       - name: Generate icon
         run: python packaging/make_icon.py
 
+      - name: Fetch llama.cpp (pinned, checksum-verified)
+        # The program that runs the Smart writer. The script refuses any file
+        # whose SHA-256 is not the one written in packaging/fetch_llama.py.
+        run: python packaging/fetch_llama.py
+
       - name: Build with PyInstaller
         run: pyinstaller --noconfirm --clean packaging/ai_video_studio.spec
 
@@ -73,6 +78,11 @@ jobs:
           if (-not $ff) { throw "bundled ffmpeg missing - did pyinstaller-hooks-contrib change?" }
           if (-not (Test-Path dist/AIVideoStudio/_internal/assets/icon.ico)) { throw "icon asset missing" }
           if (-not (Test-Path dist/AIVideoStudio/_internal/customtkinter/assets)) { throw "customtkinter assets missing" }
+          if (-not (Test-Path dist/AIVideoStudio/_internal/llama/llama-server.exe)) { throw "llama.cpp (Smart writer) missing" }
+          # It must at least start outside the build tree: a missing DLL shows here.
+          & dist/AIVideoStudio/_internal/llama/llama-server.exe --version
+          if ($LASTEXITCODE -ne 0) { throw "bundled llama-server.exe does not run" }
+          if (Get-ChildItem dist/AIVideoStudio -Recurse -Filter *.gguf) { throw "a model file got into the bundle" }
           Write-Host "ffmpeg: $($ff.Name) $([math]::Round($ff.Length/1MB,1)) MB"
           $mb = (Get-ChildItem dist/AIVideoStudio -Recurse | Measure-Object Length -Sum).Sum / 1MB
           Write-Host ("bundle: {0:N0} MB" -f $mb)

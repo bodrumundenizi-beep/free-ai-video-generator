@@ -13,6 +13,7 @@ voiceover, and renders a 1080p or 720p MP4 in portrait or landscape.
 ![Home](docs/home.png)
 
 ## Features
+- **Paste any text, get a script:** Paste plain text, say who the video is for and how long it should be, and a built-in open-source AI writes the script. It runs on your PC: no account, no key, nothing sent anywhere.
 - **Automated Stock Footage:** Automatically fetches relevant video clips from Pexels or Pixabay.
 - **Preview and choose your clips:** See the clip picked for each scene before rendering, and swap any you don't like with one click.
 - **Two versions in one go:** Optionally render the same script twice with different clips, and keep the better one.
@@ -36,9 +37,13 @@ Get the latest [release](../../releases/latest):
 
 **No Python, no pip, no separate FFmpeg install** — everything is in the download.
 
-**Updating:** the app tells you when a newer version is out and links to it. Run
-the new installer over the old one; your settings and API keys are kept.
+**Updating:** the app tells you when a newer version is out. If you used the
+installer, press **Update now**: the app downloads the new version, checks it,
+installs it over the old one and reopens. The portable version links to the
+download instead. Either way your settings, API keys and the Smart writer are kept.
 (Running from source still needs all three; see below.)
+
+**The Smart writer is a separate 2.5 GB download.** The installer fetches it during setup; the portable version fetches it the first time you use **New from text**. It is downloaded once and kept when you update the app. See [New from text](#new-from-text) below.
 
 ### Windows will warn you the first time
 
@@ -50,7 +55,7 @@ You can confirm you have the real file by checking its hash against
 `SHA256SUMS.txt` on the release page:
 
 ```powershell
-Get-FileHash .\AIVideoStudio-3.6.0-setup.exe -Algorithm SHA256
+Get-FileHash .\AIVideoStudio-3.7.0-setup.exe -Algorithm SHA256
 ```
 
 ## First run
@@ -70,6 +75,53 @@ below) need no key at all.
 Keys are stored in plain text in `%APPDATA%\AIVideoStudio\settings.json`.
 
 ![Settings](docs/settings.png)
+
+## New from text
+
+You don't have to write the script format by hand. Press **New from text** on the
+Create page:
+
+1. **Paste your text** and press **Analyse**. Any plain text works: notes, an
+   article, a list.
+2. **Check the answers.** The app reads the text and picks who the video is for
+   (what it is about, the age group), how long it should be and its shape. You
+   also choose where it will be posted. Change anything that isn't right.
+3. **Write script.** Read the result, press **Write again** if you want a
+   different version, then **Use this script** to put it in the editor.
+
+![New from text](docs/newfromtext.png)
+
+There are two writers:
+
+| | Smart writer | Quick split |
+|---|---|---|
+| What it does | Rewrites and shortens your text to fit the length, opens with a hook, and picks search words for each scene | Keeps your words exactly as written, splits them into scenes, and guesses search words from each sentence |
+| Speed | About 10 to 60 seconds | Instant |
+| Needs | A one-time 2.5 GB download and about 8 GB of RAM | Nothing |
+
+If a text is too long for the length you chose, the Smart writer shortens it.
+Quick split leaves out the least important sentences, lists them with a **Put
+back** button, and offers the shortest length that keeps everything.
+
+What the audience changes: the voice, the speaking pace and how short the scenes
+are. The Smart writer is also told who it is writing for, but expect the wording
+to change only a little between audiences.
+
+### About the Smart writer
+
+The Smart writer is [Qwen3 4B](https://huggingface.co/Qwen/Qwen3-4B-GGUF), an
+open-source language model (Apache 2.0 licence), run on your PC by
+[llama.cpp](https://github.com/ggml-org/llama.cpp) (MIT licence).
+
+- **Private:** your text never leaves your computer. No account and no key.
+- **One download:** 2.5 GB, saved in `%LOCALAPPDATA%\AIVideoStudio\models`. A
+  cancelled download carries on from where it stopped. **Settings → Smart
+  writer** shows its state and can download or repair it.
+- **Memory:** it uses about 5 GB while it writes and gives it back straight
+  after. If the PC is short of memory, too slow, or anything else goes wrong, the
+  app uses Quick split and tells you why.
+- **It can be wrong.** It is a small model. Read the script before you render:
+  it sometimes changes a detail, such as "every workday" becoming "every day".
 
 ## Writing a script
 
@@ -271,8 +323,9 @@ report anywhere else.
 ## Needs an internet connection
 
 Stock footage (Pexels, Pixabay) and the voiceover (Microsoft Edge's online
-text-to-speech) come from the network. Your own `local:` files and the rendering
-are local.
+text-to-speech) come from the network. Your own `local:` files, the rendering and
+the Smart writer are local; the Smart writer only needs the internet once, for its
+download.
 
 ## AI Script Generation Prompt
 
@@ -319,14 +372,24 @@ pip install -r requirements.txt
 python src/ai_video_studio.py
 ```
 
+The Smart writer also needs llama.cpp, the program that runs its model. This
+fetches the pinned, checksum-verified Windows build into `vendor/llama/`:
+
+```bash
+python packaging/fetch_llama.py
+```
+
+Without it the app still runs and uses Quick split.
+
 ## Build the installer yourself
 
 ```bash
 pip install -r requirements.txt -r requirements-build.txt
 python -m pytest
 python packaging/make_icon.py
+python packaging/fetch_llama.py
 pyinstaller --noconfirm --clean packaging/ai_video_studio.spec
-"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion=3.6.0 packaging\installer.iss
+"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion=3.7.0 packaging\installer.iss
 ```
 
 Releases are built automatically by GitHub Actions when a `v*` tag is pushed.
@@ -354,7 +417,14 @@ download stock footage (using your own API keys), and Microsoft Edge's online
 text-to-speech to generate the voiceover from your script text. On startup it
 also asks GitHub for this project's latest version number, to tell you about
 updates; that request contains nothing about you, and you can turn it off under
-**Settings → Updates**. Settings and API keys stay on your computer.
+**Settings → Updates**. An update is only downloaded when you press **Update
+now**; it comes from this project's GitHub releases and is checked against the
+SHA-256 published with the release before it is run. Settings and API keys stay
+on your computer.
+
+The Smart writer runs entirely on your computer. Text you paste into **New from
+text** is not sent anywhere. The only connection it makes is the one-time
+download of the model file from Hugging Face.
 
 The app keeps a log file on your PC to help with problems. It is never sent
 anywhere by the app; a problem report quotes from it only when you choose to

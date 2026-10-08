@@ -41,4 +41,19 @@ If you would rather not redistribute a GPL binary at all, the alternatives are
 to ship an LGPL ffmpeg build instead, or to not bundle ffmpeg and have the app
 download it on first run.
 
+## llama.cpp (MIT) and the Smart writer's model (Apache 2.0)
+
+The Smart writer runs a language model on the user's PC. Two things are involved:
+
+- **[llama.cpp](https://github.com/ggml-org/llama.cpp)** (MIT), the program that
+  runs the model. Its unmodified Windows CPU build is bundled in the `llama`
+  folder and started as a **separate process**. The build includes the LLVM
+  OpenMP runtime (`libomp.dll`, Apache 2.0 with LLVM exceptions); its licence
+  file ships beside it. The exact release and its checksum are pinned in
+  `packaging/fetch_llama.py`.
+- **[Qwen3 4B](https://huggingface.co/Qwen/Qwen3-4B-GGUF)** (Apache 2.0, Alibaba
+  Cloud), the model. It is **not** part of this download: the installer or the
+  app fetches the unmodified file `Qwen3-4B-Q4_K_M.gguf` from the publisher's
+  Hugging Face page, and checks its SHA-256, pinned in `src/vidgen/writer.py`.
+
 *This is a description of the licences involved, not legal advice.*

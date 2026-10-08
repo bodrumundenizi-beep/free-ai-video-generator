@@ -142,13 +142,13 @@ from vidgen.script import ScriptError, count_scenes, parse_script  # noqa: E402
 from vidgen import voices  # noqa: E402
 from vidgen.render import TEMP_ROOT  # noqa: E402
 from vidgen import (  # noqa: E402
-    captions, diagnostics, footage, pacing, paths, preview, scenes, updates,
+    captions, diagnostics, draft, footage, pacing, paths, preview, scenes, updates, writer,
 )
 from vidgen.voice import generate_voiceover  # noqa: E402
 
 
 APP_NAME = "AI Video Studio"
-APP_VERSION = "3.6.0"
+APP_VERSION = "3.7.0"
 # Must match AppUserModelID in packaging/installer.iss, or a pinned taskbar
 # shortcut will not group with the running window.
 APP_MODEL_ID = "AIVideoStudio.Desktop.3"
@@ -222,6 +222,13 @@ CAPTION_SETTINGS = (
     ("caption_position", tuple(captions.POSITIONS), captions.DEFAULT_POSITION),
 )
 
+# Who the last "New from text" script was written for: (setting, allowed, default).
+AUDIENCE_SETTINGS = (
+    ("audience_content", tuple(draft.CONTENT), draft.DEFAULT_CONTENT),
+    ("audience_age", tuple(draft.AGES), draft.DEFAULT_AGE),
+    ("audience_platform", tuple(draft.PLATFORMS), draft.DEFAULT_PLATFORM),
+)
+
 
 def default_settings() -> dict:
     return {
@@ -234,6 +241,10 @@ def default_settings() -> dict:
         "check_updates": True,
         "versions": 1,
         "target_length": pacing.DEFAULT_TARGET,
+        "audience_content": draft.DEFAULT_CONTENT,
+        "audience_age": draft.DEFAULT_AGE,
+        "audience_platform": draft.DEFAULT_PLATFORM,
+        "writer_mode": "Smart writer",
         "music_path": "",
         "output_path": os.path.join(default_output_dir(), "final_video.mp4"),
         "aspect": "9:16",
@@ -281,6 +292,11 @@ def load_settings() -> dict:
     data["versions"] = 2 if str(data["versions"]) == "2" else 1
     if data["target_length"] not in pacing.TARGETS:
         data["target_length"] = pacing.DEFAULT_TARGET
+    for key, allowed, fallback in AUDIENCE_SETTINGS:
+        if data[key] not in allowed:
+            data[key] = fallback
+    if data["writer_mode"] not in ("Smart writer", "Quick split"):
+        data["writer_mode"] = "Smart writer"
     if data["music_path"] and not os.path.isfile(str(data["music_path"])):
         data["music_path"] = ""
 
@@ -1521,6 +1537,498 @@ class ScenePreviewDialog(ctk.CTkToplevel):
         self.destroy()
 
 
+WRITER_MODES = ("Smart writer", "Quick split")
+
+
+class DraftDialog(ctk.CTkToplevel):
+    """New from text: paste plain text, say who it is for, get a script.
+
+    Three pages in one window: the text, the questions with answers picked
+    from it, then the script to review. The Smart writer (a model on this PC)
+    runs on a worker thread and reports through the app's UI queue; Quick
+    split is instant and is also what every Smart writer failure falls back to.
+    """
+
+    def __init__(self, app):
+        super().__init__(app)
+        self.app = app
+        self.result = None
+        self.keep = set()        # dropped sentences the user put back
+        self.confirming = False  # "Use this script" was pressed over the user's own script
+        self.busy = False        # a worker is running, or the model is downloading
+        self.stop = threading.Event()
+        self.session = None      # the loaded model, kept from Analyse to Write script
+        self.note = ""           # why Quick split was used instead of the Smart writer
+        self._job = None
+        self._idle = None
+        self._after_download = None
+        self._restore = self.show_text
+        self.title("New from text")
+        self.resizable(False, False)
+        self.configure(fg_color=MAIN_BG)
+        self.transient(app)
+        self.protocol("WM_DELETE_WINDOW", self.close)
+
+        saved = app.audience
+        self.var_content = tk.StringVar(self, saved["audience_content"])
+        self.var_age = tk.StringVar(self, saved["audience_age"])
+        self.var_platform = tk.StringVar(self, saved["audience_platform"])
+        self.var_length = tk.StringVar(self, self.audience().length)
+        self.var_aspect = tk.StringVar(self, self.audience().aspect)
+        self.var_mode = tk.StringVar(self, app.writer_mode)
+        self.var_platform.trace_add("write", self._on_platform)
+        self.var_mode.trace_add("write", lambda *_: self._on_mode())
+
+        card = Card(self)
+        card.pack(fill="both", expand=True, padx=14, pady=14)
+        ctk.CTkLabel(card, text="New from text", font=app.font_title, text_color=TEXT,
+                     anchor="w").pack(fill="x", padx=20, pady=(18, 2))
+        self.intro = ctk.CTkLabel(card, font=app.font_body, text_color=TEXT_MUTED,
+                                  justify="left", wraplength=600, anchor="w")
+        self.intro.pack(fill="x", padx=20, pady=(0, 10))
+
+        self.text_page = ctk.CTkFrame(card, fg_color="transparent")
+        self.ask_page = ctk.CTkFrame(card, fg_color="transparent")
+        self.review_page = ctk.CTkFrame(card, fg_color="transparent")
+        self._build_text(self.text_page)
+        self._build_ask(self.ask_page)
+        self._build_review(self.review_page)
+
+        buttons = ctk.CTkFrame(card, fg_color="transparent")
+        buttons.pack(side="bottom", fill="x", padx=20, pady=(12, 18))
+        self.main_button = ctk.CTkButton(
+            buttons, width=170, height=32, corner_radius=4, font=app.font_body,
+            fg_color=ACCENT, hover_color=ACCENT_HOVER, text_color=ACCENT_TEXT,
+            text_color_disabled=ACCENT_TEXT)
+        self.main_button.pack(side="right")
+        self.back_button = self._plain(buttons, "Back", self.show_text)
+        self._plain(buttons, "Close", self.close).pack(side="left")
+
+        # What the Smart writer is doing, shown only while it is doing it.
+        self.working = ctk.CTkFrame(card, fg_color="transparent")
+        self.working_label = ctk.CTkLabel(self.working, text="", font=app.font_tiny,
+                                          text_color=TEXT_MUTED, anchor="w")
+        self.working_label.pack(fill="x")
+        self.working_bar = ctk.CTkProgressBar(self.working, height=4, corner_radius=2,
+                                              progress_color=ACCENT, fg_color=FIELD_BG)
+        self.working_bar.pack(fill="x", pady=(4, 0))
+
+        app.writer_listeners.append(self._on_download)
+        self.show_text()
+        centre_on(self, app)
+        self.text_box.focus_set()
+
+    def _plain(self, master, text, command, width=96):
+        return ctk.CTkButton(
+            master, text=text, width=width, height=32, corner_radius=4, font=self.app.font_body,
+            fg_color=FIELD_BG, hover_color=CARD_HOVER, border_width=1, border_color=FIELD_BORDER,
+            text_color=TEXT, command=command)
+
+    def _menu(self, master, values, variable):
+        return ctk.CTkOptionMenu(
+            master, values=list(values), variable=variable, width=230, height=32,
+            corner_radius=4, font=self.app.font_body, fg_color=FIELD_BG, button_color=FIELD_BG,
+            button_hover_color=CARD_HOVER, text_color=TEXT, dropdown_fg_color=CARD_BG,
+            dropdown_text_color=TEXT, dropdown_hover_color=CARD_HOVER,
+            dropdown_font=self.app.font_body, dynamic_resizing=False)
+
+    def _show(self, page, intro, button, command, back=None):
+        """Bring one of the three pages forward."""
+        self.confirming = False
+        for other in (self.text_page, self.ask_page, self.review_page):
+            other.pack_forget()
+        page.pack(fill="both", expand=True)
+        self.intro.configure(text=intro)
+        self.main_button.configure(text=button, command=command, state="normal")
+        self.back_button.pack_forget()
+        if back:
+            self.back_button.configure(text="Back", command=back)
+            self.back_button.pack(side="right", padx=(0, 8))
+
+    def smart(self) -> bool:
+        return self.var_mode.get() == WRITER_MODES[0]
+
+    # -- working: the Smart writer or its download is busy -------------------------
+    def _working(self, message, fraction=None):
+        """Show what is happening and turn Back into Cancel."""
+        self.busy = True
+        self.main_button.configure(state="disabled")
+        self.back_button.configure(text="Cancel", command=self.cancel)
+        self.back_button.pack(side="right", padx=(0, 8))
+        self.working_label.configure(text=message)
+        if not self.working.winfo_ismapped():
+            self.working.pack(side="bottom", fill="x", padx=20, pady=(8, 0))
+        if fraction is None:
+            if self.working_bar.cget("mode") != "indeterminate":
+                self.working_bar.configure(mode="indeterminate")
+                self.working_bar.start()
+        else:
+            self.working_bar.stop()
+            self.working_bar.configure(mode="determinate")
+            self.working_bar.set(fraction)
+
+    def _rest(self):
+        """Back to the page that was showing before the work began."""
+        self.busy = False
+        self.working_bar.stop()
+        self.working_bar.configure(mode="determinate")
+        self.working.pack_forget()
+        self._restore()
+
+    def cancel(self):
+        self.working_label.configure(text="Stopping...")
+        self.stop.set()
+        if self.app.writer_downloading:
+            self.app.cancel_writer_download()
+
+    def _unload(self):
+        """Give the model's memory back when the user has stopped to think."""
+        self._idle = None
+        if not self.busy and self.session is not None:
+            self.session.close()
+
+    def _start(self, job, message):
+        """Run ``job`` ("suggest" or "write") on a worker thread."""
+        if self._idle:
+            self.after_cancel(self._idle)
+            self._idle = None
+        self.stop.clear()
+        self._working(message)
+        # Everything the worker needs is read here: it must not touch Tk variables.
+        args = (job, self.text(), self.audience(), self.var_length.get(),
+                self.app.settings["padding"])
+        threading.Thread(target=self._work, args=args, daemon=True).start()
+
+    def _post(self, **payload):
+        self.app._queue.put(("draft", dict(payload, dialog=self)))
+
+    def _work(self, job, text, audience, length, padding):
+        """Worker thread: never touches a widget."""
+        keep_loaded = False
+        try:
+            if self.session is None:
+                self.session = writer.Session(self.stop.is_set)
+            if job == "suggest":
+                found = self.session.suggest(text, audience, padding)
+                keep_loaded = True  # Write script comes next; don't load it twice
+                self._post(event="suggested", found=found)
+            else:
+                self._post(event="written", result=self.session.write(text, audience, length, padding))
+        except writer.Stopped:
+            self._post(event="stopped")
+        except (writer.WriterError, draft.DraftError, ScriptError) as exc:
+            self._post(event="failed", job=job, message=str(exc))
+        except Exception as exc:  # noqa: BLE001 - a thread must not die silently
+            self._post(event="failed", job=job, trace=traceback.format_exc(),
+                       message=f"The Smart writer hit an unexpected problem ({type(exc).__name__}).")
+        finally:
+            if not keep_loaded and self.session is not None:
+                self.session.close()
+
+    def on_event(self, payload):
+        """UI thread: a worker finished."""
+        if not self.winfo_exists():
+            return
+        event = payload["event"]
+        if payload.get("trace"):
+            self.app.session_log.write(payload["trace"])
+        self.busy = False
+        if event == "stopped":
+            self._rest()
+        elif event == "suggested":
+            self._rest()
+            self._apply(payload["found"])
+            # The model stays loaded for Write script, but not for ever.
+            self._idle = self.after(120_000, self._unload)
+        elif event == "written":
+            self._rest()
+            self.note, self.result = "", payload["result"]
+            self.show_review()
+        elif payload["job"] == "suggest":
+            self._rest()
+            self._apply(self._rule_suggestion())
+        else:
+            self._rest()
+            self._quick_split(payload["message"])
+
+    # -- page 1: the text ----------------------------------------------------------
+    def _build_text(self, page):
+        app = self.app
+        self.text_box = ctk.CTkTextbox(
+            page, width=620, height=260, font=app.font_body, corner_radius=4,
+            fg_color=FIELD_BG, text_color=TEXT, border_width=0, wrap="word")
+        self.text_box.pack(padx=14)
+        for event in ("<KeyRelease>", "<<Paste>>", "<<Cut>>"):
+            self.text_box.bind(event, self._on_text)
+        self.found = ctk.CTkLabel(page, text="Paste or type your text above.", font=app.font_tiny,
+                                  text_color=TEXT_DIM, anchor="w", justify="left", wraplength=600)
+        self.found.pack(fill="x", padx=20, pady=(6, 8))
+
+    def show_text(self):
+        self._restore = self.show_text
+        self._show(self.text_page, "Paste any text and press Analyse. The app reads it and "
+                   "suggests who the video is for and how long it should be.",
+                   "Analyse", self.analyse)
+
+    def _rule_suggestion(self):
+        return draft.suggest(self.text(), self.audience(), self.app.settings["padding"])
+
+    def analyse(self):
+        """Read the text and pick answers to the questions; the user can change them all."""
+        if self.busy:
+            return
+        if not self.text():
+            self.found.configure(text="Paste some text first.", text_color=ERR_COLOR)
+            return
+        self.keep = set()
+        if self.smart() and writer.ready()[0]:
+            self._start("suggest", "The Smart writer is reading your text...")
+        else:
+            self._apply(self._rule_suggestion())
+
+    def _apply(self, found):
+        self.var_content.set(found.audience.content)
+        self.var_age.set(found.audience.age)
+        self.var_length.set(found.length)  # after the platform: it presets the length
+        self.reason.configure(text=found.reason)
+        self.show_ask()
+
+    # -- page 2: the questions -----------------------------------------------------
+    def _build_ask(self, page):
+        app = self.app
+        self.reason = ctk.CTkLabel(page, text="", font=app.font_body, text_color=TEXT,
+                                   anchor="w", justify="left", wraplength=600)
+        self.reason.pack(fill="x", padx=20, pady=(0, 4))
+        self.ask_error = ctk.CTkLabel(page, text="", font=app.font_tiny, text_color=TEXT_DIM,
+                                      anchor="w", justify="left", wraplength=600)
+        self.ask_error.pack(fill="x", padx=20, pady=(0, 8))
+        questions = ctk.CTkFrame(page, fg_color="transparent")
+        questions.pack(fill="x", padx=20)
+        rows = (
+            ("Who is it for?", lambda m: self._menu(m, draft.CONTENT, self.var_content)),
+            ("Age", lambda m: FluentSegmented(m, app, list(draft.AGES), self.var_age, 380)),
+            ("Where will it go?", lambda m: self._menu(m, draft.PLATFORMS, self.var_platform)),
+            ("How long?", lambda m: FluentSegmented(m, app, draft.LENGTHS, self.var_length, 420)),
+            ("Aspect ratio", lambda m: FluentSegmented(m, app, RATIO_OPTIONS, self.var_aspect, 170)),
+            ("Written by", lambda m: FluentSegmented(m, app, list(WRITER_MODES), self.var_mode, 260)),
+        )
+        for position, (label, make) in enumerate(rows):
+            ctk.CTkLabel(questions, text=label, font=app.font_body, text_color=TEXT, width=140,
+                         anchor="w").grid(row=position, column=0, sticky="w", pady=5)
+            make(questions).grid(row=position, column=1, sticky="w", pady=5)
+        self.mode_hint = ctk.CTkLabel(page, text="", font=app.font_tiny, text_color=TEXT_DIM,
+                                      anchor="w", justify="left", wraplength=600)
+        self.mode_hint.pack(fill="x", padx=20, pady=(6, 0))
+
+    def audience(self) -> draft.Audience:
+        return draft.Audience(self.var_content.get(), self.var_age.get(), self.var_platform.get())
+
+    def _on_platform(self, *_args):
+        """A platform suggests a length and a shape; both can still be changed."""
+        self.var_length.set(self.audience().length)
+        self.var_aspect.set(self.audience().aspect)
+
+    def _on_text(self, _event=None):
+        if self._job:
+            self.after_cancel(self._job)
+        self._job = self.after(250, self._analyse)
+
+    def text(self) -> str:
+        return self.text_box.get("1.0", "end").strip()
+
+    def _analyse(self):
+        self._job = None
+        found = draft.analyse(self.text(), padding=self.app.settings["padding"])
+        self.found.configure(text_color=TEXT_DIM)
+        if not found.words:
+            self.found.configure(text="Paste or type your text above.")
+            return
+        parts = [f"{found.words} words", f"{found.sentences} sentences",
+                 f"about {round(found.seconds)} s read in full"]
+        if found.topics:
+            parts.append("about: " + ", ".join(found.topics[:4]))
+        self.found.configure(text=" · ".join(parts))
+
+    def needs_download(self) -> bool:
+        return self.smart() and not writer.installed() and writer.runtime_path() is not None
+
+    def _on_mode(self):
+        """Say what the chosen writer does, and what the button will do."""
+        if self._restore != self.show_ask or self.busy:
+            return
+        model = writer.MODEL
+        if self.needs_download():
+            hint = (f"The Smart writer is a one-time download of {model.gigabytes} "
+                    f"({model.name}, {model.licence} licence). After that it runs on this PC: "
+                    "your text is never sent anywhere.")
+            button = f"Download ({model.gigabytes})"
+        elif self.smart():
+            hint = ("The Smart writer rewrites your text to fit the length and picks the search "
+                    "words. It runs on this PC and takes 10 to 60 seconds.")
+            button = "Write script"
+        else:
+            hint = ("Quick split keeps your words exactly as written and splits them into "
+                    "scenes. It is instant.")
+            button = "Write script"
+        self.mode_hint.configure(text=hint)
+        self.main_button.configure(text=button, command=self.write)
+
+    def show_ask(self):
+        self._restore = self.show_ask
+        self.ask_error.configure(text="These answers were picked from your text. Change "
+                                      "anything that isn't right.", text_color=TEXT_DIM)
+        self._show(self.ask_page, "Who is the video for, and how long should it be?",
+                   "Write script", self.write, back=self.show_text)
+        self._on_mode()
+
+    # -- writing -------------------------------------------------------------------
+    def write(self):
+        if self.busy:
+            return
+        if not self.smart():
+            self._quick_split()
+        elif self.needs_download():
+            self._after_download = self.write
+            self.app.start_writer_download()
+            self._working(f"Downloading the Smart writer ({writer.MODEL.gigabytes})...", 0)
+        else:
+            ok, why = writer.ready()
+            if ok:
+                self._start("write", "The Smart writer is writing your script. This takes "
+                                     "10 to 60 seconds...")
+            else:
+                self._quick_split(why)
+
+    def _quick_split(self, because=""):
+        """Write with the user's own words. ``because`` is why the Smart writer wasn't used."""
+        try:
+            self.result = draft.write(self.text(), self.audience(), self.var_length.get(),
+                                      keep=self.keep, padding=self.app.settings["padding"])
+        except (draft.DraftError, ScriptError) as exc:
+            self.ask_error.configure(text=str(exc), text_color=ERR_COLOR)
+            return
+        self.note = because
+        self.show_review()
+
+    def _on_download(self, payload):
+        """UI thread: the model download moved on (it may have been started in Settings)."""
+        if not self.winfo_exists() or not self.busy or self._after_download is None:
+            return
+        event = payload["event"]
+        if event == "progress":
+            done, total = payload["done"], payload["total"]
+            self._working(f"Downloading the Smart writer: {done / 1e9:.2f} of "
+                          f"{total / 1e9:.2f} GB. You can cancel and carry on later.",
+                          done / total if total else 0)
+            return
+        after, self._after_download = self._after_download, None
+        self._rest()
+        if event == "done":
+            after()
+        elif event == "failed":
+            self.ask_error.configure(text=payload["message"], text_color=ERR_COLOR)
+        else:
+            self.ask_error.configure(text="Download paused. It carries on from here next time.",
+                                     text_color=TEXT_DIM)
+
+    # -- page 3: the script --------------------------------------------------------
+    def _build_review(self, page):
+        app = self.app
+        self.script_view = ctk.CTkTextbox(
+            page, width=620, height=230, font=app.font_mono, corner_radius=4,
+            fg_color=FIELD_BG, text_color=TEXT, border_width=0, wrap="word")
+        self.script_view.pack(padx=14)
+        self.summary = ctk.CTkLabel(page, text="", font=app.font_tiny, text_color=TEXT_MUTED,
+                                    anchor="w", justify="left", wraplength=600)
+        self.summary.pack(fill="x", padx=20, pady=(6, 0))
+        self.dropped_box = ctk.CTkFrame(page, fg_color="transparent")
+        self.dropped_box.pack(fill="x", padx=14, pady=(6, 0))
+
+    def show_review(self):
+        app, result = self.app, self.result
+        self._restore = self.show_review
+        self._show(self.review_page, "Here is the script. You can still edit it after it is in "
+                   "the editor, and Preview scenes shows the clips it finds.",
+                   "Use this script", self.use, back=self.show_ask)
+        self.script_view.configure(state="normal")
+        self.script_view.delete("1.0", "end")
+        self.script_view.insert("1.0", result.script)
+        self.script_view.configure(state="disabled")
+        plural = "scene" if len(result.scenes) == 1 else "scenes"
+        self.summary.configure(
+            text=f"{result.source} · about {round(result.seconds)} s · {len(result.scenes)} "
+                 f"{plural} · voice: {voices.persona(result.voice).short} · {result.aspect}",
+            text_color=TEXT_MUTED)
+
+        for child in self.dropped_box.winfo_children():
+            child.destroy()
+        if self.note:
+            ctk.CTkLabel(self.dropped_box, font=app.font_tiny, text_color=ERR_COLOR, anchor="w",
+                         justify="left", wraplength=590,
+                         text=f"{self.note} This script was made with Quick split instead."
+                         ).pack(fill="x", padx=6, pady=(0, 4))
+        if result.source == "Smart writer":
+            again = ctk.CTkFrame(self.dropped_box, fg_color="transparent")
+            again.pack(fill="x", padx=6)
+            ctk.CTkLabel(again, font=app.font_tiny, text_color=TEXT_DIM, anchor="w",
+                         text="Not quite right? Each try comes out a little different."
+                         ).pack(side="left")
+            self._plain(again, "Write again", self.write, width=110).pack(side="right")
+        if not result.dropped:
+            return
+        count = len(result.dropped)
+        header = ctk.CTkFrame(self.dropped_box, fg_color="transparent")
+        header.pack(fill="x", padx=6)
+        ctk.CTkLabel(header, font=app.font_body, text_color=TEXT, anchor="w",
+                     text=f"Left out to fit {result.length}: {count} "
+                          f"sentence{'' if count == 1 else 's'}").pack(side="left")
+        longer = result.longer
+        label = "Keep everything" if longer == draft.KEEP_ALL else f"Use {longer} and keep everything"
+        self._plain(header, label, lambda: self.use_length(longer), width=230).pack(side="right")
+        listing = ctk.CTkScrollableFrame(
+            self.dropped_box, width=600, height=min(count, 3) * 36, fg_color="transparent",
+            scrollbar_fg_color=SCROLLBAR_BG, scrollbar_button_color=SCROLLBAR_THUMB,
+            scrollbar_button_hover_color=SCROLLBAR_THUMB_HOVER)
+        listing.pack(fill="x")
+        listing.grid_columnconfigure(0, weight=1)
+        for position, (index, sentence) in enumerate(result.dropped):
+            ctk.CTkLabel(listing, text=ellipsize(sentence, 74), font=app.font_tiny,
+                         text_color=TEXT_MUTED, anchor="w").grid(row=position, column=0,
+                                                                 sticky="w", pady=3)
+            self._plain(listing, "Put back", lambda i=index: self.put_back(i),
+                        width=84).grid(row=position, column=1, padx=(8, 4), pady=3)
+
+    def put_back(self, index):
+        self.keep.add(index)
+        self._quick_split(self.note)
+
+    def use_length(self, length):
+        self.var_length.set(length)
+        self._quick_split(self.note)
+
+    def use(self):
+        if self.busy:
+            return
+        # Never silently replace a script the user wrote: ask once, in place.
+        if self.app.script_is_the_users_own() and not self.confirming:
+            self.confirming = True
+            self.summary.configure(text="This replaces the script in the editor. Press again "
+                                        "to replace it.", text_color=ERR_COLOR)
+            self.main_button.configure(text="Replace my script")
+            return
+        self.app.use_draft(self.result, self.audience(), self.var_mode.get())
+        self.close()
+
+    def close(self):
+        """Stop the model (a download carries on; Settings shows it) and close."""
+        self.stop.set()
+        if self.session is not None:
+            self.session.close()
+        if self._on_download in self.app.writer_listeners:
+            self.app.writer_listeners.remove(self._on_download)
+        self.destroy()
+
+
 class ReportDialog(ctk.CTkToplevel):
     """A problem report the user reads, edits and sends themselves.
 
@@ -1597,13 +2105,24 @@ class ReportDialog(ctk.CTkToplevel):
 def centre_on(window, app):
     """Place a dialog over the main window and make it modal."""
     window.update_idletasks()
+
+    def grab():
+        try:
+            window.grab_set()
+        except Exception:
+            pass
+
+    if app.state() == "iconic":
+        # The main window is minimized (a render finished in the background, say).
+        # A dialog that takes the grab now would swallow the taskbar's "restore" and
+        # the app could never be brought back, so bring the app back first.
+        app.deiconify()
+        app.update_idletasks()
+        window.lift()
     x = app.winfo_rootx() + (app.winfo_width() - window.winfo_width()) // 2
     y = app.winfo_rooty() + (app.winfo_height() - window.winfo_height()) // 3
     window.geometry(f"+{max(x, 0)}+{max(y, 0)}")
-    try:
-        window.grab_set()
-    except Exception:
-        pass
+    grab()
 
 
 # =============================================================================
@@ -1646,6 +2165,10 @@ class App(ctk.CTk):
         self._key_tests = {}   # token -> callback(ok, message)
         self._cancel = None    # threading.Event of the render in progress
         self.scene_picker = None   # clips chosen in the scene preview
+        self._last_draft = None    # the last script "New from text" put in the editor
+        self.writer_listeners = []     # callables told how the model download is going
+        self.writer_downloading = False
+        self._writer_stop = threading.Event()
 
         self._build_fonts()
         self._build_vars()
@@ -1705,6 +2228,8 @@ class App(ctk.CTk):
         self.caption_vars = {key: tk.StringVar(value=s[key])
                              for key, _allowed, _default in CAPTION_SETTINGS}
         self.music_path = s["music_path"]
+        self.audience = {key: s[key] for key, _allowed, _default in AUDIENCE_SETTINGS}
+        self.writer_mode = s["writer_mode"]
         self.var_music_track = tk.StringVar(value="")
         self._tracks = {}
 
@@ -1727,6 +2252,8 @@ class App(ctk.CTk):
             "check_updates": bool(self.var_check_updates.get()),
             "versions": 2 if self.var_versions.get() == "2" else 1,
             "target_length": self.var_target.get(),
+            **self.audience,
+            "writer_mode": self.writer_mode,
             "music_path": self.music_path,
             "output_path": self.var_output.get().strip(),
             "aspect": self.var_aspect.get(),
@@ -1799,18 +2326,25 @@ class App(ctk.CTk):
         self.update_bar_label = ctk.CTkLabel(self.update_bar, text="", font=self.font_body,
                                              text_color=TEXT, anchor="w")
         self.update_bar_label.grid(row=0, column=1, sticky="w")
-        ctk.CTkButton(
-            self.update_bar, text="Download", width=96, height=30, corner_radius=4,
+        # "Update now" for an installed copy, "Download" (the release page) otherwise.
+        self.update_action = ctk.CTkButton(
+            self.update_bar, text="Download", width=110, height=30, corner_radius=4,
             font=self.font_body, fg_color=ACCENT, hover_color=ACCENT_HOVER,
-            text_color=ACCENT_TEXT, command=self.open_update_page,
-        ).grid(row=0, column=2, padx=(8, 0))
-        ctk.CTkButton(
+            text_color=ACCENT_TEXT, text_color_disabled=ACCENT_TEXT,
+            command=self.open_update_page,
+        )
+        self.update_action.grid(row=0, column=2, padx=(8, 0))
+        self.update_later = ctk.CTkButton(
             self.update_bar, text="Later", width=72, height=30, corner_radius=4,
             font=self.font_body, fg_color=FIELD_BG, hover_color=CARD_HOVER,
             border_width=1, border_color=FIELD_BORDER, text_color=TEXT,
             command=self.update_bar.grid_remove,
-        ).grid(row=0, column=3, padx=(6, 12))
+        )
+        self.update_later.grid(row=0, column=3, padx=(6, 12))
         self.update_bar.grid_remove()
+        self.update_release = None     # the newer release, once one is found
+        self._updating = False
+        self._update_stop = threading.Event()
 
         self.content = ctk.CTkFrame(self, fg_color="transparent")
         self.content.grid(row=1, column=1, sticky="nsew")
@@ -2130,14 +2664,21 @@ class App(ctk.CTk):
             hover_color=ACCENT_HOVER, text_color=ACCENT_TEXT,
             command=self.start_render,
         )
-        self.render_button.grid(row=0, column=2, sticky="e")
+        self.render_button.grid(row=0, column=3, sticky="e")
         self.scenes_button = ctk.CTkButton(
             top, text=f"{self.icon('scenes')}   Preview scenes", font=self.font_body,
             width=150, height=38, corner_radius=4, fg_color=FIELD_BG, hover_color=CARD_HOVER,
             border_width=1, border_color=FIELD_BORDER, text_color=TEXT,
             command=self.open_scene_preview,
         )
-        self.scenes_button.grid(row=0, column=1, sticky="e", padx=(0, 8))
+        self.scenes_button.grid(row=0, column=2, sticky="e", padx=(0, 8))
+        self.draft_button = ctk.CTkButton(
+            top, text=f"{self.icon('script')}   New from text", font=self.font_body,
+            width=150, height=38, corner_radius=4, fg_color=FIELD_BG, hover_color=CARD_HOVER,
+            border_width=1, border_color=FIELD_BORDER, text_color=TEXT,
+            command=self.open_draft,
+        )
+        self.draft_button.grid(row=0, column=1, sticky="e", padx=(0, 8))
 
         self.progress = ctk.CTkProgressBar(control_card, height=4, corner_radius=2,
                                            progress_color=ACCENT, fg_color=FIELD_BG)
@@ -2568,6 +3109,24 @@ class App(ctk.CTk):
             command=self.apply_effects,
         ).pack(side="left")
 
+        self._caption(page, "SCRIPT WRITER", next(rows))
+
+        writer_row = SettingRow(
+            page, self, self.icon("script"), "Smart writer",
+            f"{writer.MODEL.name}, an open-source AI that writes scripts on this PC. "
+            "Nothing you paste is sent anywhere")
+        writer_row.grid(row=next(rows), column=0, sticky="ew", pady=PAD // 2)
+        self.writer_state = ctk.CTkLabel(writer_row.control, text="", font=self.font_body,
+                                         text_color=TEXT_MUTED)
+        self.writer_state.pack(side="left", padx=(0, 12))
+        self.writer_button = ctk.CTkButton(
+            writer_row.control, text="", width=96, height=32, corner_radius=4,
+            font=self.font_body, fg_color=FIELD_BG, hover_color=CARD_HOVER,
+            border_width=1, border_color=FIELD_BORDER, text_color=TEXT)
+        self.writer_button.pack(side="left")
+        self.writer_listeners.append(self._writer_row_changed)
+        self._writer_row_changed()
+
         self._caption(page, "UPDATES", next(rows))
 
         updates_row = SettingRow(page, self, self.icon("info"), "Check for updates on startup",
@@ -2777,7 +3336,7 @@ class App(ctk.CTk):
 
         def worker():
             try:
-                found = updates.latest_release(APP_VERSION)
+                found = updates.latest(APP_VERSION)
             except Exception:  # noqa: BLE001 - an update check never interrupts
                 found = None
             self._queue.put(("update", {"found": found, "manual": manual}))
@@ -2791,13 +3350,13 @@ class App(ctk.CTk):
                 self.update_status.configure(
                     text="Couldn't check right now - try again later.", text_color=TEXT_MUTED)
             return
-        tag, page = found
+        tag, page = found.tag, found.page
         if updates.is_newer(tag, APP_VERSION):
-            version = tag.lstrip("vV")
+            version = found.version
             self.update_url = page
-            self.update_bar_label.configure(
-                text=f"Version {version} is available. You have {APP_VERSION}.")
-            self.update_bar.grid()
+            if not self._updating:
+                self.update_release = found
+                self._offer_update()
             self.update_status.configure(text=f"Version {version} is available.",
                                          text_color=ACCENT)
         else:
@@ -2806,6 +3365,119 @@ class App(ctk.CTk):
 
     def open_update_page(self):
         webbrowser.open(self.update_url)
+
+    # -- updating from inside the app ----------------------------------------
+    def _app_dir(self) -> str:
+        """The folder this copy of the app runs from."""
+        return os.path.dirname(os.path.abspath(sys.executable))
+
+    def _can_self_update(self) -> bool:
+        """Only a built copy that the installer put there can replace itself."""
+        found = self.update_release
+        return bool(IS_FROZEN and found and found.can_install
+                    and updates.is_installed_copy(self._app_dir()))
+
+    def _offer_update(self, message=None, allow_install=True):
+        """Show the bar: Update now where the app can do it, the release page otherwise."""
+        found = self.update_release
+        self.update_bar_label.configure(
+            text=message or f"Version {found.version} is available. You have {APP_VERSION}.")
+        if allow_install and self._can_self_update():
+            self.update_action.configure(text="Update now", command=self.start_update,
+                                         state="normal")
+        else:
+            self.update_action.configure(text="Download", command=self.open_update_page,
+                                         state="normal")
+        self.update_later.configure(text="Later", command=self.update_bar.grid_remove)
+        self.update_bar.grid()
+
+    def start_update(self):
+        """Download the new installer (checked against the release's checksum), then run it."""
+        if self._updating or not self._can_self_update():
+            return
+        if self.is_rendering:
+            self._offer_update("Finish or cancel the render first, then press Update now.")
+            return
+        found = self.update_release
+        self._updating = True
+        self._update_stop = stop = threading.Event()
+        self.update_bar_label.configure(text=f"Downloading version {found.version}...")
+        self.update_action.configure(text="Updating...", state="disabled")
+        self.update_later.configure(text="Cancel", command=stop.set)
+        self.append_log(f"⬇️ Downloading version {found.version}...")
+        folder = os.path.join(TEMP_ROOT, "update")
+
+        def worker():
+            last = 0.0
+
+            def progress(done, total):
+                nonlocal last
+                now = time.monotonic()
+                if now - last >= 0.25 or done >= total:
+                    last = now
+                    self._queue.put(("updater", {"event": "progress", "done": done,
+                                                 "total": total}))
+
+            try:
+                path = updates.download_installer(found, folder, progress, stop.is_set)
+                self._queue.put(("updater", {"event": "ready", "path": path}))
+            except footage.Stopped:
+                self._queue.put(("updater", {"event": "stopped"}))
+            except updates.UpdateError as exc:
+                self._queue.put(("updater", {"event": "failed", "message": str(exc)}))
+            except Exception as exc:  # noqa: BLE001 - a thread must not die silently
+                self._queue.put(("updater", {
+                    "event": "failed", "trace": traceback.format_exc(),
+                    "message": f"The update hit an unexpected problem ({type(exc).__name__})."}))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _updater_event(self, payload):
+        """UI thread: the update download moved on."""
+        event, found = payload["event"], self.update_release
+        if event == "progress":
+            self.update_bar_label.configure(
+                text=f"Downloading version {found.version}: {payload['done'] / 1e6:.0f} of "
+                     f"{payload['total'] / 1e6:.0f} MB")
+            return
+        self._updating = False
+        if payload.get("trace"):
+            self.session_log.write(payload["trace"])
+        if event == "ready":
+            self._install_update(payload["path"])
+        elif event == "stopped":
+            self.append_log("⏹️ Update cancelled.")
+            self._offer_update()
+        else:
+            self.append_log(f"⚠️ {payload['message']}")
+            # Whatever went wrong, the release page still works.
+            self._offer_update(f"{payload['message']} You can still get it from the "
+                               "release page.", allow_install=False)
+
+    def _install_update(self, path):
+        """Hand over to the installer and close, so it can replace this copy's files."""
+        if self.is_rendering:   # a render was started while the update downloaded
+            self._offer_update("The update is ready. Finish or cancel the render first, "
+                               "then press Update now.")
+            return
+        command = updates.installer_command(path, self._app_dir())
+        try:
+            # Detached: the installer must outlive this process, which it is about to replace.
+            flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(
+                subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+            subprocess.Popen(command, creationflags=flags, close_fds=True)
+        except OSError as exc:
+            self.append_log(f"⚠️ The installer could not be started: {exc}")
+            self._offer_update("The update could not be started. You can still get it from "
+                               "the release page.", allow_install=False)
+            return
+        self.append_log("🔄 Installing the update; the app will reopen.")
+        # Nothing of ours may still be running when the installer replaces the files.
+        self._writer_stop.set()
+        for window in list(self.winfo_children()):
+            if isinstance(window, DraftDialog):
+                window.close()
+        self._on_close()
 
     def _has_footage_key(self) -> bool:
         return bool(self.var_api.get().strip() or self.var_pixabay.get().strip())
@@ -2862,6 +3534,15 @@ class App(ctk.CTk):
                         payload["dialog"].on_event(payload)
                     except tk.TclError:
                         pass   # the preview window was closed meanwhile
+                elif kind == "draft":
+                    try:
+                        payload["dialog"].on_event(payload)
+                    except tk.TclError:
+                        pass   # the window was closed meanwhile
+                elif kind == "writer":
+                    self._writer_event(payload)
+                elif kind == "updater":
+                    self._updater_event(payload)
                 elif kind == "crash":
                     self._unexpected(payload["trace"])
                 elif kind == "update":
@@ -2903,6 +3584,7 @@ class App(ctk.CTk):
                                          text=f"{self.icon('play')}   Render Video")
             self.log_cancel.pack_forget()
         self.scenes_button.configure(state="disabled" if busy else "normal")
+        self.draft_button.configure(state="disabled" if busy else "normal")
         self.row_render.button.configure(state="disabled" if busy else "normal")
         for bar in self._progress_bars():
             if busy:
@@ -2956,6 +3638,125 @@ class App(ctk.CTk):
         width, height, _orientation, _bitrate = resolve_target(
             self.var_aspect.get(), self.var_resolution.get())
         ScenePreviewDialog(self, rows, picker, (width, height))
+
+    # -- new from text -------------------------------------------------------
+    def open_draft(self):
+        if not self.is_rendering:
+            DraftDialog(self)
+
+    def script_is_the_users_own(self) -> bool:
+        """Whether replacing the editor's script would lose something they wrote."""
+        current = self.script_box.get("1.0", "end").strip()
+        return current not in ("", DEFAULT_SCRIPT.strip(), self._last_draft)
+
+    def use_draft(self, result, audience, mode=None):
+        """Put a written script in the editor, with the settings it was written for."""
+        self._last_draft = result.script.strip()
+        self.writer_mode = mode or self.writer_mode
+        self.audience = {"audience_content": audience.content, "audience_age": audience.age,
+                         "audience_platform": audience.platform}
+        self.script_box.delete("1.0", "end")
+        self.script_box.insert("1.0", result.script)
+        self.var_voice.set(voices.persona(result.voice).label)
+        self.var_aspect.set(result.aspect)
+        self.var_target.set(result.target)
+        self.scene_picker = None
+        self._commit_script()
+        self.select_page("create")
+
+    # -- the Smart writer's one-time download --------------------------------
+    def start_writer_download(self):
+        """Fetch the model on a worker thread. Listeners hear how it goes."""
+        if self.writer_downloading:
+            return
+        self.writer_downloading = True
+        self._writer_stop = stop = threading.Event()
+        self.append_log(f"⬇️ Downloading the Smart writer ({writer.MODEL.gigabytes})...")
+
+        def worker():
+            last = 0.0
+
+            def progress(done, total):
+                nonlocal last
+                now = time.monotonic()
+                if now - last >= 0.25 or done >= total:  # a few times a second is plenty
+                    last = now
+                    self._queue.put(("writer", {"event": "progress", "done": done, "total": total}))
+
+            try:
+                writer.download(progress, stop.is_set)
+                self._queue.put(("writer", {"event": "done"}))
+            except writer.Stopped:
+                self._queue.put(("writer", {"event": "stopped"}))
+            except writer.WriterError as exc:
+                self._queue.put(("writer", {"event": "failed", "message": str(exc)}))
+            except Exception as exc:  # noqa: BLE001 - a thread must not die silently
+                self._queue.put(("writer", {
+                    "event": "failed", "trace": traceback.format_exc(),
+                    "message": f"The download hit an unexpected problem ({type(exc).__name__})."}))
+
+        threading.Thread(target=worker, daemon=True).start()
+        # Tell the listeners at once, so their buttons read Cancel before the first byte.
+        self._writer_event({"event": "progress", "done": 0, "total": writer.MODEL.size})
+
+    def cancel_writer_download(self):
+        self._writer_stop.set()
+
+    def repair_writer(self):
+        """Throw the model away and fetch it again."""
+        if not self.writer_downloading:
+            writer.remove()
+            self.start_writer_download()
+
+    def _writer_event(self, payload):
+        """UI thread: pass the download's news to whoever is showing it."""
+        event = payload["event"]
+        if event != "progress":
+            self.writer_downloading = False
+            if payload.get("trace"):
+                self.session_log.write(payload["trace"])
+            self.append_log({"done": "✅ The Smart writer is ready.",
+                             "stopped": "⏸️ Smart writer download paused.",
+                             "failed": f"⚠️ {payload.get('message', '')}"}[event])
+        for listener in list(self.writer_listeners):
+            try:
+                listener(payload)
+            except tk.TclError:
+                self.writer_listeners.remove(listener)   # its window is gone
+
+    def _writer_row_changed(self, payload=None):
+        """The Settings row: what state the Smart writer is in, and what the button does."""
+        self._writer_confirm = False
+        model = writer.MODEL
+        if payload and payload["event"] == "progress":
+            done, total = payload["done"], payload["total"]
+            self.writer_state.configure(
+                text=f"Downloading {done / 1e9:.2f} of {total / 1e9:.2f} GB", text_color=TEXT_MUTED)
+            self.writer_button.configure(text="Cancel", command=self.cancel_writer_download)
+            return
+        if payload and payload["event"] == "failed":
+            self.writer_state.configure(text=ellipsize(payload["message"], 60), text_color=ERR_COLOR)
+        elif writer.runtime_path() is None:
+            self.writer_state.configure(text="Not included in this copy", text_color=TEXT_MUTED)
+        elif writer.installed():
+            self.writer_state.configure(text=f"Installed · {model.gigabytes}", text_color=OK_COLOR)
+        else:
+            self.writer_state.configure(text=f"Not downloaded · {model.gigabytes}",
+                                        text_color=TEXT_MUTED)
+        if writer.installed():
+            self.writer_button.configure(text="Repair", command=self._confirm_repair)
+        else:
+            self.writer_button.configure(text="Download", command=self.start_writer_download)
+
+    def _confirm_repair(self):
+        """Repair downloads 2.5 GB again, so it takes a second press."""
+        if not self._writer_confirm:
+            self._writer_confirm = True
+            self.writer_state.configure(
+                text=f"Press again to download {writer.MODEL.gigabytes} again",
+                text_color=ERR_COLOR)
+            return
+        self.repair_writer()
 
     # -- voice preview -------------------------------------------------------
     def preview_voice(self):

@@ -21,3 +21,6 @@ temp_aud_*.mp3
 
 # Test runs
 .pytest_cache/
+
+# The llama.cpp program for the Smart writer; fetched at build time, never committed
+vendor/

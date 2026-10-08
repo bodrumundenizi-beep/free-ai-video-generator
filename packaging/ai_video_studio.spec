@@ -11,6 +11,7 @@ the process is killed. Both delivery channels want a directory anyway: Inno
 copies a tree, and the portable ZIP is that tree.
 """
 
+import importlib.util
 import os
 
 from PyInstaller.utils.hooks import copy_metadata
@@ -28,6 +29,17 @@ MUSIC = [
     if name.lower().endswith(MUSIC_EXTS)
 ]
 
+# llama.cpp runs the Smart writer's model as a separate program. Its server and
+# the libraries it loads are copied as plain data into _internal/llama, where
+# vidgen.writer.runtime_path() looks: as data, not binaries, so PyInstaller
+# neither analyses nor rearranges them and llama.cpp finds its DLLs beside it.
+# The model itself (2.5 GB) is never bundled; the installer or the app fetches it.
+_fetch = importlib.util.spec_from_file_location(
+    "fetch_llama", os.path.join(ROOT, "packaging", "fetch_llama.py"))
+fetch_llama = importlib.util.module_from_spec(_fetch)
+_fetch.loader.exec_module(fetch_llama)
+LLAMA = [(path, "llama") for path in fetch_llama.bundle_files()]
+
 a = Analysis(
     [os.path.join(ROOT, "src", "ai_video_studio.py")],
     pathex=[os.path.join(ROOT, "src")],
@@ -36,7 +48,7 @@ a = Analysis(
     # imageio reads its own version from package metadata when imported (the
     # only bundled library that does); without it the frozen app fails every
     # render with "No package metadata was found for imageio".
-    datas=[(ICON, "assets")] + MUSIC + copy_metadata("imageio"),
+    datas=[(ICON, "assets")] + MUSIC + LLAMA + copy_metadata("imageio"),
     hiddenimports=[
         # Imported inside a try/except in apply_window_effects(); PyInstaller's
         # scan does find it, but being explicit costs nothing.
@@ -47,6 +59,7 @@ a = Analysis(
         "vidgen", "vidgen.audio", "vidgen.footage", "vidgen.formats",
         "vidgen.motion", "vidgen.render", "vidgen.script", "vidgen.timeline",
         "vidgen.voice", "vidgen.voices", "vidgen.mastering",
+        "vidgen.draft", "vidgen.writer",
         # Voice preview playback; imported only when Preview is clicked.
         "winsound",
     ],
