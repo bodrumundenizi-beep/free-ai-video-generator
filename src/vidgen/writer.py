@@ -66,6 +66,7 @@ MODEL = Model(
 )
 
 SERVER_EXE = "llama-server.exe"
+GPU_LAYERS = "99"  # more layers than the model has: all of it on the graphics card
 CONTEXT = 4096  # tokens the model can hold: instructions, the text and its answer
 START_TIMEOUT = 90.0  # seconds for the model to load, on a slow disk
 WRITE_TIMEOUT = 180.0  # seconds for one answer before the PC is judged too slow
@@ -342,12 +343,14 @@ def _free_port() -> int:
         return sock.getsockname()[1]
 
 
-def _launch(exe: str, model_file: str, port: int):
+def _launch(exe: str, model_file: str, port: int, gpu: bool = False):
     """Start llama.cpp, reachable from this PC only, with no window of its own."""
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     return subprocess.Popen(
         [exe, "-m", model_file, "--host", "127.0.0.1", "--port", str(port),
-         "-c", str(CONTEXT), "-np", "1", "--no-webui"],
+         "-c", str(CONTEXT), "-np", "1", "--no-webui",
+         # Always said out loud: left alone, llama.cpp may pick the graphics card itself.
+         "-ngl", GPU_LAYERS if gpu else "0"],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
         creationflags=flags)
 
@@ -361,8 +364,11 @@ class Session:
     stopped at once and Stopped is raised.
     """
 
-    def __init__(self, should_stop=None, launch=_launch, http=requests, check=ready):
+    def __init__(self, should_stop=None, launch=_launch, http=requests, check=ready,
+                 gpu: bool = False):
         self.should_stop = should_stop or (lambda: False)
+        self.gpu = gpu
+        self.gpu_failed = False  # the graphics card was asked for and could not be used
         self._launch, self._http, self._check = launch, http, check
         self._proc = None
         self._url = ""
@@ -389,7 +395,7 @@ class Session:
         port = _free_port()
         self._url = f"http://127.0.0.1:{port}"
         try:
-            self._proc = self._launch(runtime_path(), model_path(), port)
+            self._proc = self._launch(runtime_path(), model_path(), port, self.gpu)
         except OSError as exc:
             raise WriterError(f"The Smart writer could not be started: {exc}") from exc
         deadline = time.monotonic() + START_TIMEOUT
@@ -397,6 +403,10 @@ class Session:
             self._stopping()
             if self._proc.poll() is not None:
                 self._proc = None
+                if self.gpu:
+                    # Too little video memory or a driver problem: the processor still works.
+                    self.gpu, self.gpu_failed = False, True
+                    return self.start()
                 raise WriterError("The Smart writer stopped while loading. This PC may not "
                                   "have enough memory for it.")
             try:
@@ -550,13 +560,14 @@ def _trim(scenes, target: float, persona):
     return [scenes[i] for i in kept]
 
 
-def write(text, audience=None, length=None, should_stop=None, padding: float = 0.3):
+def write(text, audience=None, length=None, should_stop=None, padding: float = 0.3,
+          gpu: bool = False):
     """Load the model, write one script, stop the model."""
-    with Session(should_stop) as session:
+    with Session(should_stop, gpu=gpu) as session:
         return session.write(text, audience, length, padding)
 
 
-def suggest(text, last=None, should_stop=None, padding: float = 0.3):
+def suggest(text, last=None, should_stop=None, padding: float = 0.3, gpu: bool = False):
     """Load the model, ask who the text is for, stop the model."""
-    with Session(should_stop) as session:
+    with Session(should_stop, gpu=gpu) as session:
         return session.suggest(text, last, padding)

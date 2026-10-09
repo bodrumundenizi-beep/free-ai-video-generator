@@ -44,7 +44,7 @@ def test_the_pinned_llama_build_is_a_full_checksum_of_a_tagged_release():
 def test_the_bundle_takes_the_server_and_its_libraries_only():
     needed = fetch_llama().needed
     for name in ("llama-server.exe", "llama-server-impl.dll", "llama.dll", "ggml-cpu-haswell.dll",
-                 "libomp.dll", "LICENSE-LLVM-OpenMP"):
+                 "ggml-vulkan.dll", "libomp.dll", "LICENSE-LLVM-OpenMP"):
         assert needed(name), name
     for name in ("llama-cli.exe", "llama-cli-impl.dll", "llama-bench.exe", ".version"):
         assert not needed(name), name

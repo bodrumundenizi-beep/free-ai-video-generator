@@ -148,7 +148,7 @@ from vidgen.voice import generate_voiceover  # noqa: E402
 
 
 APP_NAME = "AI Video Studio"
-APP_VERSION = "3.7.0"
+APP_VERSION = "3.7.1"
 # Must match AppUserModelID in packaging/installer.iss, or a pinned taskbar
 # shortcut will not group with the running window.
 APP_MODEL_ID = "AIVideoStudio.Desktop.3"
@@ -245,6 +245,7 @@ def default_settings() -> dict:
         "audience_age": draft.DEFAULT_AGE,
         "audience_platform": draft.DEFAULT_PLATFORM,
         "writer_mode": "Smart writer",
+        "writer_gpu": False,
         "music_path": "",
         "output_path": os.path.join(default_output_dir(), "final_video.mp4"),
         "aspect": "9:16",
@@ -297,6 +298,7 @@ def load_settings() -> dict:
             data[key] = fallback
     if data["writer_mode"] not in ("Smart writer", "Quick split"):
         data["writer_mode"] = "Smart writer"
+    data["writer_gpu"] = bool(data["writer_gpu"])
     if data["music_path"] and not os.path.isfile(str(data["music_path"])):
         data["music_path"] = ""
 
@@ -1696,18 +1698,18 @@ class DraftDialog(ctk.CTkToplevel):
         self._working(message)
         # Everything the worker needs is read here: it must not touch Tk variables.
         args = (job, self.text(), self.audience(), self.var_length.get(),
-                self.app.settings["padding"])
+                self.app.settings["padding"], bool(self.app.var_writer_gpu.get()))
         threading.Thread(target=self._work, args=args, daemon=True).start()
 
     def _post(self, **payload):
         self.app._queue.put(("draft", dict(payload, dialog=self)))
 
-    def _work(self, job, text, audience, length, padding):
+    def _work(self, job, text, audience, length, padding, gpu):
         """Worker thread: never touches a widget."""
         keep_loaded = False
         try:
             if self.session is None:
-                self.session = writer.Session(self.stop.is_set)
+                self.session = writer.Session(self.stop.is_set, gpu=gpu)
             if job == "suggest":
                 found = self.session.suggest(text, audience, padding)
                 keep_loaded = True  # Write script comes next; don't load it twice
@@ -1732,6 +1734,10 @@ class DraftDialog(ctk.CTkToplevel):
         event = payload["event"]
         if payload.get("trace"):
             self.app.session_log.write(payload["trace"])
+        if self.session is not None and self.session.gpu_failed:
+            self.session.gpu_failed = False  # say it once
+            self.app.append_log("⚠️ The graphics card could not be used for the Smart writer, "
+                                "so it ran on the processor.")
         self.busy = False
         if event == "stopped":
             self._rest()
@@ -2230,6 +2236,7 @@ class App(ctk.CTk):
         self.music_path = s["music_path"]
         self.audience = {key: s[key] for key, _allowed, _default in AUDIENCE_SETTINGS}
         self.writer_mode = s["writer_mode"]
+        self.var_writer_gpu = tk.BooleanVar(value=s["writer_gpu"])
         self.var_music_track = tk.StringVar(value="")
         self._tracks = {}
 
@@ -2237,6 +2244,7 @@ class App(ctk.CTk):
                     self.var_resolution, self.var_voice, self.var_pixabay,
                     self.var_padding, self.var_music_enabled, self.var_captions,
                     self.var_ask_save, self.var_check_updates, self.var_versions,
+                    self.var_writer_gpu,
                     self.var_target,
                     *self.caption_vars.values()):
             var.trace_add("write", self._on_setting_changed)
@@ -2254,6 +2262,7 @@ class App(ctk.CTk):
             "target_length": self.var_target.get(),
             **self.audience,
             "writer_mode": self.writer_mode,
+            "writer_gpu": bool(self.var_writer_gpu.get()),
             "music_path": self.music_path,
             "output_path": self.var_output.get().strip(),
             "aspect": self.var_aspect.get(),
@@ -3126,6 +3135,16 @@ class App(ctk.CTk):
         self.writer_button.pack(side="left")
         self.writer_listeners.append(self._writer_row_changed)
         self._writer_row_changed()
+
+        gpu_row = SettingRow(
+            page, self, self.icon("resolution"), "Use the graphics card",
+            "Faster on PCs with a dedicated graphics card. Turn it off if the Smart "
+            "writer fails to start")
+        gpu_row.grid(row=next(rows), column=0, sticky="ew", pady=PAD // 2)
+        ctk.CTkSwitch(
+            gpu_row.control, text="", width=44, variable=self.var_writer_gpu,
+            onvalue=True, offvalue=False, progress_color=ACCENT,
+        ).pack(side="left")
 
         self._caption(page, "UPDATES", next(rows))
 

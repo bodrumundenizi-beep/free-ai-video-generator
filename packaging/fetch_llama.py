@@ -2,7 +2,7 @@
 
 Run:  python packaging/fetch_llama.py
 
-The Windows CPU build is downloaded from llama.cpp's own GitHub releases and is
+The Windows build is downloaded from llama.cpp's own GitHub releases and is
 only unpacked if its SHA-256 matches the one pinned below, so a release build
 can never pick up a different binary than the one that was tested. vendor/ is
 not committed; the release workflow runs this before PyInstaller, and
@@ -23,9 +23,11 @@ import urllib.request
 import zipfile
 
 TAG = "b11503"
-ASSET = f"llama-{TAG}-bin-win-cpu-x64.zip"
+# The Vulkan build: runs on the processor like the plain one, and can also use an
+# NVIDIA, AMD or Intel graphics card when the user turns that on.
+ASSET = f"llama-{TAG}-bin-win-vulkan-x64.zip"
 URL = f"https://github.com/ggml-org/llama.cpp/releases/download/{TAG}/{ASSET}"
-SHA256 = "1f96923cab15cbcf07d3c1f8c59e75c24a14b703ff1d3da14ff866fddd97d775"
+SHA256 = "aacab515e72c4c5bbfd8d2b54de5c08ff23848245727f5667aa2a854bc1617ab"
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir))
 DEST = os.path.join(ROOT, "vendor", "llama")

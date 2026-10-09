@@ -44,11 +44,13 @@ class FakeModel:
         self.answers, self.bodies = list(answers), []
         self.fail_health, self.on_post = fail_health, on_post
         self.alive, self.launched, self.killed = True, 0, 0
+        self.gpus, self.gpu_broken = [], False
 
     # the process
-    def launch(self, exe, model_file, port):
+    def launch(self, exe, model_file, port, gpu=False):
         self.launched += 1
-        self.alive = True
+        self.gpus.append(gpu)
+        self.alive = not (gpu and self.gpu_broken)
         return self
 
     def poll(self):
@@ -76,8 +78,8 @@ class FakeModel:
         return Reply(self.answers.pop(0))
 
 
-def session(model, should_stop=None, check=lambda: (True, "")):
-    return Session(should_stop, launch=model.launch, http=model, check=check)
+def session(model, should_stop=None, check=lambda: (True, ""), gpu=False):
+    return Session(should_stop, launch=model.launch, http=model, check=check, gpu=gpu)
 
 
 @pytest.fixture(autouse=True)
@@ -195,7 +197,7 @@ def test_not_ready_says_why_and_starts_nothing():
 
 def test_a_model_that_dies_while_loading_is_reported():
     model = FakeModel(fail_health=True)
-    model.launch = lambda *a: (setattr(model, "alive", False), model)[1]
+    model.launch = lambda *a, **k: (setattr(model, "alive", False), model)[1]
     with session(model) as s, pytest.raises(WriterError, match="while loading"):
         s.write(TEXT)
 
@@ -249,6 +251,33 @@ def test_a_suggestion_outside_the_lists_is_refused():
     model = FakeModel([json.dumps({"content": "Cooking", "age": "Adults"})])
     with session(model) as s, pytest.raises(WriterError):
         s.suggest(TEXT)
+
+
+# --- the graphics card -----------------------------------------------------------
+
+def test_the_graphics_card_is_only_used_when_asked_for(monkeypatch):
+    commands = []
+    monkeypatch.setattr(writer.subprocess, "Popen", lambda command, **kw: commands.append(command))
+    writer._launch("llama-server.exe", "model.gguf", 1234)
+    writer._launch("llama-server.exe", "model.gguf", 1234, gpu=True)
+    off, on = (command[command.index("-ngl") + 1] for command in commands)
+    assert off == "0" and on == writer.GPU_LAYERS != "0"
+
+
+def test_a_graphics_card_that_cannot_be_used_falls_back_to_the_processor():
+    model = FakeModel([scenes_json(SHORT)])
+    model.gpu_broken = True
+    with session(model, gpu=True) as s:
+        result = s.write(TEXT, length="15 s")
+        assert s.gpu_failed and not s.gpu
+    assert model.gpus == [True, False] and result.source == "Smart writer"
+
+
+def test_a_working_graphics_card_is_used_and_nothing_is_reported():
+    model = FakeModel([scenes_json(SHORT)])
+    with session(model, gpu=True) as s:
+        s.write(TEXT, length="15 s")
+        assert model.gpus == [True] and not s.gpu_failed
 
 
 # --- being ready -----------------------------------------------------------------

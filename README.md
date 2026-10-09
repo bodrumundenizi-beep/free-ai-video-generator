@@ -55,7 +55,7 @@ You can confirm you have the real file by checking its hash against
 `SHA256SUMS.txt` on the release page:
 
 ```powershell
-Get-FileHash .\AIVideoStudio-3.7.0-setup.exe -Algorithm SHA256
+Get-FileHash .\AIVideoStudio-3.7.1-setup.exe -Algorithm SHA256
 ```
 
 ## First run
@@ -120,6 +120,11 @@ open-source language model (Apache 2.0 licence), run on your PC by
 - **Memory:** it uses about 5 GB while it writes and gives it back straight
   after. If the PC is short of memory, too slow, or anything else goes wrong, the
   app uses Quick split and tells you why.
+- **Graphics card:** turn on **Settings → Use the graphics card** to run it on a
+  dedicated NVIDIA, AMD or Intel card instead of the processor. On an RTX 4060 a
+  script takes about 3 seconds instead of about 20. It is off by default, needs
+  about 3 GB of video memory, and goes back to the processor by itself if the
+  card can't be used.
 - **It can be wrong.** It is a small model. Read the script before you render:
   it sometimes changes a detail, such as "every workday" becoming "every day".
 
@@ -389,7 +394,7 @@ python -m pytest
 python packaging/make_icon.py
 python packaging/fetch_llama.py
 pyinstaller --noconfirm --clean packaging/ai_video_studio.spec
-"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion=3.7.0 packaging\installer.iss
+"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion=3.7.1 packaging\installer.iss
 ```
 
 Releases are built automatically by GitHub Actions when a `v*` tag is pushed.

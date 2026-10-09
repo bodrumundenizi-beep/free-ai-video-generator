@@ -46,7 +46,7 @@ download it on first run.
 The Smart writer runs a language model on the user's PC. Two things are involved:
 
 - **[llama.cpp](https://github.com/ggml-org/llama.cpp)** (MIT), the program that
-  runs the model. Its unmodified Windows CPU build is bundled in the `llama`
+  runs the model. Its unmodified Windows Vulkan build is bundled in the `llama`
   folder and started as a **separate process**. The build includes the LLVM
   OpenMP runtime (`libomp.dll`, Apache 2.0 with LLVM exceptions); its licence
   file ships beside it. The exact release and its checksum are pinned in
