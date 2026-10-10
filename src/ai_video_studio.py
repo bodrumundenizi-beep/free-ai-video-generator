@@ -233,6 +233,26 @@ AUDIENCE_SETTINGS = (
 
 # Which scenes New from text gives an AI picture, once AI images are downloaded.
 AI_IMAGES_FOR = ("Scenes stock can't show", "Every scene", "Only ai: lines")
+# What each choice in the AI images tab means, shown under the row when it is picked.
+AI_FOR_HINTS = {
+    AI_IMAGES_FOR[0]: "Most scenes keep their stock clips. A scene gets an AI picture only when "
+                      "it is about something on a screen (an app, a menu, a setting), which no "
+                      "stock clip can show. Fastest: usually 2 or 3 pictures a video, about a "
+                      "minute more.",
+    AI_IMAGES_FOR[1]: "Every scene gets an AI picture and no stock footage is used, so the whole "
+                      "video has one matching look. Best for stories and tech tips. Adds about "
+                      "20 seconds for each scene (around 3 minutes for a 30-second video).",
+    AI_IMAGES_FOR[2]: "New from text never adds AI pictures. You get one only in the scenes "
+                      "where you write it yourself, like  Visual: ai: a robot holding a clipboard",
+}
+AI_LOOK_HINTS = {
+    "Realistic photo": "Looks like a real photograph, with natural light. Best for stories, "
+                       "people, places and everyday scenes.",
+    "3D render": "Looks like clean, colourful 3D animation, the style of a product advert. "
+                 "Best for tech tips, gadgets and robots.",
+    "Illustration": "Looks like a flat drawing with bold colours. Best for explaining ideas, "
+                    "money topics and videos for children.",
+}
 AI_IMAGES_WARNING = (
     "Needs a graphics card with about 8 GB of video memory. Around 20 seconds per picture "
     "on an RTX 4060. Without a graphics card a picture can take several minutes.")
@@ -3900,14 +3920,12 @@ class App(ctk.CTk):
             "Which scenes New from text gives an AI picture")
         for_row.grid(row=next(rows), column=0, sticky="ew", pady=PAD // 2)
         self._segmented(for_row.control, list(AI_IMAGES_FOR), self.var_ai_for, 470)
+        self._choice_hint(page, next(rows), self.var_ai_for, AI_FOR_HINTS)
         look_row = SettingRow(page, self, self.icon("resolution"), "Look",
                               "One look for the whole video, so its pictures match")
         look_row.grid(row=next(rows), column=0, sticky="ew", pady=PAD // 2)
         self._segmented(look_row.control, list(imagegen.LOOKS), self.var_ai_look, 380)
-        ctk.CTkLabel(page, text="In any script you can also ask for one yourself:   "
-                                "Visual: ai: a robot holding a clipboard",
-                     font=self.font_tiny, text_color=TEXT_DIM, anchor="w",
-                     ).grid(row=next(rows), column=0, sticky="w", padx=4, pady=(2, 0))
+        self._choice_hint(page, next(rows), self.var_ai_look, AI_LOOK_HINTS)
 
         self._caption(page, "TRY IT", next(rows))
         try_card = Card(page)
@@ -3932,6 +3950,14 @@ class App(ctk.CTk):
 
         self._images_row_changed()
         return page
+
+    def _choice_hint(self, page, row, variable, hints):
+        """A line under a row of choices that explains the one that is picked."""
+        label = ctk.CTkLabel(page, text=hints.get(variable.get(), ""), font=self.font_tiny,
+                             text_color=TEXT_MUTED, anchor="w", justify="left", wraplength=860)
+        label.grid(row=row, column=0, sticky="w", padx=18, pady=(0, 6))
+        variable.trace_add(
+            "write", lambda *_args: label.configure(text=hints.get(variable.get(), "")))
 
     def ai_mode(self) -> str:
         """Which scenes New from text gives an AI picture: none unless AI images are here."""
