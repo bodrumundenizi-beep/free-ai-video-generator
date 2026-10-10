@@ -40,6 +40,15 @@ fetch_llama = importlib.util.module_from_spec(_fetch)
 _fetch.loader.exec_module(fetch_llama)
 LLAMA = [(path, "llama") for path in fetch_llama.bundle_files()]
 
+# espeak-ng tells the offline voice how words sound. Like llama.cpp it is a separate
+# program copied as plain data, into _internal/espeak with its data folder beside it.
+# (It is GPL software: run as a program, never imported. See THIRD-PARTY-LICENSES.md.)
+_fetch = importlib.util.spec_from_file_location(
+    "fetch_espeak", os.path.join(ROOT, "packaging", "fetch_espeak.py"))
+fetch_espeak = importlib.util.module_from_spec(_fetch)
+_fetch.loader.exec_module(fetch_espeak)
+ESPEAK = fetch_espeak.bundle_files()
+
 a = Analysis(
     [os.path.join(ROOT, "src", "ai_video_studio.py")],
     pathex=[os.path.join(ROOT, "src")],
@@ -48,7 +57,7 @@ a = Analysis(
     # imageio reads its own version from package metadata when imported (the
     # only bundled library that does); without it the frozen app fails every
     # render with "No package metadata was found for imageio".
-    datas=[(ICON, "assets")] + MUSIC + LLAMA + copy_metadata("imageio"),
+    datas=[(ICON, "assets")] + MUSIC + LLAMA + ESPEAK + copy_metadata("imageio"),
     hiddenimports=[
         # Imported inside a try/except in apply_window_effects(); PyInstaller's
         # scan does find it, but being explicit costs nothing.
@@ -59,7 +68,9 @@ a = Analysis(
         "vidgen", "vidgen.audio", "vidgen.footage", "vidgen.formats",
         "vidgen.motion", "vidgen.render", "vidgen.script", "vidgen.timeline",
         "vidgen.voice", "vidgen.voices", "vidgen.mastering",
-        "vidgen.draft", "vidgen.writer",
+        "vidgen.draft", "vidgen.writer", "vidgen.localvoice", "vidgen.cards",
+        # Runs the offline voice's model; imported when the first line is spoken.
+        "onnxruntime",
         # Voice preview playback; imported only when Preview is clicked.
         "winsound",
     ],
@@ -71,6 +82,12 @@ a = Analysis(
         "matplotlib", "scipy", "pandas", "IPython", "jupyter", "notebook",
         "PyQt5", "PyQt6", "PySide2", "PySide6", "wx",
         "pytest", "sphinx",
+        # onnxruntime only runs the voice model here. Its optional tools reach for
+        # whatever machine-learning libraries the build PC happens to have
+        # (torch alone is 370 MB); none of them are used.
+        "onnxruntime.transformers", "onnxruntime.quantization", "onnxruntime.tools",
+        "onnxruntime.training", "onnx", "torch", "transformers", "tokenizers",
+        "bitsandbytes", "numba", "llvmlite", "sympy", "huggingface_hub", "hf_xet",
         # moviepy.config calls find_dotenv() at import time, which walks the
         # filesystem upward for no benefit inside a bundle. It handles the
         # ImportError gracefully.

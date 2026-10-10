@@ -67,6 +67,10 @@ jobs:
         # whose SHA-256 is not the one written in packaging/fetch_llama.py.
         run: python packaging/fetch_llama.py
 
+      - name: Fetch espeak-ng (pinned, checksum-verified)
+        # The program that tells the offline voice how words sound.
+        run: python packaging/fetch_espeak.py
+
       - name: Build with PyInstaller
         run: pyinstaller --noconfirm --clean packaging/ai_video_studio.spec
 
@@ -83,6 +87,12 @@ jobs:
           & dist/AIVideoStudio/_internal/llama/llama-server.exe --version
           if ($LASTEXITCODE -ne 0) { throw "bundled llama-server.exe does not run" }
           if (Get-ChildItem dist/AIVideoStudio -Recurse -Filter *.gguf) { throw "a model file got into the bundle" }
+          $espeak = "dist/AIVideoStudio/_internal/espeak"
+          if (-not (Test-Path "$espeak/espeak-ng.exe")) { throw "espeak-ng (offline voice) missing" }
+          $said = "hello" | & "$espeak/espeak-ng.exe" -q --ipa -v en-us --path (Resolve-Path $espeak) --stdin
+          if (-not $said) { throw "bundled espeak-ng.exe does not run" }
+          if (-not (Get-ChildItem dist/AIVideoStudio/_internal/onnxruntime -Recurse -Filter onnxruntime.dll)) { throw "onnxruntime (offline voice) missing" }
+          if (Get-ChildItem dist/AIVideoStudio -Recurse -Filter *.onnx) { throw "a voice model got into the bundle" }
           Write-Host "ffmpeg: $($ff.Name) $([math]::Round($ff.Length/1MB,1)) MB"
           $mb = (Get-ChildItem dist/AIVideoStudio -Recurse | Measure-Object Length -Sum).Sum / 1MB
           Write-Host ("bundle: {0:N0} MB" -f $mb)

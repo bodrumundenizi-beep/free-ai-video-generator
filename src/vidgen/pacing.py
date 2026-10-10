@@ -26,12 +26,13 @@ PAD_MIN, PAD_MAX = 0.1, 1.0
 TEMPO_MIN, TEMPO_MAX = 0.87, 1.15
 CLOSE_ENOUGH = 0.3  # seconds: nobody notices, and encoders round to a frame anyway
 
-# Measured over 32 real voice lines: at its normal rate a neural voice reads
-# about this many characters a second, pauses not included. No property of the
+# At its normal rate the offline voice reads about this many characters a second,
+# pauses not included (measured over 36 lines and six speakers, 2026-10-10; the
+# online voices it replaced read 17.2). No property of the
 # text predicts a single line better than about 12% - the voice paces a
 # question, a list and a long word differently - so everything built on this
 # says "about", and warnings allow for the error.
-CHARS_PER_SECOND = 17.2
+CHARS_PER_SECOND = 15.0
 ESTIMATE_ERROR = 0.15
 # What the voice engine inserts, before the persona's pause scale (voice.py).
 PAUSE_STOP, PAUSE_COMMA = 0.26, 0.12

@@ -119,8 +119,8 @@ def test_describe_plain_fitted_and_warning():
     guess = estimate([scene(LINE)] * 6, GUY, 0.25)
     text, warn = describe(guess, 6, None)
     assert text == f"About {round(guess.total)} s · 6 scenes" and not warn
-    comfortable = estimate([scene(LINE)] * 8, GUY, 0.25)   # about 29 s as written
-    text, warn = describe(comfortable, 8, 30.0)
+    comfortable = estimate([scene(LINE)] * 7, GUY, 0.25)   # about 29 s as written
+    text, warn = describe(comfortable, 7, 30.0)
     assert "will be fitted to 30 s" in text and not warn
     text, warn = describe(guess, 6, 15.0)
     assert "too long for 15 s" in text and warn

@@ -293,7 +293,8 @@ def _render(cfg, ui, work_dir, job):
             voice_path = os.path.join(work_dir, f"voice_{i}.mp3")
             # Studio voices come back as a mastered .wav, classic ones as the .mp3.
             voice_path, words = generate_voiceover_timed(
-                scene.voice, voice_path, ui.log, cfg.get("voice"))
+                scene.voice, voice_path, ui.log, cfg.get("voice"),
+                bool(cfg.get("voice_online")))
             # The file is registered for closing; the trimmed copy shares its reader.
             raw = job.keep(AudioFileClip(voice_path))
             lead, tail = audio.speech_window(raw)
@@ -481,6 +482,22 @@ def _make_version(cfg, ui, work_dir, job, plans, search, choices, version, save_
         if shot.fade_in > 0:
             clip = clip.with_effects([vfx.CrossFadeIn(shot.fade_in)])
         layers.append(clip.with_start(shot.start))
+
+    # Cards go over the footage and under the captions. They never sink a render either.
+    carded = [(i, plan.scene.card) for i, plan in enumerate(plans) if plan.scene.card]
+    if carded:
+        from . import captions, cards
+
+        look = captions.CaptionOptions.from_cfg(cfg)
+        accent = captions.COLORS[look.color].fill
+        accent = captions.FILL if accent == captions.STROKE else accent  # black on a dark panel
+        for i, text in carded:
+            try:
+                layers.append(cards.layer(text, (target_w, target_h), starts[i], durations[i],
+                                          accent, look.position))
+            except Exception as exc:  # noqa: BLE001
+                ui.log(f"⚠️ Couldn't draw the card for scene {i + 1} ({exc}); left out.")
+        ui.log(f"🃏 Cards: {len(carded)}")
 
     # Captions sit on top of everything. Like music, they never sink a render.
     cues = []

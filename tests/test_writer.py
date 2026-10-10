@@ -397,3 +397,31 @@ def test_remove_deletes_the_model_and_any_unfinished_download():
     writer.remove(model)
     assert not writer.installed(model) and writer.os.listdir(writer.models_dir()) == []
     writer.remove(model)  # nothing there: no error
+
+
+def test_filmable_leaves_words_a_camera_can_film_alone():
+    assert writer.filmable("egyptian pyramid desert") == "egyptian pyramid desert"
+    assert writer.filmable("two computers") == "two computers"
+
+
+def test_filmable_drops_software_words_and_keeps_the_rest():
+    assert writer.filmable("Windows laptop keyboard") == "laptop keyboard"
+
+
+def test_filmable_shows_someone_at_a_computer_when_little_is_left():
+    first, second = writer.filmable("clipboard history", 0), writer.filmable("pin icon", 1)
+    assert first in writer._COMPUTER_SHOTS and second in writer._COMPUTER_SHOTS
+    assert first != second
+    assert writer.filmable("windows key v") in writer._COMPUTER_SHOTS
+    for words in ("pinned items", "mouse click", "youtube logo", "stock footage clips"):
+        assert writer.filmable(words) in writer._COMPUTER_SHOTS, words
+    assert writer.filmable("person scrolling phone") == "person phone"
+
+
+def test_parse_scenes_swaps_unfilmable_search_words():
+    content = json.dumps({"scenes": [
+        {"visual": "snipping tool interface", "voice": "You can draw on the image."},
+        {"visual": "river bank", "voice": "A boy found the money."}]})
+    scenes = writer.parse_scenes(content)
+    assert scenes[0].visual in writer._COMPUTER_SHOTS
+    assert scenes[1].visual == "river bank"

@@ -144,11 +144,12 @@ from vidgen.render import TEMP_ROOT  # noqa: E402
 from vidgen import (  # noqa: E402
     captions, diagnostics, draft, footage, pacing, paths, preview, scenes, updates, writer,
 )
+from vidgen import localvoice  # noqa: E402
 from vidgen.voice import generate_voiceover  # noqa: E402
 
 
 APP_NAME = "AI Video Studio"
-APP_VERSION = "3.7.1"
+APP_VERSION = "3.8.0"
 # Must match AppUserModelID in packaging/installer.iss, or a pinned taskbar
 # shortcut will not group with the running window.
 APP_MODEL_ID = "AIVideoStudio.Desktop.3"
@@ -246,6 +247,8 @@ def default_settings() -> dict:
         "audience_platform": draft.DEFAULT_PLATFORM,
         "writer_mode": "Smart writer",
         "writer_gpu": False,
+        "voice_online": False,
+        "auto_cards": True,
         "music_path": "",
         "output_path": os.path.join(default_output_dir(), "final_video.mp4"),
         "aspect": "9:16",
@@ -299,6 +302,8 @@ def load_settings() -> dict:
     if data["writer_mode"] not in ("Smart writer", "Quick split"):
         data["writer_mode"] = "Smart writer"
     data["writer_gpu"] = bool(data["writer_gpu"])
+    data["voice_online"] = bool(data["voice_online"])
+    data["auto_cards"] = bool(data["auto_cards"])
     if data["music_path"] and not os.path.isfile(str(data["music_path"])):
         data["music_path"] = ""
 
@@ -1698,13 +1703,14 @@ class DraftDialog(ctk.CTkToplevel):
         self._working(message)
         # Everything the worker needs is read here: it must not touch Tk variables.
         args = (job, self.text(), self.audience(), self.var_length.get(),
-                self.app.settings["padding"], bool(self.app.var_writer_gpu.get()))
+                self.app.settings["padding"], bool(self.app.var_writer_gpu.get()),
+                bool(self.app.var_auto_cards.get()))
         threading.Thread(target=self._work, args=args, daemon=True).start()
 
     def _post(self, **payload):
         self.app._queue.put(("draft", dict(payload, dialog=self)))
 
-    def _work(self, job, text, audience, length, padding, gpu):
+    def _work(self, job, text, audience, length, padding, gpu, cards):
         """Worker thread: never touches a widget."""
         keep_loaded = False
         try:
@@ -1715,7 +1721,8 @@ class DraftDialog(ctk.CTkToplevel):
                 keep_loaded = True  # Write script comes next; don't load it twice
                 self._post(event="suggested", found=found)
             else:
-                self._post(event="written", result=self.session.write(text, audience, length, padding))
+                self._post(event="written",
+                           result=self.session.write(text, audience, length, padding, cards))
         except writer.Stopped:
             self._post(event="stopped")
         except (writer.WriterError, draft.DraftError, ScriptError) as exc:
@@ -1909,7 +1916,8 @@ class DraftDialog(ctk.CTkToplevel):
         """Write with the user's own words. ``because`` is why the Smart writer wasn't used."""
         try:
             self.result = draft.write(self.text(), self.audience(), self.var_length.get(),
-                                      keep=self.keep, padding=self.app.settings["padding"])
+                                      keep=self.keep, padding=self.app.settings["padding"],
+                                      cards=bool(self.app.var_auto_cards.get()))
         except (draft.DraftError, ScriptError) as exc:
             self.ask_error.configure(text=str(exc), text_color=ERR_COLOR)
             return
@@ -2174,6 +2182,7 @@ class App(ctk.CTk):
         self._last_draft = None    # the last script "New from text" put in the editor
         self.writer_listeners = []     # callables told how the model download is going
         self.writer_downloading = False
+        self.voice_downloading = False
         self._writer_stop = threading.Event()
 
         self._build_fonts()
@@ -2237,6 +2246,8 @@ class App(ctk.CTk):
         self.audience = {key: s[key] for key, _allowed, _default in AUDIENCE_SETTINGS}
         self.writer_mode = s["writer_mode"]
         self.var_writer_gpu = tk.BooleanVar(value=s["writer_gpu"])
+        self.var_voice_online = tk.BooleanVar(value=s["voice_online"])
+        self.var_auto_cards = tk.BooleanVar(value=s["auto_cards"])
         self.var_music_track = tk.StringVar(value="")
         self._tracks = {}
 
@@ -2244,7 +2255,7 @@ class App(ctk.CTk):
                     self.var_resolution, self.var_voice, self.var_pixabay,
                     self.var_padding, self.var_music_enabled, self.var_captions,
                     self.var_ask_save, self.var_check_updates, self.var_versions,
-                    self.var_writer_gpu,
+                    self.var_writer_gpu, self.var_voice_online, self.var_auto_cards,
                     self.var_target,
                     *self.caption_vars.values()):
             var.trace_add("write", self._on_setting_changed)
@@ -2263,6 +2274,8 @@ class App(ctk.CTk):
             **self.audience,
             "writer_mode": self.writer_mode,
             "writer_gpu": bool(self.var_writer_gpu.get()),
+            "voice_online": bool(self.var_voice_online.get()),
+            "auto_cards": bool(self.var_auto_cards.get()),
             "music_path": self.music_path,
             "output_path": self.var_output.get().strip(),
             "aspect": self.var_aspect.get(),
@@ -3146,6 +3159,44 @@ class App(ctk.CTk):
             onvalue=True, offvalue=False, progress_color=ACCENT,
         ).pack(side="left")
 
+        cards_row = SettingRow(
+            page, self, self.icon("script"), "Add cards automatically",
+            "New from text puts key combos like Win + V and big numbers on screen as "
+            "animated cards. You can edit or delete the Card: lines in the script")
+        cards_row.grid(row=next(rows), column=0, sticky="ew", pady=PAD // 2)
+        ctk.CTkSwitch(
+            cards_row.control, text="", width=44, variable=self.var_auto_cards,
+            onvalue=True, offvalue=False, progress_color=ACCENT,
+        ).pack(side="left")
+
+        self._caption(page, "VOICE", next(rows))
+
+        voice_row = SettingRow(
+            page, self, self.icon("voice"), "Offline voice",
+            f"{localvoice.MODEL.name}, an open-source voice that speaks on this PC. "
+            "No internet needed once it is downloaded")
+        voice_row.grid(row=next(rows), column=0, sticky="ew", pady=PAD // 2)
+        self.voice_state = ctk.CTkLabel(voice_row.control, text="", font=self.font_body,
+                                        text_color=TEXT_MUTED)
+        self.voice_state.pack(side="left", padx=(0, 12))
+        self.voice_button = ctk.CTkButton(
+            voice_row.control, text="Download", width=96, height=32, corner_radius=4,
+            font=self.font_body, fg_color=FIELD_BG, hover_color=CARD_HOVER,
+            border_width=1, border_color=FIELD_BORDER, text_color=TEXT,
+            command=self.start_voice_download)
+        self.voice_button.pack(side="left")
+        self._voice_row_changed()
+
+        online_row = SettingRow(
+            page, self, self.icon("info"), "Use Microsoft's online voices",
+            "The voices the app used before 3.8. Microsoft's service stopped answering in "
+            "October 2026, so leave this off unless it works again")
+        online_row.grid(row=next(rows), column=0, sticky="ew", pady=PAD // 2)
+        ctk.CTkSwitch(
+            online_row.control, text="", width=44, variable=self.var_voice_online,
+            onvalue=True, offvalue=False, progress_color=ACCENT,
+        ).pack(side="left")
+
         self._caption(page, "UPDATES", next(rows))
 
         updates_row = SettingRow(page, self, self.icon("info"), "Check for updates on startup",
@@ -3562,6 +3613,8 @@ class App(ctk.CTk):
                     self._writer_event(payload)
                 elif kind == "updater":
                     self._updater_event(payload)
+                elif kind == "voice":
+                    self._voice_event(payload)
                 elif kind == "crash":
                     self._unexpected(payload["trace"])
                 elif kind == "update":
@@ -3777,25 +3830,88 @@ class App(ctk.CTk):
             return
         self.repair_writer()
 
+    # -- the offline voice's one-time download -------------------------------
+    def voice_missing(self) -> bool:
+        """Whether the voice still has to be fetched. Starts fetching it if so."""
+        if self.var_voice_online.get() or localvoice.installed():
+            return False
+        self.start_voice_download()
+        self.status_label.configure(text="Downloading the voice - try again when it is ready")
+        return True
+
+    def start_voice_download(self):
+        """Fetch the voice's two files on a worker thread."""
+        if self.voice_downloading or localvoice.installed():
+            return
+        self.voice_downloading = True
+        self.append_log(f"⬇️ Downloading the voice, once ({localvoice.SIZE / 1e6:.0f} MB)...")
+
+        def worker():
+            last = 0.0
+
+            def progress(done, total):
+                nonlocal last
+                now = time.monotonic()
+                if now - last >= 0.5 or done >= total:
+                    last = now
+                    self._queue.put(("voice", {"event": "progress", "done": done, "total": total}))
+
+            try:
+                localvoice.download(progress)
+                self._queue.put(("voice", {"event": "done"}))
+            except Exception as exc:  # noqa: BLE001 - a thread must not die silently
+                self._queue.put(("voice", {"event": "failed", "message": str(exc)}))
+
+        threading.Thread(target=worker, daemon=True).start()
+        self._voice_row_changed({"event": "progress", "done": 0, "total": localvoice.SIZE})
+
+    def _voice_event(self, payload):
+        """UI thread: the voice download's news, to the Log and the Settings row."""
+        if payload["event"] == "done":
+            self.voice_downloading = False
+            self.append_log("✅ The voice is ready.")
+        elif payload["event"] == "failed":
+            self.voice_downloading = False
+            self.append_log(f"⚠️ The voice could not be downloaded: {payload['message']}")
+        self._voice_row_changed(payload)
+
+    def _voice_row_changed(self, payload=None):
+        if not hasattr(self, "voice_state"):
+            return   # Settings has not been built yet
+        if self.voice_downloading and payload and payload["event"] == "progress":
+            self.voice_state.configure(
+                text=f"Downloading {payload['done'] * 100 // max(payload['total'], 1)}%")
+            self.voice_button.configure(state="disabled")
+        elif localvoice.installed():
+            self.voice_state.configure(text="Ready")
+            self.voice_button.pack_forget()
+        else:
+            self.voice_state.configure(text="Not downloaded")
+            self.voice_button.configure(state="normal")
+
     # -- voice preview -------------------------------------------------------
     def preview_voice(self):
         """Speak a short sample in the chosen voice, without blocking the window."""
-        if self._previewing:
+        if self._previewing or self.voice_missing():
             return
         persona = voices.persona(self.var_voice.get())
         self._previewing = True
         self.preview_button.configure(state="disabled", text="Generating...")
-        threading.Thread(target=self._preview_worker, args=(persona.id,),
+        threading.Thread(target=self._preview_worker,
+                         args=(persona.id, bool(self.var_voice_online.get())),
                          daemon=True).start()
 
-    def _preview_worker(self, voice_id):
-        """Worker thread: the full voice chain once, cached per voice and version."""
+    def _preview_worker(self, voice_id, online):
+        """Worker thread: the full voice chain once, cached per voice, engine and version."""
         try:
             os.makedirs(PREVIEW_DIR, exist_ok=True)
-            stem = os.path.join(PREVIEW_DIR, re.sub(r"[^\w-]", "_", f"{voice_id}_{APP_VERSION}"))
+            engine = "online" if online else "offline"
+            stem = os.path.join(PREVIEW_DIR, re.sub(r"[^\w-]", "_",
+                                                    f"{voice_id}_{engine}_{APP_VERSION}"))
             playable = stem + ".play.wav"
             if not os.path.exists(playable):
-                made = generate_voiceover(PREVIEW_TEXT, stem + ".mp3", self.ui.log, voice_id)
+                made = generate_voiceover(PREVIEW_TEXT, stem + ".mp3", self.ui.log, voice_id,
+                                          online)
                 # winsound plays WAV only; classic voices arrive as MP3.
                 from vidgen import mastering
                 # Convert beside it, then rename: a failed run must not leave a
@@ -3834,6 +3950,9 @@ class App(ctk.CTk):
         # No key yet: walk the user through getting one instead of failing.
         if not self._has_footage_key() and self._needs_stock_footage():
             WelcomeDialog(self)
+            return
+        if self.voice_missing():
+            self.select_page("log")
             return
 
         # Like a browser download: ask where this one goes, unless told not to.

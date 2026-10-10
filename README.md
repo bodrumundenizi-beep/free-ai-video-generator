@@ -18,7 +18,8 @@ voiceover, and renders a 1080p or 720p MP4 in portrait or landscape.
 - **Preview and choose your clips:** See the clip picked for each scene before rendering, and swap any you don't like with one click.
 - **Two versions in one go:** Optionally render the same script twice with different clips, and keep the better one.
 - **Pick a length:** Fit the video to 15, 30 or 60 seconds, with a live estimate as you type.
-- **Neural AI Voices:** Uses Microsoft Edge-TTS for high-quality, natural-sounding male and female voices.
+- **Neural AI Voices, on your PC:** 20 natural-sounding male and female voices from an open-source speech model that runs offline. No account, no key, no service that can be switched off.
+- **Animated cards:** Key combos like `Win + V`, big numbers and short lists are drawn over the footage, because no stock clip can show them.
 - **Smart Script Parser:** Automatically reads your script line-by-line using `Visual:` and `Voice:` tags.
 - **Windows 11 Fluent interface:** Settings-app style segmented controls, smooth page transitions, dark and light themes with Mica, and live render progress.
 - **Auto-captions:** The spoken words are burned into the video, a few at a time, with the word being said highlighted. An `.srt` subtitle file is saved too.
@@ -43,7 +44,7 @@ installs it over the old one and reopens. The portable version links to the
 download instead. Either way your settings, API keys and the Smart writer are kept.
 (Running from source still needs all three; see below.)
 
-**The Smart writer is a separate 2.5 GB download.** The installer fetches it during setup; the portable version fetches it the first time you use **New from text**. It is downloaded once and kept when you update the app. See [New from text](#new-from-text) below.
+**The AI models are a separate 2.9 GB download:** the voice (0.4 GB) and the Smart writer (2.5 GB). The installer fetches both during setup; the portable version fetches the voice the first time you make a video and the Smart writer the first time you use **New from text**. They are downloaded once and kept when you update the app. See [New from text](#new-from-text) below.
 
 ### Windows will warn you the first time
 
@@ -55,7 +56,7 @@ You can confirm you have the real file by checking its hash against
 `SHA256SUMS.txt` on the release page:
 
 ```powershell
-Get-FileHash .\AIVideoStudio-3.7.1-setup.exe -Algorithm SHA256
+Get-FileHash .\AIVideoStudio-3.8.0-setup.exe -Algorithm SHA256
 ```
 
 ## First run
@@ -165,12 +166,37 @@ Duration: 4s
 | `Padding:` | seconds like `0.5s` of pause after the voice line (ignored when `Duration:` is set) | the **Scene padding** setting |
 | `Zoom:` | `in`, `out`, or `none` — a slow 1.0× → 1.1× Ken Burns zoom | a subtle zoom, stronger on photos and still footage |
 
+| `Card:` | text drawn over the footage — see **Cards** below | no card |
+
 A scene with no `Voice:` line is a silent shot and needs a `Duration:`, e.g. a
 logo held for `Duration: 2s`.
 
 When a voice line runs longer than 6 seconds and has no set duration, the scene
 cuts between **two different clips** halfway through, to keep the pace up.
 Scenes join with a short 0.3 s crossfade.
+
+### Cards
+
+Stock footage cannot show a keyboard shortcut or a figure, so a scene can put it
+on screen with a `Card:` line. What you write picks the look:
+
+<img src="docs/card.png" alt="A Win + V card over stock footage" width="240" align="right">
+
+| You write | You get |
+|---|---|
+| `Card: Win + V` (parts joined by `+`) | keycaps, one per part |
+| `Card: $120,000` or `Card: $120,000 \| after 30 years` | a big line, with a small one under it |
+| `Card: Paste; Pick a length; Done` (parts split by `;`) | a list, the items appearing one by one |
+
+Anything else is shown as a big title. The card pops in as its scene starts and
+fades out as it ends, in the half of the frame the captions are not using, in
+your caption colour.
+
+**New from text** adds cards by itself when a line says to press keys ("Press
+the Windows key and V") or is about a dollar amount, a percentage or a large
+number. At most half the scenes get one. They arrive as `Card:` lines in the
+script, so you can edit or delete them; **Settings → Add cards automatically**
+turns this off.
 
 ### Your own footage and images
 
@@ -200,12 +226,19 @@ file.
 Pick a voice on the **Create** page and press **▶ Preview Voice** to hear it
 before rendering. All voices are free — no account or key needed.
 
+The voices are spoken on your PC by [Kokoro](https://huggingface.co/hexgrad/Kokoro-82M),
+an open-source speech model (a one-time 0.4 GB download), so they work with no
+internet. Up to version 3.7 the app used Microsoft Edge's online voices; that
+service stopped answering in October 2026. The old voices are still there under
+**Settings → Voice → Use Microsoft's online voices**, in case it comes back.
+
 | Group | Voices | Delivery |
 |---|---|---|
+| Viral / Shorts | Max, Cole, Zoe, Mia (US) | fast and punchy, very short pauses |
 | Tech / Short-Form Hype | Guy, Jenny, Steffan (US) | a bit faster and brighter, short pauses |
 | Deep / Storyteller | Christopher, Eric, Roger (US) | a bit slower and lower, longer pauses |
 | Professional / Tutorial | Aria, Andrew, Ava (US) | clear, even pace |
-| Accents & Regional | Ryan, Sonia (UK), William (Australia) | natural pace |
+| Accents & Regional | Ryan, Sonia, William (UK) | natural pace |
 | Classic (low quality) | the four voices from earlier versions | read exactly as before, no studio processing |
 
 The first four groups get **studio processing**: natural breath pauses at
@@ -277,7 +310,7 @@ description.
 | Aspect ratio | `9:16` for Shorts / TikTok / Reels, `16:9` for YouTube |
 | Resolution | `1080p` (8000k bitrate) or `720p` (5000k) |
 | Scene padding | `0s`, `0.25s` (default), `0.5s` or `1s` of pause after each voice line |
-| Voice | 16 free Microsoft Edge neural voices — see **Voices** below |
+| Voice | 20 free neural voices that run on your PC — see **Voices** below |
 | Length | `Auto` (default), or fit to `15 s`, `30 s` or `60 s` — see **Video length** below |
 | Versions | `1` (default) or `2`: the same video twice, with different clips |
 | Saving | **Ask where to save each video** (default): a Save window opens for every render, like a browser download. Off: videos go to the default path and are numbered `name (2).mp4`, `name (3).mp4`… so none is overwritten |
@@ -327,10 +360,9 @@ report anywhere else.
 
 ## Needs an internet connection
 
-Stock footage (Pexels, Pixabay) and the voiceover (Microsoft Edge's online
-text-to-speech) come from the network. Your own `local:` files, the rendering and
-the Smart writer are local; the Smart writer only needs the internet once, for its
-download.
+Stock footage (Pexels, Pixabay) comes from the network. Your own `local:` files,
+the rendering, the voice and the Smart writer are local; the voice and the Smart
+writer only need the internet once, for their downloads.
 
 ## AI Script Generation Prompt
 
@@ -394,7 +426,7 @@ python -m pytest
 python packaging/make_icon.py
 python packaging/fetch_llama.py
 pyinstaller --noconfirm --clean packaging/ai_video_studio.spec
-"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion=3.7.1 packaging\installer.iss
+"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion=3.8.0 packaging\installer.iss
 ```
 
 Releases are built automatically by GitHub Actions when a `v*` tag is pushed.
@@ -418,8 +450,9 @@ project is established enough to qualify for an open-source signing programme.
 
 This program does not collect or send any personal data. It connects to other
 systems only to do what you ask of it: Pexels and Pixabay to search for and
-download stock footage (using your own API keys), and Microsoft Edge's online
-text-to-speech to generate the voiceover from your script text. On startup it
+download stock footage (using your own API keys). The voiceover is made on your
+PC; only if you turn on **Use Microsoft's online voices** is your script text sent
+to Microsoft Edge's online text-to-speech. On startup it
 also asks GitHub for this project's latest version number, to tell you about
 updates; that request contains nothing about you, and you can turn it off under
 **Settings → Updates**. An update is only downloaded when you press **Update

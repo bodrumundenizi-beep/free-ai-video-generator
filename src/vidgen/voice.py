@@ -1,4 +1,8 @@
-"""Neural voiceover through Microsoft Edge's text-to-speech, made to sound human.
+"""Neural voiceover, made to sound human.
+
+The line is read by the offline voice on this PC (localvoice.py), or, when the
+user turns the online voices on, by Microsoft Edge's text-to-speech. Both give
+the audio and when each word is spoken; everything after that is the same.
 
 Studio personas (see voices.py) get three things plain TTS lacks:
 
@@ -129,12 +133,36 @@ def _synthesise(text, persona, mp3_path):
             time.sleep(1.5 * (attempt + 1))
 
 
-def generate_voiceover(text, filename, log_func, voice_choice):
+def generate_voiceover(text, filename, log_func, voice_choice, online=False):
     """Voice ``text`` into ``filename``; returns the path actually written."""
-    return generate_voiceover_timed(text, filename, log_func, voice_choice)[0]
+    return generate_voiceover_timed(text, filename, log_func, voice_choice, online)[0]
 
 
-def generate_voiceover_timed(text, filename, log_func, voice_choice):
+def _local(text, persona, base, log_func):
+    """The offline voice: (path written, word timings), through the same studio chain."""
+    from . import localvoice, mastering
+    from .pacing import rate_factor
+
+    try:
+        samples, words = localvoice.say(text, persona.local, rate_factor(persona.rate))
+    except localvoice.VoiceError as exc:
+        raise Exception(f"Voice generation failed! {exc}") from exc
+    wav_path = base + ".wav"
+    if not persona.enhanced:
+        return mastering.write_wav(wav_path, samples, SYNTH_RATE), words
+    paced = base + ".paced.wav"
+    pauses = plan_pauses(words, text, persona.pause_scale)
+    words = shift_words(words, pauses)
+    mastering.write_wav(paced, insert_pauses(samples, SYNTH_RATE, pauses), SYNTH_RATE)
+    try:
+        mastering.master(paced, wav_path)
+        return wav_path, words
+    except Exception as exc:  # noqa: BLE001 - polish never sinks a render
+        log_func(f"⚠️ Studio processing failed ({exc}); using the plain voice.")
+        return paced, words
+
+
+def generate_voiceover_timed(text, filename, log_func, voice_choice, online=False):
     """Voice ``text`` into ``filename``; returns (path written, word timings).
 
     Word timings are (start, duration, word) in seconds within the returned
@@ -143,12 +171,14 @@ def generate_voiceover_timed(text, filename, log_func, voice_choice):
     Studio personas produce a mastered WAV beside ``filename`` (same name,
     .wav); classic ones produce the MP3 exactly as before. If mastering fails
     the line is still used, unmastered, with a warning - polish never sinks a
-    render.
+    render. The offline voice always writes a WAV.
     """
     persona = voices.persona(voice_choice)
     log_func(f"🗣️ Generating {persona.short} Voice: '{text}'")
 
     base = os.path.splitext(filename)[0]
+    if not online:
+        return _local(text, persona, base, log_func)
     mp3_path = base + ".tts.mp3" if persona.enhanced else filename
     try:
         words = _synthesise(text, persona, mp3_path) or []

@@ -114,18 +114,20 @@ def remove(model: Model | None = None) -> None:
             pass
 
 
-def runtime_path() -> str | None:
-    """llama.cpp's server program: bundled in the built app, vendor/ when run from source."""
+def bundled(folder: str, exe: str) -> str | None:
+    """A helper program: bundled in the built app, under vendor/ when run from source."""
     if getattr(sys, "frozen", False):
-        bases = [getattr(sys, "_MEIPASS", os.path.dirname(sys.executable))]
+        base = getattr(sys, "_MEIPASS", os.path.dirname(sys.executable))
     else:
         repo = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        bases = [os.path.join(repo, "vendor")]
-    for base in bases:
-        candidate = os.path.join(base, "llama", SERVER_EXE)
-        if os.path.isfile(candidate):
-            return candidate
-    return None
+        base = os.path.join(repo, "vendor")
+    candidate = os.path.join(base, folder, exe)
+    return candidate if os.path.isfile(candidate) else None
+
+
+def runtime_path() -> str | None:
+    """llama.cpp's server program."""
+    return bundled("llama", SERVER_EXE)
 
 
 def free_memory() -> int | None:
@@ -312,6 +314,47 @@ _SUGGEST_SCHEMA = {
 }
 
 
+# Stock sites have no screenshots, so these words only bring back wrong clips ("clipboard"
+# is an office clipboard). Four prompt versions did not stop the model describing the
+# screen (measured 2026-10-10), so the words are taken out here instead.
+# ponytail: "windows" of a house are caught too; if that bites, look at the pasted text.
+_UNFILMABLE = frozenset(
+    # things that only exist on a screen
+    "ai app apps browser clipboard cursor feature features icon icons interface logo menu "
+    "notification notifications screenshot screenshots setting settings shortcut shortcuts "
+    "snipping software website windows popup toolbar taskbar dialog dropdown checkbox widget "
+    "plugin extension url hotkey ctrl alt toggle mode option options version ui "
+    "item items pinned selected highlighted caption captions subtitle subtitles voiceover "
+    "footage clips watermark subscription account algorithm pixel pixels resolution "
+    # things done on a screen
+    "click clicks clicking clicked paste pasted pasting scroll scrolling download downloads "
+    "downloading upload uploading install installing sync syncing "
+    # brands: stock sites have none of their screens or logos
+    "microsoft google youtube tiktok instagram facebook chrome android".split())
+_COMPUTER_SHOTS = (
+    "person typing laptop", "hands keyboard close up", "woman working computer",
+    "man using laptop", "hand computer mouse", "person looking monitor",
+    "fingers pressing keys", "office desk computer",
+)
+
+
+def filmable(visual: str, turn: int = 0) -> str:
+    """``visual`` without the words no camera can film.
+
+    When fewer than two words are left, the scene shows someone at a computer;
+    ``turn`` picks which shot, so neighbouring scenes differ.
+    """
+    words = visual.split()
+    kept = [w for w in words if w.lower() not in _UNFILMABLE]
+    if len(kept) < len(words):  # "windows key v": the letter means nothing without the rest
+        kept = [w for w in kept if len(w) > 1]
+    if len(kept) == len(words):
+        return visual
+    if len(kept) >= 2:
+        return " ".join(kept)
+    return _COMPUTER_SHOTS[turn % len(_COMPUTER_SHOTS)]
+
+
 def parse_scenes(content: str) -> list[draft.DraftScene]:
     """The model's answer as scenes. Repeated and empty lines are dropped."""
     try:
@@ -329,7 +372,8 @@ def parse_scenes(content: str) -> list[draft.DraftScene]:
         if not voice or key in said:
             continue  # small models sometimes say a line twice
         said.add(key)
-        scenes.append(draft.DraftScene(str(item.get("visual") or ""), voice, len(scenes)))
+        visual = filmable(str(item.get("visual") or ""), len(scenes))
+        scenes.append(draft.DraftScene(visual, voice, len(scenes)))
     if not scenes:
         raise WriterError("The Smart writer gave an empty answer.")
     return scenes
@@ -498,7 +542,8 @@ class Session:
         return draft.Suggestion(audience, length, reason)
 
     def write(self, text: str, audience: draft.Audience | None = None,
-              length: str | None = None, padding: float = 0.3) -> draft.Draft:
+              length: str | None = None, padding: float = 0.3,
+              cards: bool = True) -> draft.Draft:
         """A script for ``text``, rewritten for the audience and the length."""
         audience = audience or draft.Audience()
         length = length if length in draft.LENGTHS else audience.length
@@ -521,7 +566,7 @@ class Session:
             scenes = self._write_once(text, audience, fewer)
             if not _fits(scenes, target, persona):
                 scenes = _trim(scenes, target, persona)
-        script = draft.to_script(scenes)
+        script = draft.to_script(scenes, cards)
         seconds = sum(pacing.estimate_voice(s.voice, persona.rate, persona.pause_scale,
                                             persona.enhanced) + padding for s in scenes)
         return draft.Draft(script, scenes, seconds, length, persona.id, audience.aspect,

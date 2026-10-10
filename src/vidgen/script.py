@@ -13,6 +13,7 @@ Any scene can add optional keys, in any order after its ``Visual:``:
     Duration: 4s        auto (default) or a number of seconds
     Padding: 0.5s       silence after the voice; default comes from Settings
     Zoom: in            in, out, none, or auto (default: a subtle zoom)
+    Card: Win + V       drawn over the footage; see cards.py for the three looks
 
 Keys are case-insensitive. A scene needs a ``Voice:``, or a numeric
 ``Duration:`` to be a silent shot.
@@ -23,7 +24,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-KEYS = ("visual", "voice", "duration", "padding", "zoom")
+KEYS = ("visual", "voice", "duration", "padding", "zoom", "card")
 ZOOM_MODES = ("auto", "in", "out", "none")
 _ZOOM_ALIASES = {"off": "none", "no": "none", "default": "auto"}
 
@@ -48,6 +49,7 @@ class Scene:
     duration: float | None = None  # None means auto: fit the voice
     padding: float | None = None  # None means the Settings default
     zoom: str = "auto"
+    card: str | None = None  # text drawn over the footage (cards.py)
     line: int = 0  # 1-based line of the scene's Visual:
 
     @property
@@ -131,7 +133,7 @@ def parse_script(script_text, warnings=None):
         if key not in KEYS:
             raise ScriptError(
                 f"Error on Line {line_no}: Line must begin with 'Visual:' or 'Voice:' "
-                "(or Duration:, Padding:, Zoom:)"
+                "(or Duration:, Padding:, Zoom:, Card:)"
             )
         value = match.group(2).strip()
         label = key.capitalize()
@@ -169,6 +171,10 @@ def parse_script(script_text, warnings=None):
                 value, line_no, "Padding", allow_auto=False,
                 low=0.0, high=MAX_PADDING, warnings=warnings,
             )
+        elif key == "card":
+            if not value:
+                raise ScriptError(f"Error on Line {line_no}: Card: is empty")
+            current.card = value
         else:
             current.zoom = _zoom(value, line_no)
 

@@ -104,7 +104,7 @@ Filename: "{app}\{#MyAppExeName}"; Flags: nowait; Check: RelaunchAsked
 [UninstallDelete]
 ; Scratch space only, never user data.
 Type: filesandordirs; Name: "{localappdata}\Temp\AIVideoStudio"
-; The Smart writer's model: 2.5 GB that only this app uses, and can fetch again.
+; The AI models: 2.9 GB that only this app uses, and can fetch again.
 ; (Not for a test build: it shares the real app's model and must not delete it.)
 #ifndef TestBuild
 Type: filesandordirs; Name: "{localappdata}\AIVideoStudio\models"
@@ -117,83 +117,120 @@ begin
   Result := ExpandConstant('{param:RELAUNCH|0}') = '1';
 end;
 
-// ---- The Smart writer's model ------------------------------------------------
-// The model is 2.5 GB, so it is not inside this installer: it is downloaded here,
-// once, and kept in the user's profile where app updates leave it alone. If the
-// download fails or is cancelled the install still finishes, and the app offers
-// the download the first time "New from text" is used.
+// ---- The AI models: the Smart writer and the voice ----------------------------
+// Together they are 2.9 GB, so they are not inside this installer: they are
+// downloaded here, once, and kept in the user's profile where app updates leave
+// them alone. If a download fails or is cancelled the install still finishes,
+// and the app fetches what is missing the first time it is needed.
 var
   ModelPage: TDownloadWizardPage;
-  ModelFetched: Boolean;
+  Fetched: array[0..2] of Boolean;
 
 function ModelDir(): String;
 begin
   Result := ExpandConstant('{localappdata}\AIVideoStudio\models');
 end;
 
-function ModelPresent(): Boolean;
+function ModelName(Index: Integer): String;
+begin
+  case Index of
+    0: Result := '{#ModelFile}';
+    1: Result := '{#VoiceFile}';
+  else
+    Result := '{#SpeakersFile}';
+  end;
+end;
+
+function ModelPresent(Index: Integer): Boolean;
 var
-  Size: Int64;
+  Size, Wanted: Int64;
 begin
   // Same test as the app: the whole file is there. Its contents were checked
   // against the SHA-256 when it was downloaded, by this installer or by the app.
-  Result := FileSize64(ModelDir() + '\{#ModelFile}', Size)
-            and (Size = StrToInt64('{#ModelSize}'));
+  case Index of
+    0: Wanted := StrToInt64('{#ModelSize}');
+    1: Wanted := StrToInt64('{#VoiceSize}');
+  else
+    Wanted := StrToInt64('{#SpeakersSize}');
+  end;
+  Result := FileSize64(ModelDir() + '\' + ModelName(Index), Size) and (Size = Wanted);
 end;
 
 procedure InitializeWizard();
 begin
   ModelPage := CreateDownloadPage(
-    'Downloading the Smart writer',
-    'The open-source AI that writes scripts on your PC (2.5 GB, downloaded once). '
-    + 'You can cancel: the app will offer the download again later.', nil);
-  ModelFetched := False;
+    'Downloading the AI models',
+    'The open-source AI that writes scripts (2.5 GB) and the voice that reads them '
+    + '(0.4 GB) run on your PC and are downloaded once. '
+    + 'You can cancel: the app will download them later.', nil);
 end;
 
 function NextButtonClick(CurPageID: Integer): Boolean;
+var
+  Index: Integer;
+  Wanted: array[0..2] of Boolean;
 begin
   Result := True;
-  if (CurPageID = wpReady) and not ModelPresent() then
+  if CurPageID <> wpReady then
+    exit;
+  ModelPage.Clear;
+  for Index := 0 to 2 do
   begin
-    ModelPage.Clear;
+    Fetched[Index] := False;
+    Wanted[Index] := not ModelPresent(Index);
+  end;
+  // The voice first: it is small, and every video needs it.
+  if Wanted[1] then
+    ModelPage.Add('{#VoiceUrl}', '{#VoiceFile}', '{#VoiceSha256}');
+  if Wanted[2] then
+    ModelPage.Add('{#SpeakersUrl}', '{#SpeakersFile}', '{#SpeakersSha256}');
+  if Wanted[0] then
     ModelPage.Add('{#ModelUrl}', '{#ModelFile}', '{#ModelSha256}');
-    ModelPage.Show;
+  if not (Wanted[0] or Wanted[1] or Wanted[2]) then
+    exit;
+  ModelPage.Show;
+  try
     try
-      try
-        ModelPage.Download;
-        ModelFetched := True;
-      except
-        if ModelPage.AbortedByUser then
-          Log('Smart writer download cancelled.')
-        else
-          Log('Smart writer download failed: ' + GetExceptionMessage);
-        SuppressibleMsgBox(
-          'The Smart writer was not downloaded.' #13#10 #13#10
-          + 'Setup will finish without it. AI Video Studio will offer to download it '
-          + 'the first time you use "New from text".',
-          mbInformation, MB_OK, IDOK);
-      end;
-    finally
-      ModelPage.Hide;
+      ModelPage.Download;
+    except
+      if ModelPage.AbortedByUser then
+        Log('Model download cancelled.')
+      else
+        Log('Model download failed: ' + GetExceptionMessage);
+      SuppressibleMsgBox(
+        'Not everything was downloaded.' #13#10 #13#10
+        + 'Setup will finish anyway. AI Video Studio will download what is missing '
+        + 'the first time it is needed.',
+        mbInformation, MB_OK, IDOK);
     end;
+    // A file that arrived whole is kept even if a later one failed.
+    for Index := 0 to 2 do
+      Fetched[Index] := Wanted[Index]
+        and FileExists(ExpandConstant('{tmp}\') + ModelName(Index));
+  finally
+    ModelPage.Hide;
   end;
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
 var
+  Index: Integer;
   Source, Target: String;
 begin
-  if (CurStep = ssPostInstall) and ModelFetched then
-  begin
-    Source := ExpandConstant('{tmp}\{#ModelFile}');
-    Target := ModelDir() + '\{#ModelFile}';
-    ForceDirectories(ModelDir());
-    DeleteFile(Target);
-    // Same drive in almost every setup, so this is a rename, not a 2.5 GB copy.
-    if not RenameFile(Source, Target) then
-      if not FileCopy(Source, Target, False) then
-        Log('Could not put the Smart writer in ' + ModelDir());
-  end;
+  if CurStep <> ssPostInstall then
+    exit;
+  for Index := 0 to 2 do
+    if Fetched[Index] then
+    begin
+      Source := ExpandConstant('{tmp}\') + ModelName(Index);
+      Target := ModelDir() + '\' + ModelName(Index);
+      ForceDirectories(ModelDir());
+      DeleteFile(Target);
+      // Same drive in almost every setup, so this is a rename, not a 2.5 GB copy.
+      if not RenameFile(Source, Target) then
+        if not FileCopy(Source, Target, False) then
+          Log('Could not put ' + ModelName(Index) + ' in ' + ModelDir());
+    end;
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);

@@ -22,10 +22,15 @@ def fetch_llama():
 
 
 def test_the_installer_downloads_exactly_the_model_the_app_accepts():
+    from vidgen import localvoice
+
     defines = dict(re.findall(r'#define (\w+) "([^"]*)"', read("packaging", "model.iss")))
-    model = writer.MODEL
-    assert defines == {"ModelFile": model.file, "ModelUrl": model.url,
-                       "ModelSize": str(model.size), "ModelSha256": model.sha256}
+    expected = {}
+    for prefix, model in (("Model", writer.MODEL), ("Voice", localvoice.MODEL),
+                          ("Speakers", localvoice.SPEAKERS)):
+        expected |= {prefix + "File": model.file, prefix + "Url": model.url,
+                     prefix + "Size": str(model.size), prefix + "Sha256": model.sha256}
+    assert defines == expected
 
 
 def test_the_installer_puts_the_model_where_the_app_looks(monkeypatch):
@@ -55,3 +60,32 @@ def test_the_readme_and_the_app_agree_on_the_version():
     version = re.search(r'APP_VERSION = "([^"]+)"', read("src", "ai_video_studio.py")).group(1)
     assert f"AIVideoStudio-{version}-setup.exe" in read("README.md")
     assert f"'ProductVersion', '{version}'" in read("packaging", "version_info.txt")
+
+
+def fetch_espeak():
+    spec = importlib.util.spec_from_file_location(
+        "fetch_espeak", os.path.join(ROOT, "packaging", "fetch_espeak.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_the_pinned_espeak_build_is_a_full_checksum_of_a_tagged_release():
+    pins = fetch_espeak()
+    assert re.fullmatch(r"[0-9a-f]{64}", pins.SHA256)
+    assert pins.URL.startswith(
+        f"https://github.com/espeak-ng/espeak-ng/releases/download/{pins.TAG}/")
+
+
+def test_only_the_english_part_of_espeak_goes_into_the_app():
+    from vidgen import localvoice
+
+    needed = fetch_espeak().needed
+    for name in ("espeak-ng.exe", "libespeak-ng.dll", "espeak-ng-data/phondata",
+                 "espeak-ng-data/en_dict", "espeak-ng-data\\lang\\gmw\\en-US",
+                 "espeak-ng-data/voices/!v/f1"):
+        assert needed(name), name
+    for name in ("espeak-ng-data/de_dict", "espeak-ng-data/lang/roa/fr", "README.md",
+                 "espeak-ng-data/lang/gmw/de"):
+        assert not needed(name), name
+    assert fetch_espeak().EXE == localvoice.ESPEAK_EXE

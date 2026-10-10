@@ -406,14 +406,91 @@ def _visual(words: str) -> str:
     return _clean(words.replace(":", " ")) or "abstract background"
 
 
-def to_script(scenes) -> str:
+# --- cards ---------------------------------------------------------------------------
+# Which scenes get a card (cards.py) is decided by rules, not by the Smart writer's
+# model: a rule always sees "Windows key and V", and works for Quick split too.
+
+_KEY_NAMES = {
+    "windows": "Win", "win": "Win", "control": "Ctrl", "ctrl": "Ctrl", "alt": "Alt",
+    "shift": "Shift", "tab": "Tab", "enter": "Enter", "escape": "Esc", "esc": "Esc",
+    "delete": "Del", "backspace": "Backspace", "space": "Space", "spacebar": "Space",
+    **{f"f{n}": f"F{n}" for n in range(1, 13)},
+}
+_ARROWS = {"left": "Left", "right": "Right", "up": "Up", "down": "Down"}
+_PRESS = {"press", "pressing", "hold", "holding", "hit", "tap"}
+_KEY_FILLER = _PRESS | {"the", "key", "keys", "and", "plus", "then", "a", "letter", "arrow",
+                        "button"}
+_MONEY = re.compile(r"\$\d[\d,.]*\d(?:\s(?:million|billion|trillion))?|\$\d")
+_PERCENT = re.compile(r"\d+(?:\.\d+)?\s?%|\d+(?:\.\d+)? percent")
+_BIG = re.compile(r"\b\d{1,3}(?:,\d{3})+\b|\b\d+(?:\.\d+)? (?:million|billion|trillion)\b")
+
+
+def _key_card(voice: str) -> str | None:
+    """"Win + V" for a line that tells the viewer to press keys, else None.
+
+    The line has to say press (or hold, hit, tap): "Windows has a tool" and
+    "the night shift" name no keys.
+    """
+    words = [w.strip(".,;:!?\"'()") for w in voice.split()]
+    lowered = [w.lower() for w in words]
+    for at, word in enumerate(lowered):
+        if word not in _PRESS:
+            continue
+        keys = []
+        for raw, low in zip(words[at + 1:], lowered[at + 1:]):
+            if low in _KEY_NAMES:
+                keys.append(_KEY_NAMES[low])
+            elif low in _ARROWS:
+                keys.append(_ARROWS[low])
+            elif len(raw) == 1 and raw.isalnum() and keys and low != "a":
+                keys.append(raw.upper())
+            elif low not in _KEY_FILLER:
+                break
+        keys = list(dict.fromkeys(keys))
+        if 2 <= len(keys) <= 4 and keys[0] in _KEY_NAMES.values():
+            return " + ".join(keys)
+    return None
+
+
+def suggest_card(voice: str) -> str | None:
+    """A card for this spoken line, or None: keys to press, else the number it is about.
+
+    Years and small numbers are left alone; a card is for the one figure worth seeing.
+    """
+    keys = _key_card(voice)
+    if keys:
+        return keys
+    for pattern in (_MONEY, _PERCENT, _BIG):
+        found = pattern.search(voice)
+        if found:
+            return found.group(0).replace(" percent", "%")
+    return None
+
+
+def add_cards(voices: list[str]) -> list[str | None]:
+    """A card or None for each line; at most half the scenes get one, so it stays special."""
+    cards = [suggest_card(voice) for voice in voices]
+    allowed = max(1, len(voices) // 2)
+    # Key cards first: they are what the scene is for. Then numbers, earliest first.
+    order = sorted((i for i, card in enumerate(cards) if card),
+                   key=lambda i: ("+" not in cards[i], i))
+    keep = set(order[:allowed])
+    return [card if i in keep else None for i, card in enumerate(cards)]
+
+
+def to_script(scenes, cards: bool = True) -> str:
     """Script text for ``scenes`` (anything with .visual and .voice).
 
+    With ``cards``, scenes that name keys or a figure get a ``Card:`` line.
     Always parsed before it is returned, so the editor never receives a script
     the app would then refuse.
     """
-    blocks = [f"Visual: {_visual(s.visual)}\nVoice: {_one_line(s.voice)}"
-              for s in scenes if _one_line(s.voice)]
+    spoken = [s for s in scenes if _one_line(s.voice)]
+    blocks = [f"Visual: {_visual(s.visual)}\nVoice: {_one_line(s.voice)}" for s in spoken]
+    if cards:
+        found = add_cards([_one_line(s.voice) for s in spoken])
+        blocks = [block + (f"\nCard: {card}" if card else "")
+                  for block, card in zip(blocks, found)]
     if not blocks:
         raise DraftError("There is no text to turn into a script.")
     script = "\n\n".join(blocks)
@@ -450,7 +527,7 @@ def shortest_fit(scene_lists: list[list[str]], persona) -> str | None:
 
 
 def write(text: str, audience: Audience | None = None, length: str | None = None,
-          keep=(), padding: float = 0.3) -> Draft:
+          keep=(), padding: float = 0.3, cards: bool = True) -> Draft:
     """The script for ``text``, keeping the user's words.
 
     ``length`` is an entry of LENGTHS (default: the audience's platform).
@@ -481,5 +558,5 @@ def write(text: str, audience: Audience | None = None, length: str | None = None
         if longer == length:
             longer = KEEP_ALL
     seconds = sum(_spoken(s.voice, persona) + padding for s in scenes)
-    return Draft(to_script(scenes), scenes, seconds, length, persona.id, audience.aspect,
-                 dropped, kept, longer)
+    return Draft(to_script(scenes, cards), scenes, seconds, length, persona.id,
+                 audience.aspect, dropped, kept, longer)

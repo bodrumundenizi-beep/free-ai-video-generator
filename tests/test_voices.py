@@ -8,16 +8,22 @@ from vidgen.voice import (
 
 # --- catalog -------------------------------------------------------------------
 
-def test_sixteen_voices_twelve_studio_four_classic():
-    assert len(voices.CATALOG) == 16
-    assert sum(p.enhanced for p in voices.CATALOG) == 12
+def test_twenty_voices_sixteen_studio_four_classic():
+    assert len(voices.CATALOG) == 20
+    assert sum(p.enhanced for p in voices.CATALOG) == 16
     classic = [p for p in voices.CATALOG if not p.enhanced]
     assert all("(low quality)" in p.label for p in classic)
 
 
 def test_ids_and_labels_are_unique():
-    assert len({p.id for p in voices.CATALOG}) == 16
-    assert len(set(voices.labels())) == 16
+    assert len({p.id for p in voices.CATALOG}) == 20
+    assert len(set(voices.labels())) == 20
+
+
+def test_every_voice_has_an_offline_speaker_and_an_online_one():
+    for p in voices.CATALOG:
+        assert p.voice.endswith("Neural")
+        assert all(name[:3] in ("am_", "af_", "bm_", "bf_") for name in p.local.split("+")), p.id
 
 
 def test_classic_voices_listed_last():

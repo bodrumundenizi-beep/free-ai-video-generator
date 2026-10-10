@@ -9,7 +9,9 @@ portable ZIP redistribute the components below, each under its own licence.
 | [MoviePy](https://github.com/Zulko/moviepy) | MIT | Video assembly |
 | [Requests](https://github.com/psf/requests) | Apache-2.0 | Pexels API calls |
 | [imageio-ffmpeg](https://github.com/imageio/imageio-ffmpeg) | BSD-2-Clause | Locates and ships the ffmpeg binary |
-| [edge-tts](https://github.com/rany2/edge-tts) | **LGPL-3.0** | Voiceover |
+| [edge-tts](https://github.com/rany2/edge-tts) | **LGPL-3.0** | The optional online voices |
+| [ONNX Runtime](https://github.com/microsoft/onnxruntime) | MIT | Runs the offline voice's model |
+| [espeak-ng](https://github.com/espeak-ng/espeak-ng) (bundled program) | **GPL-3.0** | See below |
 | [pywinstyles](https://github.com/Akascape/py-win-styles) | MIT | Mica backdrop |
 | [FFmpeg](https://ffmpeg.org/) (bundled binary) | **GPL-3.0** | See below |
 | [Pillow](https://python-pillow.org/), [NumPy](https://numpy.org/) | MIT-CMU / BSD-3-Clause | Pulled in by MoviePy |
@@ -55,5 +57,24 @@ The Smart writer runs a language model on the user's PC. Two things are involved
   Cloud), the model. It is **not** part of this download: the installer or the
   app fetches the unmodified file `Qwen3-4B-Q4_K_M.gguf` from the publisher's
   Hugging Face page, and checks its SHA-256, pinned in `src/vidgen/writer.py`.
+
+## The offline voice: Kokoro (Apache 2.0) and espeak-ng (GPL-3.0)
+
+The voiceover is spoken on the user's PC. Three things are involved:
+
+- **[Kokoro 82M](https://huggingface.co/hexgrad/Kokoro-82M)** (Apache 2.0), the
+  speech model, and its speaker file. They are **not** part of this download: the
+  installer or the app fetches the unmodified ONNX export published by
+  [kokoro-onnx](https://github.com/thewh1teagle/kokoro-onnx) (MIT) and checks each
+  file's SHA-256, pinned in `src/vidgen/localvoice.py`.
+- **[ONNX Runtime](https://github.com/microsoft/onnxruntime)** (MIT) runs the model.
+- **[espeak-ng](https://github.com/espeak-ng/espeak-ng)** (GPL-3.0) turns words
+  into sounds. Its unmodified Windows build, with the English data only, is
+  bundled in the `espeak` folder and run as a **separate program**: the app passes
+  it text and reads back its output, and never links to it or loads it. Bundling
+  an independent GPL program beside an MIT one is aggregation, which the GPL
+  permits; espeak-ng itself stays GPL-3.0. Its licence text ships beside it
+  (`LICENSE-espeak-ng-GPL-3.0.txt`), its source is at the link above, and the
+  exact release and checksum are pinned in `packaging/fetch_espeak.py`.
 
 *This is a description of the licences involved, not legal advice.*

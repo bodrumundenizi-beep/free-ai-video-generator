@@ -6,6 +6,8 @@ customtkinter==6.0.0
 requests==2.34.2
 moviepy==2.1.2
 edge-tts==7.2.8
+# Runs the offline voice's model (vidgen/localvoice.py).
+onnxruntime==1.31.0
 imageio-ffmpeg==0.6.0
 pywinstyles==1.8
 # Imported directly by the engine (frame maths, Ken Burns resampling), so pinned
