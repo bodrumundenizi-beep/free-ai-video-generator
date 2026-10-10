@@ -258,8 +258,23 @@ def scene_count(words: int) -> int:
     return min(max(2, round(words / WORDS_PER_SCENE)), MAX_SCENES)
 
 
-def build_prompt(audience: draft.Audience, words: int) -> str:
-    """The instructions for writing a script of about ``words`` spoken words."""
+# The same example with a picture for each scene, for when AI images are downloaded.
+_EXAMPLE_PICTURES = (
+    "a glass jar of golden honey with a wooden spoon on a kitchen table, morning light",
+    "an ancient clay pot of honey inside a dim Egyptian tomb, hieroglyphs on the stone wall",
+    "a close-up of bees crawling over a honeycomb full of honey",
+)
+_EXAMPLE_OUT_PICTURES = json.dumps({"scenes": [
+    dict(scene, picture=picture)
+    for scene, picture in zip(json.loads(_EXAMPLE_OUT)["scenes"], _EXAMPLE_PICTURES)]})
+PICTURE_TOKENS = 45  # room in the answer for one scene's picture description
+
+
+def build_prompt(audience: draft.Audience, words: int, pictures: bool = False) -> str:
+    """The instructions for writing a script of about ``words`` spoken words.
+
+    With ``pictures`` every scene also gets a description an image model can draw.
+    """
     return (
         "You are a scriptwriter for short narrated videos made from stock footage. "
         "Rewrite the user's text as a script, in your own words. Do not copy its sentences.\n"
@@ -275,20 +290,25 @@ def build_prompt(audience: draft.Audience, words: int) -> str:
         "- \"visual\" is 2 or 3 words for a stock video search: real things a camera can film "
         "that match the line. Every scene gets different words. No brand names, no single "
         "words.\n"
-        "- Use only facts from the text. No greetings, hashtags or emojis.\n"
+        + ("- \"picture\" is one sentence describing a photo for this scene: who or what is "
+           "in it, what they are doing and where. Things you can see, not ideas. No writing, "
+           "logos or brand names in the picture.\n" if pictures else "")
+        + "- Use only facts from the text. No greetings, hashtags or emojis.\n"
         "Answer with JSON only."
     )
 
 
-def script_schema(scenes: int) -> dict:
+def script_schema(scenes: int, pictures: bool = False) -> dict:
     """Fixing the number of scenes is what makes the length land (see MODEL's test)."""
+    extra = {"picture": {"type": "string"}} if pictures else {}
     return {
         "type": "object",
         "properties": {"scenes": {
             "type": "array", "minItems": scenes, "maxItems": scenes,
             "items": {"type": "object",
-                      "properties": {"visual": {"type": "string"}, "voice": {"type": "string"}},
-                      "required": ["visual", "voice"]}}},
+                      "properties": {"visual": {"type": "string"},
+                                     "voice": {"type": "string"}, **extra},
+                      "required": ["visual", "voice", *extra]}}},
         "required": ["scenes"],
     }
 
@@ -372,8 +392,10 @@ def parse_scenes(content: str) -> list[draft.DraftScene]:
         if not voice or key in said:
             continue  # small models sometimes say a line twice
         said.add(key)
-        visual = filmable(str(item.get("visual") or ""), len(scenes))
-        scenes.append(draft.DraftScene(visual, voice, len(scenes)))
+        asked = str(item.get("visual") or "")
+        visual = filmable(asked, len(scenes))
+        picture = " ".join(str(item.get("picture") or "").split())
+        scenes.append(draft.DraftScene(visual, voice, len(scenes), picture, visual != asked))
     if not scenes:
         raise WriterError("The Smart writer gave an empty answer.")
     return scenes
@@ -543,7 +565,7 @@ class Session:
 
     def write(self, text: str, audience: draft.Audience | None = None,
               length: str | None = None, padding: float = 0.3,
-              cards: bool = True) -> draft.Draft:
+              cards: bool = True, ai: str = draft.AI_NONE) -> draft.Draft:
         """A script for ``text``, rewritten for the audience and the length."""
         audience = audience or draft.Audience()
         length = length if length in draft.LENGTHS else audience.length
@@ -557,32 +579,36 @@ class Session:
         else:
             words = target_words(target, persona)
 
-        scenes = self._write_once(text, audience, words)
+        pictures = bool(ai)
+        scenes = self._write_once(text, audience, words, pictures)
         if target is not None and not _fits(scenes, target, persona):
             # Too long. Ask once more for less, then cut what still does not fit.
             spoken = sum(len(draft.words_in(s.voice)) for s in scenes)
             fewer = max(8, round(words * words / max(spoken, words)))
             self._stopping()
-            scenes = self._write_once(text, audience, fewer)
+            scenes = self._write_once(text, audience, fewer, pictures)
             if not _fits(scenes, target, persona):
                 scenes = _trim(scenes, target, persona)
-        script = draft.to_script(scenes, cards)
+        script = draft.to_script(scenes, cards, ai)
         seconds = sum(pacing.estimate_voice(s.voice, persona.rate, persona.pause_scale,
                                             persona.enhanced) + padding for s in scenes)
         return draft.Draft(script, scenes, seconds, length, persona.id, audience.aspect,
                            source="Smart writer")
 
-    def _write_once(self, text, audience, words):
-        _check_fits(text, _answer_tokens(words))
+    def _write_once(self, text, audience, words, pictures=False):
+        room = _answer_tokens(words, pictures)
+        _check_fits(text, room)
+        example = _EXAMPLE_OUT_PICTURES if pictures else _EXAMPLE_OUT
         content = self._ask(
-            build_prompt(audience, words),
-            [("user", _EXAMPLE_IN), ("assistant", _EXAMPLE_OUT), ("user", text)],
-            script_schema(scene_count(words)), _answer_tokens(words))
+            build_prompt(audience, words, pictures),
+            [("user", _EXAMPLE_IN), ("assistant", example), ("user", text)],
+            script_schema(scene_count(words), pictures), room)
         return parse_scenes(content)
 
 
-def _answer_tokens(words: int) -> int:
-    return min(round(words * 2.4) + 200, CONTEXT // 2)
+def _answer_tokens(words: int, pictures: bool = False) -> int:
+    extra = scene_count(words) * PICTURE_TOKENS if pictures else 0
+    return min(round(words * 2.4) + 200 + extra, CONTEXT // 2)
 
 
 def _check_fits(text: str, answer_tokens: int) -> None:

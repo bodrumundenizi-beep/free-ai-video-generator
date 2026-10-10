@@ -19,6 +19,7 @@ voiceover, and renders a 1080p or 720p MP4 in portrait or landscape.
 - **Two versions in one go:** Optionally render the same script twice with different clips, and keep the better one.
 - **Pick a length:** Fit the video to 15, 30 or 60 seconds, with a live estimate as you type.
 - **Neural AI Voices, on your PC:** 20 natural-sounding male and female voices from an open-source speech model that runs offline. No account, no key, no service that can be switched off.
+- **AI pictures (optional):** With a good graphics card, an open-source image model on your PC draws a picture for the scenes stock footage has nothing for.
 - **Animated cards:** Key combos like `Win + V`, big numbers and short lists are drawn over the footage, because no stock clip can show them.
 - **Smart Script Parser:** Automatically reads your script line-by-line using `Visual:` and `Voice:` tags.
 - **Windows 11 Fluent interface:** Settings-app style segmented controls, smooth page transitions, dark and light themes with Mica, and live render progress.
@@ -197,6 +198,35 @@ the Windows key and V") or is about a dollar amount, a percentage or a large
 number. At most half the scenes get one. They arrive as `Card:` lines in the
 script, so you can edit or delete them; **Settings → Add cards automatically**
 turns this off.
+
+### AI pictures (optional)
+
+Stock sites have no clip of a clipboard history window or a robot holding your
+product. The **AI images** tab can download an open-source image model
+([Z-Image Turbo](https://huggingface.co/Tongyi-MAI/Z-Image-Turbo)) that draws those
+pictures on your own PC. Nothing is sent anywhere, and nothing is installed unless you
+press **Download** there.
+
+![The AI images tab](docs/aiimages.png)
+
+- **It needs a graphics card with about 8 GB of video memory.** A picture takes around
+  20 seconds on an RTX 4060. Without a graphics card it can take several minutes.
+- **The download is about 4.2 GB**, once. It also uses the Smart writer's file.
+- Ask for a picture in any script with `ai:` and a description:
+
+  ```
+  Visual: ai: a laptop screen showing a list of copied text, a hand on the keyboard
+  Voice: Press the Windows key and V to open your clipboard history.
+  ```
+
+  The picture is made while the video is made and gets the same slow zoom as a photo.
+- **New from text** writes the descriptions for you. Under **Use AI pictures for** choose
+  the scenes stock footage can't show (the default), every scene, or only your own `ai:`
+  lines. **Look** sets one style for the whole video.
+- If a picture can't be made (not enough free memory, for example), that scene uses stock
+  footage instead and the Log says why.
+
+You are responsible for what you ask it to draw and for how you use the pictures.
 
 ### Your own footage and images
 

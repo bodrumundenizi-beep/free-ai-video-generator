@@ -250,3 +250,68 @@ def test_a_scene_falls_back_to_search_words_from_its_description():
     stock = render._stock_instead(scene)
     assert stock.visual == "robot holding office" and not stock.is_ai
     assert (stock.voice, stock.card) == ("Hi.", "Win + V")
+
+
+# --- New from text ---------------------------------------------------------------------
+
+def test_the_smart_writer_is_asked_for_pictures_only_when_wanted():
+    import json
+
+    from vidgen import draft
+
+    audience = draft.Audience()
+    assert "picture" not in writer.build_prompt(audience, 66)
+    assert "picture" not in json.dumps(writer.script_schema(6))
+    assert '"picture" is one sentence' in writer.build_prompt(audience, 66, pictures=True)
+    item = writer.script_schema(6, pictures=True)["properties"]["scenes"]["items"]
+    assert item["required"] == ["visual", "voice", "picture"]
+    example = json.loads(writer._EXAMPLE_OUT_PICTURES)["scenes"]
+    assert all(scene["picture"] and scene["voice"] for scene in example)
+    assert writer._answer_tokens(66, True) > writer._answer_tokens(66)
+
+
+def test_parse_scenes_keeps_the_picture_and_marks_what_stock_cannot_show():
+    import json
+
+    scenes = writer.parse_scenes(json.dumps({"scenes": [
+        {"visual": "clipboard history", "voice": "Press it.",
+         "picture": "a laptop screen  showing a list"},
+        {"visual": "river bank", "voice": "He left."}]}))
+    assert scenes[0].picture == "a laptop screen showing a list" and scenes[0].unfilmable
+    assert scenes[1].picture == "" and not scenes[1].unfilmable
+
+
+def test_to_script_gives_ai_pictures_to_the_scenes_that_were_asked_for():
+    from vidgen import draft
+    from vidgen.script import parse_script
+
+    scenes = [draft.DraftScene("person typing laptop", "Press it.", 0,
+                               "a laptop screen: a list", True),
+              draft.DraftScene("river bank", "He left.", 1, "a muddy river bank"),
+              draft.DraftScene("old plane", "It flew on.", 2)]
+
+    def visuals(ai):
+        return [s.visual for s in parse_script(draft.to_script(scenes, False, ai))]
+
+    assert visuals(draft.AI_NONE) == ["person typing laptop", "river bank", "old plane"]
+    assert visuals(draft.AI_UNFILMABLE) == ["ai: a laptop screen a list", "river bank",
+                                            "old plane"]
+    # with no description from the writer, one is made from the scene itself
+    assert visuals(draft.AI_ALL) == ["ai: a laptop screen a list", "ai: a muddy river bank",
+                                     "ai: old plane, It flew on."]
+
+
+def test_brand_names_are_kept_out_of_picture_descriptions():
+    from vidgen import draft
+
+    scene = draft.DraftScene("x", "y", 0, "a laptop showing a Microsoft account login on Windows")
+    assert draft.picture_for(scene) == "a laptop showing a account login on"
+
+
+def test_quick_split_can_ask_for_pictures_too():
+    from vidgen import draft
+
+    text = "Open the clipboard history in the settings menu. A boy walked along the river bank."
+    script = draft.write(text, length=draft.KEEP_ALL, cards=False, ai=draft.AI_UNFILMABLE).script
+    assert script.count("Visual: ai: ") == 1 and "river" in script.split("Visual: ")[2]
+    assert "ai:" not in draft.write(text, length=draft.KEEP_ALL).script

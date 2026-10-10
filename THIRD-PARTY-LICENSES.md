@@ -77,4 +77,21 @@ The voiceover is spoken on the user's PC. Three things are involved:
   (`LICENSE-espeak-ng-GPL-3.0.txt`), its source is at the link above, and the
   exact release and checksum are pinned in `packaging/fetch_espeak.py`.
 
+## AI images (optional): Z-Image Turbo (Apache 2.0) and stable-diffusion.cpp (MIT)
+
+Nothing for AI images is part of this download. If the user presses Download in the
+**AI images** tab, the app fetches three files and checks each one's SHA-256, pinned in
+`src/vidgen/imagegen.py`:
+
+- **[Z-Image Turbo](https://huggingface.co/Tongyi-MAI/Z-Image-Turbo)** (Apache 2.0, Alibaba),
+  the picture model, as the unmodified GGUF file published by
+  [leejet](https://huggingface.co/leejet/Z-Image-Turbo-GGUF).
+- Its picture decoder (`ae.safetensors`, Apache 2.0), from
+  [Comfy-Org/z_image_turbo](https://huggingface.co/Comfy-Org/z_image_turbo).
+- **[stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp)** (MIT), the
+  program that runs them: its unmodified Windows Vulkan build from its GitHub releases,
+  unpacked into the user's profile and started as a **separate process**.
+
+The model reads the description with the Smart writer's Qwen3 4B file (above).
+
 *This is a description of the licences involved, not legal advice.*

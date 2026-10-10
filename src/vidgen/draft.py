@@ -395,6 +395,30 @@ class DraftScene:
     visual: str
     voice: str
     sentence: int  # index of the sentence it came from
+    picture: str = ""  # the Smart writer's description of an AI picture for the scene
+    unfilmable: bool = False  # its search words named things no camera can film
+
+
+# Which scenes get an AI picture (imagegen.py) when the user has downloaded AI images.
+AI_NONE, AI_UNFILMABLE, AI_ALL = "", "unfilmable", "all"
+
+
+# Named in a description, a brand gets its logo drawn; the picture should have none.
+_BRANDS = re.compile(r"\b(?:microsoft|windows|google|youtube|tiktok|instagram|facebook|chrome|"
+                     r"android|apple|iphone|macbook|samsung|amazon|netflix)(?:'s)?\b\s*", re.I)
+
+
+def picture_for(scene) -> str:
+    """What to draw for ``scene``: the Smart writer's description, else one made from the line.
+
+    Colons would end the ``ai:`` prefix's meaning in a script, and a description is one line.
+    """
+    described = getattr(scene, "picture", "") or f"{scene.visual}, {scene.voice}"
+    return _clean(_BRANDS.sub("", described.replace(":", " "))) or "abstract background"
+
+
+def wants_picture(scene, ai: str) -> bool:
+    return ai == AI_ALL or (ai == AI_UNFILMABLE and getattr(scene, "unfilmable", False))
 
 
 def _one_line(text: str) -> str:
@@ -478,15 +502,18 @@ def add_cards(voices: list[str]) -> list[str | None]:
     return [card if i in keep else None for i, card in enumerate(cards)]
 
 
-def to_script(scenes, cards: bool = True) -> str:
+def to_script(scenes, cards: bool = True, ai: str = AI_NONE) -> str:
     """Script text for ``scenes`` (anything with .visual and .voice).
 
     With ``cards``, scenes that name keys or a figure get a ``Card:`` line.
+    ``ai`` (AI_NONE, AI_UNFILMABLE or AI_ALL) says which scenes ask for an AI
+    picture instead of stock footage.
     Always parsed before it is returned, so the editor never receives a script
     the app would then refuse.
     """
     spoken = [s for s in scenes if _one_line(s.voice)]
-    blocks = [f"Visual: {_visual(s.visual)}\nVoice: {_one_line(s.voice)}" for s in spoken]
+    blocks = [f"Visual: {'ai: ' + picture_for(s) if wants_picture(s, ai) else _visual(s.visual)}"
+              f"\nVoice: {_one_line(s.voice)}" for s in spoken]
     if cards:
         found = add_cards([_one_line(s.voice) for s in spoken])
         blocks = [block + (f"\nCard: {card}" if card else "")
@@ -527,7 +554,7 @@ def shortest_fit(scene_lists: list[list[str]], persona) -> str | None:
 
 
 def write(text: str, audience: Audience | None = None, length: str | None = None,
-          keep=(), padding: float = 0.3, cards: bool = True) -> Draft:
+          keep=(), padding: float = 0.3, cards: bool = True, ai: str = AI_NONE) -> Draft:
     """The script for ``text``, keeping the user's words.
 
     ``length`` is an entry of LENGTHS (default: the audience's platform).
@@ -551,6 +578,11 @@ def write(text: str, audience: Audience | None = None, length: str | None = None
     topics = topic_words(text)
     scenes = [DraftScene(search_words(piece, counts, topics), piece, i)
               for i in kept for piece in scene_lists[i]]
+    if ai == AI_UNFILMABLE:
+        from . import writer  # here, not at the top: writer imports this module
+
+        scenes = [DraftScene(s.visual, s.voice, s.sentence,
+                             unfilmable=writer.filmable(s.visual) != s.visual) for s in scenes]
     dropped = [(i, s) for i, s in enumerate(sentences) if i not in set(kept)]
     longer = None
     if dropped:
@@ -558,5 +590,5 @@ def write(text: str, audience: Audience | None = None, length: str | None = None
         if longer == length:
             longer = KEEP_ALL
     seconds = sum(_spoken(s.voice, persona) + padding for s in scenes)
-    return Draft(to_script(scenes, cards), scenes, seconds, length, persona.id,
+    return Draft(to_script(scenes, cards, ai), scenes, seconds, length, persona.id,
                  audience.aspect, dropped, kept, longer)

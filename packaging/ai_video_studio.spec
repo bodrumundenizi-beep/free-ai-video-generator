@@ -69,6 +69,7 @@ a = Analysis(
         "vidgen.motion", "vidgen.render", "vidgen.script", "vidgen.timeline",
         "vidgen.voice", "vidgen.voices", "vidgen.mastering",
         "vidgen.draft", "vidgen.writer", "vidgen.localvoice", "vidgen.cards",
+        "vidgen.imagegen",
         # Runs the offline voice's model; imported when the first line is spoken.
         "onnxruntime",
         # Voice preview playback; imported only when Preview is clicked.

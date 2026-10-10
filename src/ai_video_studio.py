@@ -1720,13 +1720,13 @@ class DraftDialog(ctk.CTkToplevel):
         # Everything the worker needs is read here: it must not touch Tk variables.
         args = (job, self.text(), self.audience(), self.var_length.get(),
                 self.app.settings["padding"], bool(self.app.var_writer_gpu.get()),
-                bool(self.app.var_auto_cards.get()))
+                bool(self.app.var_auto_cards.get()), self.app.ai_mode())
         threading.Thread(target=self._work, args=args, daemon=True).start()
 
     def _post(self, **payload):
         self.app._queue.put(("draft", dict(payload, dialog=self)))
 
-    def _work(self, job, text, audience, length, padding, gpu, cards):
+    def _work(self, job, text, audience, length, padding, gpu, cards, ai):
         """Worker thread: never touches a widget."""
         keep_loaded = False
         try:
@@ -1738,7 +1738,8 @@ class DraftDialog(ctk.CTkToplevel):
                 self._post(event="suggested", found=found)
             else:
                 self._post(event="written",
-                           result=self.session.write(text, audience, length, padding, cards))
+                           result=self.session.write(text, audience, length, padding, cards,
+                                                     ai))
         except writer.Stopped:
             self._post(event="stopped")
         except (writer.WriterError, draft.DraftError, ScriptError) as exc:
@@ -1933,7 +1934,8 @@ class DraftDialog(ctk.CTkToplevel):
         try:
             self.result = draft.write(self.text(), self.audience(), self.var_length.get(),
                                       keep=self.keep, padding=self.app.settings["padding"],
-                                      cards=bool(self.app.var_auto_cards.get()))
+                                      cards=bool(self.app.var_auto_cards.get()),
+                                      ai=self.app.ai_mode())
         except (draft.DraftError, ScriptError) as exc:
             self.ask_error.configure(text=str(exc), text_color=ERR_COLOR)
             return
@@ -3930,6 +3932,13 @@ class App(ctk.CTk):
 
         self._images_row_changed()
         return page
+
+    def ai_mode(self) -> str:
+        """Which scenes New from text gives an AI picture: none unless AI images are here."""
+        if not imagegen.installed():
+            return draft.AI_NONE
+        return {AI_IMAGES_FOR[0]: draft.AI_UNFILMABLE,
+                AI_IMAGES_FOR[1]: draft.AI_ALL}.get(self.var_ai_for.get(), draft.AI_NONE)
 
     def _images_row_changed(self, payload=None):
         """The tab's first row: what state AI images are in, and what the button does."""
