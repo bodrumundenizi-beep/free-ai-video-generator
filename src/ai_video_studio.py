@@ -2723,8 +2723,24 @@ class App(ctk.CTk):
                                            text_color=TEXT_MUTED, anchor="e")
         self.estimate_label.pack(side="right")
 
+        # The look of AI pictures: only there once AI images are downloaded.
+        self.look_bar = ctk.CTkFrame(control_card, fg_color="transparent")
+        ctk.CTkLabel(self.look_bar, text=self.icon("images"), font=self.font_icon,
+                     text_color=TEXT_MUTED).pack(side="left", padx=(0, 10))
+        ctk.CTkLabel(self.look_bar, text="AI pictures", font=self.font_body,
+                     text_color=TEXT).pack(side="left", padx=(0, 12))
+        FluentSegmented(self.look_bar, self, list(imagegen.LOOKS), self.var_ai_look,
+                        340).pack(side="left")
+        look_hint = ctk.CTkLabel(self.look_bar, text=AI_LOOK_HINTS.get(self.var_ai_look.get(), ""),
+                                 font=self.font_tiny, text_color=TEXT_MUTED, anchor="w",
+                                 justify="left", wraplength=420)
+        look_hint.pack(side="left", padx=(14, 0))
+        self.var_ai_look.trace_add("write", lambda *_args: look_hint.configure(
+            text=AI_LOOK_HINTS.get(self.var_ai_look.get(), "")))
+        self._sync_look_bar()
+
         top = ctk.CTkFrame(control_card, fg_color="transparent")
-        top.grid(row=3, column=0, sticky="ew", padx=16, pady=(12, 8))
+        top.grid(row=4, column=0, sticky="ew", padx=16, pady=(12, 8))
         top.grid_columnconfigure(0, weight=1)
 
         self.status_label = ctk.CTkLabel(top, text="Ready", font=self.font_body,
@@ -2759,10 +2775,19 @@ class App(ctk.CTk):
 
         self.progress = ctk.CTkProgressBar(control_card, height=4, corner_radius=2,
                                            progress_color=ACCENT, fg_color=FIELD_BG)
-        self.progress.grid(row=4, column=0, sticky="ew", padx=16, pady=(0, 16))
+        self.progress.grid(row=5, column=0, sticky="ew", padx=16, pady=(0, 16))
         self.progress.set(0)
         self.progress.grid_remove()
         return page
+
+    def _sync_look_bar(self):
+        """Show the AI pictures row on Create only while AI images are installed."""
+        if not hasattr(self, "look_bar"):
+            return
+        if imagegen.installed():
+            self.look_bar.grid(row=3, column=0, sticky="ew", padx=16, pady=(10, 0))
+        else:
+            self.look_bar.grid_remove()
 
     def _sync_caption_controls(self, *_args):
         """The caption choices only matter while captions are on."""
@@ -3991,6 +4016,7 @@ class App(ctk.CTk):
             self.images_button.configure(text="Download", command=self.start_images_download)
         self.try_button.configure(
             state="normal" if imagegen.installed() and not self._making_picture else "disabled")
+        self._sync_look_bar()
         if not imagegen.installed():
             self.try_status.configure(text="Download AI images first.", text_color=TEXT_DIM)
 
