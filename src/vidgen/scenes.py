@@ -31,6 +31,11 @@ class Row:
     visual: str  # the search words, or the local file's path
     voice: str  # the start of what is said over it
     is_local: bool
+    is_ai: bool = False  # an AI picture: nothing to search for, made with the video
+
+    @property
+    def is_stock(self) -> bool:
+        return not self.is_local and not self.is_ai
 
 
 def plan_preview(script_text: str) -> list[Row]:
@@ -40,8 +45,9 @@ def plan_preview(script_text: str) -> list[Row]:
         voice = " ".join((scene.voice or "").split())
         if len(voice) > EXCERPT:
             voice = voice[:EXCERPT - 1].rstrip() + "…"
-        rows.append(Row(index, scene.line, scene.local_path if scene.is_local else scene.visual,
-                        voice, scene.is_local))
+        shown = (scene.local_path if scene.is_local
+                 else scene.ai_prompt if scene.is_ai else scene.visual)
+        rows.append(Row(index, scene.line, shown, voice, scene.is_local, scene.is_ai))
     return rows
 
 
@@ -107,7 +113,7 @@ def find_options(search, rows, picker: ScenePicker, on_scene=None, stop=lambda: 
     for row in rows:
         if stop():
             return
-        if not row.is_local:
+        if row.is_stock:
             found = search.find(row.visual, PER_SCENE)
             picker.set_options(row.index, found)
             if found:

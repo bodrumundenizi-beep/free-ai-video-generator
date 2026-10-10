@@ -1417,11 +1417,13 @@ class ScenePreviewDialog(ctk.CTkToplevel):
             if row.voice:
                 ctk.CTkLabel(words, text=row.voice, font=app.font_tiny, text_color=TEXT_MUTED,
                              anchor="w", justify="left", wraplength=320).pack(anchor="w")
-            status = ctk.CTkLabel(words, text="Your own file" if row.is_local else "Searching...",
+            status = ctk.CTkLabel(words, text="Your own file" if row.is_local
+                                  else "AI picture, made with the video" if row.is_ai
+                                  else "Searching...",
                                   font=app.font_tiny, text_color=TEXT_DIM, anchor="w")
             status.pack(anchor="w")
             button = None
-            if not row.is_local:
+            if row.is_stock:
                 button = ctk.CTkButton(
                     listing, text="Try another", width=104, height=30, corner_radius=4,
                     font=app.font_body, fg_color=FIELD_BG, hover_color=CARD_HOVER,
@@ -1456,7 +1458,7 @@ class ScenePreviewDialog(ctk.CTkToplevel):
             for row in self.rows:
                 if self.stopping.is_set():
                     return
-                if not row.is_local and row.index not in self.picker.options:
+                if row.is_stock and row.index not in self.picker.options:
                     scenes.find_options(self.search, [row], self.picker,
                                         stop=self.stopping.is_set)
                 self._post(event="found", index=row.index)
@@ -3558,7 +3560,7 @@ class App(ctk.CTk):
             scenes = parse_script(self.script_box.get("1.0", "end"))
         except ScriptError:
             return False   # let the render report the script problem itself
-        return any(not scene.is_local for scene in scenes)
+        return any(not scene.is_local and not scene.is_ai for scene in scenes)
 
     def _warm_moviepy(self):
         sweep_old_work_dirs()
@@ -3700,7 +3702,7 @@ class App(ctk.CTk):
         except ScriptError as exc:
             Dialog(self, "Check your script", str(exc), ok=False)
             return
-        if not self._has_footage_key() and any(not row.is_local for row in rows):
+        if not self._has_footage_key() and any(row.is_stock for row in rows):
             WelcomeDialog(self)
             return
         # Reopening keeps the clips already chosen, as long as nothing changed.

@@ -19,7 +19,9 @@ once and shared. Cancel is checked between steps and on every encoded frame.
 
 from __future__ import annotations
 
+import dataclasses
 import os
+import re
 import shutil
 import tempfile
 import time
@@ -263,7 +265,21 @@ def _render(cfg, ui, work_dir, job):
         cfg.get("api_key"), cfg.get("pixabay_key"), target_w, target_h,
         orientation, quality, cfg.get("cache_dir"), ui.log,
     )
-    needs_stock = [p.scene for p in plans if not p.scene.is_local]
+    # AI pictures are optional. Without them those scenes use stock footage instead.
+    wants_ai = [p for p in plans if p.scene.is_ai]
+    if wants_ai:
+        from . import imagegen
+
+        ok, why = imagegen.ready()
+        if not ok:
+            if not search.providers:
+                raise Exception(f"The scene at line {wants_ai[0].scene.line} asks for an AI "
+                                f"picture. {why}")
+            ui.log(f"⚠️ {why} Using stock footage for those scenes.")
+            for plan in wants_ai:
+                plan.scene = _stock_instead(plan.scene)
+
+    needs_stock = [p.scene for p in plans if not p.scene.is_local and not p.scene.is_ai]
     if needs_stock and not search.providers:
         raise Exception(
             "Add a stock footage key (Pexels or Pixabay) in Settings "
@@ -447,8 +463,13 @@ def _make_version(cfg, ui, work_dir, job, plans, search, choices, version, save_
     credits, providers_used = [], set()
     for i, plan in enumerate(plans):
         _check(stop)
+        if plan.scene.is_ai and not _ai_picture(plan, i, cfg, ratio, work_dir, ui, version,
+                                                search, stop):
+            plan.scene = _stock_instead(plan.scene)
         if plan.scene.is_local:
             ui.log(f"📁 Scene {i + 1}: {os.path.basename(plan.sources[0].path)}")
+        elif plan.scene.is_ai:
+            pass   # its picture was just made
         else:
             plan.parts = 2 if (plan.scene.duration is None and plan.voice_len > LONG_SCENE) else 1
             previous, plan.sources = plan.sources, []
@@ -645,6 +666,39 @@ def _timeline_words(plans, starts):
                 break
             words.append((scene_start + start, min(length, limit - start), text))
     return words
+
+
+def _stock_instead(scene):
+    """``scene`` with search words in place of its AI picture, for when none can be made."""
+    words = [w for w in re.findall(r"[a-z]+", scene.ai_prompt.lower())
+             if len(w) > 2 and w not in footage.STOPWORDS]
+    return dataclasses.replace(scene, visual=" ".join(words[:3]) or "abstract background")
+
+
+def _ai_picture(plan, index, cfg, ratio, work_dir, ui, version, search, stop) -> bool:
+    """Make the scene's AI picture and use it as the scene's footage.
+
+    False when it could not be made and stock footage should be used instead:
+    like captions and music, an AI picture never sinks a render.
+    """
+    from . import imagegen
+
+    path = os.path.join(work_dir, f"ai_{version}_{index}.png")
+    ui.log(f"🎨 Scene {index + 1}: making an AI picture of '{plan.scene.ai_prompt}'...")
+    try:
+        took = imagegen.make(plan.scene.ai_prompt, imagegen.size_for(ratio), path,
+                             cfg.get("ai_images_look") or imagegen.DEFAULT_LOOK,
+                             should_stop=stop)
+    except imagegen.Stopped as exc:
+        raise RenderCancelled() from exc
+    except imagegen.ImageError as exc:
+        if not search.providers:
+            raise Exception(f"Scene {index + 1}: {exc}") from exc
+        ui.log(f"⚠️ {exc} Using stock footage for scene {index + 1}.")
+        return False
+    ui.log(f"🎨 Picture made in {took:.0f} s")
+    plan.parts, plan.sources = 1, [_Source(path, "image")]
+    return True
 
 
 def _acquire_stock(plan, index, search, work_dir, ui, credits, providers_used,

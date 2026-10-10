@@ -15,6 +15,9 @@ Any scene can add optional keys, in any order after its ``Visual:``:
     Zoom: in            in, out, none, or auto (default: a subtle zoom)
     Card: Win + V       drawn over the footage; see cards.py for the three looks
 
+``Visual: ai: a robot holding a clipboard`` asks for an AI picture of that
+(imagegen.py) instead of stock footage, the way ``local:`` asks for a file.
+
 Keys are case-insensitive. A scene needs a ``Voice:``, or a numeric
 ``Duration:`` to be a silent shot.
 """
@@ -33,6 +36,7 @@ MAX_DURATION = 120.0
 MAX_PADDING = 10.0
 
 LOCAL_PREFIX = "local:"
+AI_PREFIX = "ai:"
 
 _LINE = re.compile(r"^([A-Za-z]+)\s*:(.*)$")
 _SECONDS = re.compile(r"^(\d+(?:\.\d+)?|\.\d+)\s*(?:s|sec|secs|seconds?)?$", re.IGNORECASE)
@@ -55,6 +59,15 @@ class Scene:
     @property
     def is_local(self) -> bool:
         return self.visual.lower().startswith(LOCAL_PREFIX)
+
+    @property
+    def is_ai(self) -> bool:
+        return self.visual.lower().startswith(AI_PREFIX)
+
+    @property
+    def ai_prompt(self) -> str | None:
+        """The description after ``ai:``."""
+        return self.visual[len(AI_PREFIX):].strip() if self.is_ai else None
 
     @property
     def local_path(self) -> str | None:
@@ -140,9 +153,10 @@ def parse_script(script_text, warnings=None):
 
         if key == "visual":
             finish()
-            if not value:
+            if not value or value.lower().rstrip() == AI_PREFIX:
                 raise ScriptError(
-                    f"Error on Line {line_no}: Visual: needs search words or local:<path>"
+                    f"Error on Line {line_no}: Visual: needs search words, local:<path> "
+                    "or ai: and a description"
                 )
             current = Scene(visual=value, line=line_no)
             seen = {"visual"}

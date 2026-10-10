@@ -218,3 +218,35 @@ def test_download_failure_speaks_of_ai_images(home, monkeypatch):
     monkeypatch.setattr(writer, "download", failing)
     with pytest.raises(ImageError, match="AI images could not be downloaded"):
         imagegen.download()
+
+
+# --- in a script and in the renderer --------------------------------------------------
+
+def test_ai_scenes_in_a_script():
+    from vidgen.script import ScriptError, parse_script
+
+    scenes = parse_script("Visual: AI: a robot holding a clipboard\nVoice: Hello.\n\n"
+                          "Visual: air balloon\nVoice: Up.")
+    assert scenes[0].is_ai and scenes[0].ai_prompt == "a robot holding a clipboard"
+    assert not scenes[0].is_local and not scenes[1].is_ai and scenes[1].ai_prompt is None
+    with pytest.raises(ScriptError, match="ai: and a description"):
+        parse_script("Visual: ai:\nVoice: Hello.")
+
+
+def test_the_scene_preview_does_not_search_for_ai_scenes():
+    from vidgen import scenes
+
+    rows = scenes.plan_preview("Visual: ai: a robot\nVoice: Hi.\n\nVisual: desk\nVoice: Yo.")
+    assert rows[0].is_ai and not rows[0].is_stock and rows[0].visual == "a robot"
+    assert rows[1].is_stock
+
+
+def test_a_scene_falls_back_to_search_words_from_its_description():
+    from vidgen import render
+    from vidgen.script import parse_script
+
+    scene = parse_script("Visual: ai: a robot holding an office clipboard\nVoice: Hi.\n"
+                         "Card: Win + V")[0]
+    stock = render._stock_instead(scene)
+    assert stock.visual == "robot holding office" and not stock.is_ai
+    assert (stock.voice, stock.card) == ("Hi.", "Win + V")
