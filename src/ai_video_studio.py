@@ -144,7 +144,7 @@ from vidgen.render import TEMP_ROOT  # noqa: E402
 from vidgen import (  # noqa: E402
     captions, diagnostics, draft, footage, pacing, paths, preview, scenes, updates, writer,
 )
-from vidgen import localvoice  # noqa: E402
+from vidgen import imagegen, localvoice  # noqa: E402
 from vidgen.voice import generate_voiceover  # noqa: E402
 
 
@@ -231,6 +231,13 @@ AUDIENCE_SETTINGS = (
 )
 
 
+# Which scenes New from text gives an AI picture, once AI images are downloaded.
+AI_IMAGES_FOR = ("Scenes stock can't show", "Every scene", "Only ai: lines")
+AI_IMAGES_WARNING = (
+    "Needs a graphics card with about 8 GB of video memory. Around 20 seconds per picture "
+    "on an RTX 4060. Without a graphics card a picture can take several minutes.")
+
+
 def default_settings() -> dict:
     return {
         "api_key": "",
@@ -249,6 +256,8 @@ def default_settings() -> dict:
         "writer_gpu": False,
         "voice_online": False,
         "auto_cards": True,
+        "ai_images_for": AI_IMAGES_FOR[0],
+        "ai_images_look": imagegen.DEFAULT_LOOK,
         "music_path": "",
         "output_path": os.path.join(default_output_dir(), "final_video.mp4"),
         "aspect": "9:16",
@@ -304,6 +313,10 @@ def load_settings() -> dict:
     data["writer_gpu"] = bool(data["writer_gpu"])
     data["voice_online"] = bool(data["voice_online"])
     data["auto_cards"] = bool(data["auto_cards"])
+    if data["ai_images_for"] not in AI_IMAGES_FOR:
+        data["ai_images_for"] = AI_IMAGES_FOR[0]
+    if data["ai_images_look"] not in imagegen.LOOKS:
+        data["ai_images_look"] = imagegen.DEFAULT_LOOK
     if data["music_path"] and not os.path.isfile(str(data["music_path"])):
         data["music_path"] = ""
 
@@ -510,6 +523,7 @@ GLYPHS = {
     "home": ("", "⌂"),
     "create": ("", "▶"),
     "log": ("", "≡"),
+    "images": ("", "▣"),
     "settings": ("", "⚙"),
     "feedback": ("", "?"),
     "aspect": ("", "▣"),
@@ -2185,6 +2199,11 @@ class App(ctk.CTk):
         self.writer_listeners = []     # callables told how the model download is going
         self.writer_downloading = False
         self.voice_downloading = False
+        self.images_downloading = False
+        self._images_stop = threading.Event()
+        self._images_confirm = False
+        self._making_picture = False
+        self._try_image = None   # kept so Tk doesn't drop the picture
         self._writer_stop = threading.Event()
 
         self._build_fonts()
@@ -2250,6 +2269,8 @@ class App(ctk.CTk):
         self.var_writer_gpu = tk.BooleanVar(value=s["writer_gpu"])
         self.var_voice_online = tk.BooleanVar(value=s["voice_online"])
         self.var_auto_cards = tk.BooleanVar(value=s["auto_cards"])
+        self.var_ai_for = tk.StringVar(value=s["ai_images_for"])
+        self.var_ai_look = tk.StringVar(value=s["ai_images_look"])
         self.var_music_track = tk.StringVar(value="")
         self._tracks = {}
 
@@ -2258,6 +2279,7 @@ class App(ctk.CTk):
                     self.var_padding, self.var_music_enabled, self.var_captions,
                     self.var_ask_save, self.var_check_updates, self.var_versions,
                     self.var_writer_gpu, self.var_voice_online, self.var_auto_cards,
+                    self.var_ai_for, self.var_ai_look,
                     self.var_target,
                     *self.caption_vars.values()):
             var.trace_add("write", self._on_setting_changed)
@@ -2278,6 +2300,8 @@ class App(ctk.CTk):
             "writer_gpu": bool(self.var_writer_gpu.get()),
             "voice_online": bool(self.var_voice_online.get()),
             "auto_cards": bool(self.var_auto_cards.get()),
+            "ai_images_for": self.var_ai_for.get(),
+            "ai_images_look": self.var_ai_look.get(),
             "music_path": self.music_path,
             "output_path": self.var_output.get().strip(),
             "aspect": self.var_aspect.get(),
@@ -2320,6 +2344,7 @@ class App(ctk.CTk):
         for key, glyph, label in (
             ("home", "home", "Home"),
             ("create", "create", "Create"),
+            ("images", "images", "AI images"),
             ("log", "log", "Log"),
         ):
             item = NavItem(self.sidebar, self, key, self.icon(glyph), label,
@@ -2464,6 +2489,7 @@ class App(ctk.CTk):
         self.pages = {
             "home": self._build_home(),
             "create": self._build_create(),
+            "images": self._build_images(),
             "log": self._build_log(),
             "feedback": self._build_feedback(),
             "settings": self._build_settings(),
@@ -2568,6 +2594,11 @@ class App(ctk.CTk):
             PADDING_OPTIONS.get(self.var_padding.get(), DEFAULT_PADDING))
         text, warning = pacing.describe(guess, len(parsed),
                                         pacing.TARGETS.get(self.var_target.get()))
+        pictures = sum(scene.is_ai for scene in parsed)
+        if pictures and imagegen.installed():
+            wait = pictures * 20 * (2 if self.var_versions.get() == "2" else 1)
+            text += (f" · {pictures} AI picture{'s' if pictures != 1 else ''}, about "
+                     + (f"{wait} s" if wait < 90 else f"{round(wait / 60)} min") + " more")
         self.estimate_label.configure(text=text,
                                       text_color=WARN_COLOR if warning else TEXT_MUTED)
 
@@ -3617,6 +3648,8 @@ class App(ctk.CTk):
                     self._updater_event(payload)
                 elif kind == "voice":
                     self._voice_event(payload)
+                elif kind == "images":
+                    self._images_event(payload)
                 elif kind == "crash":
                     self._unexpected(payload["trace"])
                 elif kind == "update":
@@ -3831,6 +3864,198 @@ class App(ctk.CTk):
                 text_color=ERR_COLOR)
             return
         self.repair_writer()
+
+    # ----------------------------------------------------------- AI IMAGES --
+    def _build_images(self):
+        page = self._scroll_page()
+        page.grid_columnconfigure(0, weight=1)
+        rows = itertools.count()
+
+        self._caption(page, "AI IMAGES (OPTIONAL)", next(rows), pady=(0, 6))
+        pack_row = SettingRow(
+            page, self, self.icon("images"), "AI pictures, made on this PC",
+            f"{imagegen.MODEL.name}, an open-source model, draws a picture for scenes stock "
+            "footage has nothing for")
+        pack_row.grid(row=next(rows), column=0, sticky="ew", pady=PAD // 2)
+        self.images_state = ctk.CTkLabel(pack_row.control, text="", font=self.font_body,
+                                         text_color=TEXT_MUTED)
+        self.images_state.pack(side="left", padx=(0, 12))
+        self.images_button = ctk.CTkButton(
+            pack_row.control, text="", width=96, height=32, corner_radius=4,
+            font=self.font_body, fg_color=FIELD_BG, hover_color=CARD_HOVER,
+            border_width=1, border_color=FIELD_BORDER, text_color=TEXT)
+        self.images_button.pack(side="left")
+
+        warning = Card(page)
+        warning.grid(row=next(rows), column=0, sticky="ew", pady=PAD // 2)
+        ctk.CTkLabel(warning, text=f"{self.icon('info')}  {AI_IMAGES_WARNING}",
+                     font=self.font_body, text_color=WARN_COLOR, anchor="w", justify="left",
+                     wraplength=820).pack(fill="x", padx=16, pady=12)
+
+        self._caption(page, "IN YOUR VIDEOS", next(rows))
+        for_row = SettingRow(
+            page, self, self.icon("script"), "Use AI pictures for",
+            "Which scenes New from text gives an AI picture")
+        for_row.grid(row=next(rows), column=0, sticky="ew", pady=PAD // 2)
+        self._segmented(for_row.control, list(AI_IMAGES_FOR), self.var_ai_for, 470)
+        look_row = SettingRow(page, self, self.icon("resolution"), "Look",
+                              "One look for the whole video, so its pictures match")
+        look_row.grid(row=next(rows), column=0, sticky="ew", pady=PAD // 2)
+        self._segmented(look_row.control, list(imagegen.LOOKS), self.var_ai_look, 380)
+        ctk.CTkLabel(page, text="In any script you can also ask for one yourself:   "
+                                "Visual: ai: a robot holding a clipboard",
+                     font=self.font_tiny, text_color=TEXT_DIM, anchor="w",
+                     ).grid(row=next(rows), column=0, sticky="w", padx=4, pady=(2, 0))
+
+        self._caption(page, "TRY IT", next(rows))
+        try_card = Card(page)
+        try_card.grid(row=next(rows), column=0, sticky="ew", pady=(PAD // 2, PAD))
+        try_card.grid_columnconfigure(0, weight=1)
+        self.try_entry = focus_accent(ctk.CTkEntry(
+            try_card, height=34, corner_radius=4, font=self.font_body, fg_color=FIELD_BG,
+            border_color=FIELD_BORDER, text_color=TEXT,
+            placeholder_text="Describe a picture, for example: a robot holding a clipboard"))
+        self.try_entry.grid(row=0, column=0, sticky="ew", padx=(16, 8), pady=(14, 6))
+        self.try_entry.bind("<Return>", lambda _event: self.try_picture())
+        self.try_button = ctk.CTkButton(
+            try_card, text="Make picture", width=120, height=34, corner_radius=4,
+            font=self.font_body, fg_color=ACCENT, hover_color=ACCENT_HOVER,
+            text_color=ACCENT_TEXT, command=self.try_picture)
+        self.try_button.grid(row=0, column=1, padx=(0, 16), pady=(14, 6))
+        self.try_status = ctk.CTkLabel(try_card, text="", font=self.font_tiny,
+                                       text_color=TEXT_DIM, anchor="w")
+        self.try_status.grid(row=1, column=0, columnspan=2, sticky="w", padx=16)
+        self.try_picture_label = ctk.CTkLabel(try_card, text="", width=10, height=10)
+        self.try_picture_label.grid(row=2, column=0, columnspan=2, pady=(6, 14))
+
+        self._images_row_changed()
+        return page
+
+    def _images_row_changed(self, payload=None):
+        """The tab's first row: what state AI images are in, and what the button does."""
+        self._images_confirm = False
+        gigabytes = sum(m.size for m in imagegen.needed_files()) / 1e9
+        if payload and payload["event"] == "progress":
+            self.images_state.configure(
+                text=f"Downloading {payload['done'] / 1e9:.2f} of {payload['total'] / 1e9:.2f} GB",
+                text_color=TEXT_MUTED)
+            self.images_button.configure(text="Cancel", command=self._images_stop.set)
+            return
+        if payload and payload["event"] == "failed":
+            self.images_state.configure(text=ellipsize(payload["message"], 60),
+                                        text_color=ERR_COLOR)
+        elif imagegen.installed():
+            self.images_state.configure(text=f"Installed · {imagegen.SIZE / 1e9:.1f} GB",
+                                        text_color=OK_COLOR)
+        else:
+            self.images_state.configure(text=f"Not downloaded · {gigabytes:.1f} GB",
+                                        text_color=TEXT_MUTED)
+        if imagegen.installed():
+            self.images_button.configure(text="Remove", command=self._confirm_remove_images)
+        else:
+            self.images_button.configure(text="Download", command=self.start_images_download)
+        self.try_button.configure(
+            state="normal" if imagegen.installed() and not self._making_picture else "disabled")
+        if not imagegen.installed():
+            self.try_status.configure(text="Download AI images first.", text_color=TEXT_DIM)
+
+    def _confirm_remove_images(self):
+        """Remove deletes 4.2 GB, so it takes a second press."""
+        if not self._images_confirm:
+            self._images_confirm = True
+            self.images_state.configure(text="Press again to remove AI images",
+                                        text_color=ERR_COLOR)
+            return
+        imagegen.remove()
+        self.append_log("🗑️ AI images removed.")
+        self._images_row_changed()
+        self.refresh_estimate()
+
+    def start_images_download(self):
+        """Fetch AI images on a worker thread; the tab's row shows how it goes."""
+        if self.images_downloading:
+            return
+        self.images_downloading = True
+        self._images_stop = stop = threading.Event()
+        total = sum(m.size for m in imagegen.needed_files())
+        self.append_log(f"⬇️ Downloading AI images ({total / 1e9:.1f} GB)...")
+
+        def worker():
+            last = 0.0
+
+            def progress(done, total):
+                nonlocal last
+                now = time.monotonic()
+                if now - last >= 0.25 or done >= total:
+                    last = now
+                    self._queue.put(("images", {"event": "progress", "done": done,
+                                                "total": total}))
+
+            try:
+                imagegen.download(progress, stop.is_set)
+                self._queue.put(("images", {"event": "done"}))
+            except imagegen.Stopped:
+                self._queue.put(("images", {"event": "stopped"}))
+            except Exception as exc:  # noqa: BLE001 - a thread must not die silently
+                self._queue.put(("images", {"event": "failed", "message": str(exc)}))
+
+        threading.Thread(target=worker, daemon=True).start()
+        self._images_row_changed({"event": "progress", "done": 0, "total": total})
+
+    def try_picture(self):
+        """Make one picture from the Try it box, without blocking the window."""
+        prompt = self.try_entry.get().strip()
+        if self._making_picture or not prompt or not imagegen.installed():
+            return
+        if self.is_rendering:
+            self.try_status.configure(text="Wait for the video to finish first.",
+                                      text_color=WARN_COLOR)
+            return
+        self._making_picture = True
+        self.try_button.configure(state="disabled", text="Making...")
+        self.try_status.configure(text="Making the picture. The first one takes longest.",
+                                  text_color=TEXT_DIM)
+        size, look = imagegen.size_for(self.var_aspect.get()), self.var_ai_look.get()
+
+        def worker():
+            try:
+                os.makedirs(PREVIEW_DIR, exist_ok=True)
+                path = os.path.join(PREVIEW_DIR, "ai_try.png")
+                seconds = imagegen.make(prompt, size, path, look)
+                self._queue.put(("images", {"event": "made", "path": path, "seconds": seconds,
+                                            "size": size}))
+            except Exception as exc:  # noqa: BLE001 - shown in the tab
+                self._queue.put(("images", {"event": "not_made", "message": str(exc)}))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _images_event(self, payload):
+        """UI thread: news from the AI images download or the Try it box."""
+        event = payload["event"]
+        if event in ("made", "not_made"):
+            self._making_picture = False
+            self.try_button.configure(state="normal", text="Make picture")
+            if event == "not_made":
+                self.try_status.configure(text=payload["message"], text_color=ERR_COLOR)
+                return
+            from PIL import Image
+
+            width, height = payload["size"]
+            shown = (round(360 * width / height), 360) if height >= width else (480, 270)
+            with Image.open(payload["path"]) as opened:
+                picture = opened.convert("RGB")
+            self._try_image = ctk.CTkImage(light_image=picture, dark_image=picture, size=shown)
+            self.try_picture_label.configure(image=self._try_image)
+            self.try_status.configure(
+                text=f"Made in {payload['seconds']:.0f} s on this PC.", text_color=OK_COLOR)
+            return
+        if event != "progress":
+            self.images_downloading = False
+            self.append_log({"done": "✅ AI images are ready.",
+                             "stopped": "⏸️ AI images download paused.",
+                             "failed": f"⚠️ {payload.get('message', '')}"}[event])
+            self.refresh_estimate()
+        self._images_row_changed(payload)
 
     # -- the offline voice's one-time download -------------------------------
     def voice_missing(self) -> bool:
