@@ -138,7 +138,9 @@ from vidgen.formats import RATIO_OPTIONS, RESOLUTION_OPTIONS, resolve_target  # 
 from vidgen.render import (  # noqa: E402
     UiBridge, next_free_path, render_worker, sweep_old_work_dirs,
 )
-from vidgen.script import ScriptError, count_scenes, parse_script  # noqa: E402
+from vidgen.script import (  # noqa: E402
+    ScriptError, count_scenes, looks_like_plain_text, parse_script,
+)
 from vidgen import voices  # noqa: E402
 from vidgen.render import TEMP_ROOT  # noqa: E402
 from vidgen import (  # noqa: E402
@@ -149,7 +151,7 @@ from vidgen.voice import generate_voiceover  # noqa: E402
 
 
 APP_NAME = "AI Video Studio"
-APP_VERSION = "3.9.0"
+APP_VERSION = "3.9.1"
 # Must match AppUserModelID in packaging/installer.iss, or a pinned taskbar
 # shortcut will not group with the running window.
 APP_MODEL_ID = "AIVideoStudio.Desktop.3"
@@ -1819,6 +1821,14 @@ class DraftDialog(ctk.CTkToplevel):
         self._show(self.text_page, "Paste any text and press Analyse. The app reads it and "
                    "suggests who the video is for and how long it should be.",
                    "Analyse", self.analyse)
+
+    def prefill(self, text):
+        """Start with ``text`` already in the box: plain text the user tried to render."""
+        self.text_box.insert("1.0", text)
+        self._show(self.text_page, "This is plain text, not a script yet, so it is here in "
+                   "New from text. Press Analyse and the app turns it into a script.",
+                   "Analyse", self.analyse)
+        self._on_text()
 
     def _rule_suggestion(self):
         return draft.suggest(self.text(), self.audience(), self.app.settings["padding"])
@@ -4234,6 +4244,11 @@ class App(ctk.CTk):
     # -- render --------------------------------------------------------------
     def start_render(self):
         if self.is_rendering:
+            return
+        # Plain text in the script box: it wants New from text, not an error on line 1.
+        pasted = self.script_box.get("1.0", "end").strip()
+        if looks_like_plain_text(pasted):
+            DraftDialog(self).prefill(pasted)
             return
         # No key yet: walk the user through getting one instead of failing.
         if not self._has_footage_key() and self._needs_stock_footage():

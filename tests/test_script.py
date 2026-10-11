@@ -139,3 +139,14 @@ def test_count_scenes_never_raises():
     assert count_scenes(DEFAULT_SCRIPT) == 4
     assert count_scenes(ADVANCED) == 2
     assert count_scenes("nonsense") is None
+
+
+def test_plain_text_is_told_apart_from_a_script():
+    from vidgen.script import looks_like_plain_text
+
+    assert looks_like_plain_text("Honey never spoils.\nArchaeologists found pots of it.")
+    assert looks_like_plain_text("Note: honey never spoils.")  # a colon, but not a script key
+    assert not looks_like_plain_text(DEFAULT_SCRIPT)
+    assert not looks_like_plain_text("Some heading\nVisual: honey jar\nVoice: It never spoils.")
+    assert not looks_like_plain_text("voice: only this line")  # a broken script keeps its error
+    assert not looks_like_plain_text("") and not looks_like_plain_text("  \n ")

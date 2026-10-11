@@ -198,6 +198,17 @@ def parse_script(script_text, warnings=None):
     return scenes
 
 
+def looks_like_plain_text(script_text) -> bool:
+    """Whether this is ordinary writing rather than a script: no line starts with a key.
+
+    New users paste an article into the editor and press Render (issues #2 and #3).
+    That is a job for New from text, not a script with an error on line 1.
+    """
+    lines = [line.strip() for line in (script_text or "").split("\n") if line.strip()]
+    keyed = [m for m in map(_LINE.match, lines) if m and m.group(1).lower() in KEYS]
+    return bool(lines) and not keyed
+
+
 def count_scenes(script_text):
     """Non-raising variant used for the live 'Scenes parsed' card."""
     try:
