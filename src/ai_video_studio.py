@@ -146,12 +146,13 @@ from vidgen.render import TEMP_ROOT  # noqa: E402
 from vidgen import (  # noqa: E402
     captions, diagnostics, draft, footage, pacing, paths, preview, scenes, updates, writer,
 )
+from vidgen import board as boards  # noqa: E402
 from vidgen import imagegen, localvoice  # noqa: E402
 from vidgen.voice import generate_voiceover  # noqa: E402
 
 
 APP_NAME = "AI Video Studio"
-APP_VERSION = "3.9.2"
+APP_VERSION = "4.0.0"
 # Must match AppUserModelID in packaging/installer.iss, or a pinned taskbar
 # shortcut will not group with the running window.
 APP_MODEL_ID = "AIVideoStudio.Desktop.3"
@@ -240,7 +241,8 @@ AI_FOR_HINTS = {
     AI_IMAGES_FOR[0]: "Most scenes keep their stock clips. A scene gets an AI picture only when "
                       "it is about something on a screen (an app, a menu, a setting), which no "
                       "stock clip can show. Fastest: usually 2 or 3 pictures a video, about a "
-                      "minute more.",
+                      "minute more. In the Storyboard you can switch any other scene to an AI "
+                      "picture with one click. With no stock footage key, every scene gets one.",
     AI_IMAGES_FOR[1]: "Every scene gets an AI picture and no stock footage is used, so the whole "
                       "video has one matching look. Best for stories and tech tips. Adds about "
                       "20 seconds for each scene (around 3 minutes for a 30-second video).",
@@ -269,6 +271,7 @@ def default_settings() -> dict:
         "music_enabled": False,
         "ask_save": True,
         "welcome_seen": False,
+        "tour_seen": False,
         "check_updates": True,
         "versions": 1,
         "target_length": pacing.DEFAULT_TARGET,
@@ -282,6 +285,7 @@ def default_settings() -> dict:
         "ai_images_for": AI_IMAGES_FOR[0],
         "ai_images_look": imagegen.DEFAULT_LOOK,
         "ai_images_backend": "",   # "cpu" once the graphics card has failed on this PC
+        "key_tip": True,           # after a keyless video: mention that a free key exists
         "music_path": "",
         "output_path": os.path.join(default_output_dir(), "final_video.mp4"),
         "aspect": "9:16",
@@ -308,6 +312,9 @@ def load_settings() -> dict:
             for key in data:
                 if key in stored and stored[key] is not None:
                     data[key] = stored[key]
+            # Settings from before the tour existed: this is an update, not a first run.
+            if "tour_seen" not in stored:
+                data["tour_seen"] = True
     except (OSError, ValueError):
         pass
 
@@ -325,6 +332,7 @@ def load_settings() -> dict:
     data["music_enabled"] = bool(data["music_enabled"])
     data["ask_save"] = bool(data["ask_save"])
     data["welcome_seen"] = bool(data["welcome_seen"])
+    data["tour_seen"] = bool(data["tour_seen"])
     data["check_updates"] = bool(data["check_updates"])
     data["versions"] = 2 if str(data["versions"]) == "2" else 1
     if data["target_length"] not in pacing.TARGETS:
@@ -343,6 +351,7 @@ def load_settings() -> dict:
         data["ai_images_look"] = imagegen.DEFAULT_LOOK
     if data["ai_images_backend"] != imagegen.CPU:
         data["ai_images_backend"] = ""
+    data["key_tip"] = bool(data["key_tip"])
     if data["music_path"] and not os.path.isfile(str(data["music_path"])):
         data["music_path"] = ""
 
@@ -1179,6 +1188,86 @@ class WelcomeDialog(ctk.CTkToplevel):
         self.destroy()
 
 
+TOUR = (
+    ("home", "Paste your text",
+     "Put any text in the box on Home: an article, a tip, your notes. Press Make my video and "
+     "the app writes the script, finds the pictures, reads it out and adds captions."),
+    ("scenes", "Look before it is made",
+     "The Storyboard shows every scene with its picture and its line. Change a line, swap a "
+     "clip, or move scenes around. When it looks right, press Make video."),
+    ("script", "Say what to change",
+     "When the video is done, type what you would like different, such as \"make it shorter\" "
+     "or \"more exciting start\". The app rewrites it and shows you what changed."),
+    ("key", "One free key",
+     "To download video clips the app needs one free key from Pixabay or Pexels. It takes about "
+     "a minute, and the next window walks you through it."),
+)
+
+
+class TourDialog(ctk.CTkToplevel):
+    """First run only: four short screens on how the app is used.
+
+    Never shown after an update (load_settings marks it seen when a settings
+    file already exists). Feedback > Show the tour brings it back.
+    """
+
+    def __init__(self, app):
+        super().__init__(app)
+        self.app, self.step = app, 0
+        self.title("Welcome to AI Video Studio")
+        self.resizable(False, False)
+        self.configure(fg_color=MAIN_BG)
+        self.transient(app)
+        self.protocol("WM_DELETE_WINDOW", self.finish)
+        card = Card(self)
+        card.pack(fill="both", expand=True, padx=14, pady=14)
+        self.glyph = ctk.CTkLabel(card, text="", font=app.font_icon_lg, text_color=ACCENT)
+        self.glyph.pack(pady=(22, 6))
+        self.heading = ctk.CTkLabel(card, text="", font=app.font_title, text_color=TEXT)
+        self.heading.pack()
+        self.body = ctk.CTkLabel(card, text="", font=app.font_body, text_color=TEXT_MUTED,
+                                 wraplength=400, justify="center", width=440, height=96)
+        self.body.pack(padx=20, pady=(8, 4))
+        self.count = ctk.CTkLabel(card, text="", font=app.font_tiny, text_color=TEXT_DIM)
+        self.count.pack()
+        buttons = ctk.CTkFrame(card, fg_color="transparent")
+        buttons.pack(pady=(10, 18))
+        ctk.CTkButton(buttons, text="Skip", width=96, height=34, corner_radius=4,
+                      font=app.font_body, fg_color=FIELD_BG, hover_color=CARD_HOVER,
+                      border_width=1, border_color=FIELD_BORDER, text_color=TEXT,
+                      command=self.finish).pack(side="left", padx=(0, 8))
+        self.next_button = ctk.CTkButton(
+            buttons, text="Next", width=130, height=34, corner_radius=4, font=app.font_bold,
+            fg_color=ACCENT, hover_color=ACCENT_HOVER, text_color=ACCENT_TEXT, command=self.next)
+        self.next_button.pack(side="left")
+        self.show()
+        centre_on(self, app)
+
+    def show(self):
+        glyph, heading, body = TOUR[self.step]
+        self.glyph.configure(text=self.app.icon(glyph))
+        self.heading.configure(text=heading)
+        self.body.configure(text=body)
+        self.count.configure(text=f"{self.step + 1} of {len(TOUR)}")
+        self.next_button.configure(text="Got it" if self.step == len(TOUR) - 1 else "Next")
+
+    def next(self):
+        if self.step == len(TOUR) - 1:
+            self.finish()
+            return
+        self.step += 1
+        self.show()
+
+    def finish(self):
+        """Seen once is seen: remember it, then go on to the key setup if that is still due."""
+        app = self.app
+        app.tour_seen = True
+        save_settings(app._collect_settings())
+        self.destroy()
+        if not app._has_footage_key() and not app.welcome_seen and not imagegen.installed():
+            WelcomeDialog(app)
+
+
 class ResultDialog(ctk.CTkToplevel):
     """Render complete: the video, playable in the window, with its sound.
 
@@ -1256,9 +1345,50 @@ class ResultDialog(ctk.CTkToplevel):
             self.play_button = button(self._play_label(), self.toggle, accent=True)
         button("Open in player", self.open_in_player)
         button("Show in folder", self.show_in_folder)
+
+        ctk.CTkLabel(info, text="Want something different? Say what to change.",
+                     font=app.font_tiny, text_color=TEXT_MUTED, anchor="w",
+                     ).pack(fill="x", padx=18, pady=(6, 2))
+        self.comment = focus_accent(ctk.CTkEntry(
+            info, height=32, corner_radius=4, font=app.font_body, fg_color=FIELD_BG,
+            border_color=FIELD_BORDER, text_color=TEXT,
+            placeholder_text="e.g. make it shorter, or: more exciting start"))
+        self.comment.pack(fill="x", padx=18, pady=(0, 6))
+        self.comment.bind("<Return>", lambda _event: self.change_it())
+        button("Change it", self.change_it)
+
+        if app.key_tip and not app._has_footage_key():
+            # A reminder, not a wall: the video above is complete either way.
+            tip = ctk.CTkFrame(info, fg_color="transparent")
+            tip.pack(fill="x", padx=18, pady=(4, 6))
+            ctk.CTkLabel(tip, text="Tip: with a free Pexels or Pixabay key the app can also "
+                                   "use real video clips.", font=app.font_tiny,
+                         text_color=TEXT_DIM, anchor="w", justify="left",
+                         wraplength=300 if portrait else 440).pack(anchor="w")
+            links = ctk.CTkFrame(tip, fg_color="transparent")
+            links.pack(anchor="w", pady=(2, 0))
+            ctk.CTkButton(links, text="Get a free key", width=110, height=26, corner_radius=4,
+                          font=app.font_tiny, fg_color=FIELD_BG, hover_color=CARD_HOVER,
+                          border_width=1, border_color=FIELD_BORDER, text_color=TEXT,
+                          command=lambda: (self.close(), WelcomeDialog(app))).pack(side="left")
+            self.var_no_tip = tk.BooleanVar(self, False)
+            ctk.CTkCheckBox(links, text="Don't show again", variable=self.var_no_tip,
+                            font=app.font_tiny, text_color=TEXT_DIM, checkbox_width=16,
+                            checkbox_height=16, border_width=1,
+                            command=lambda: app.set_key_tip(not self.var_no_tip.get()),
+                            ).pack(side="left", padx=(12, 0))
+
         button("Close", self.close).pack_configure(pady=(0, 16))
 
         centre_on(self, app)
+
+    def change_it(self):
+        """Hand the comment to the Storyboard, which shows what changed before any render."""
+        comment = self.comment.get().strip()
+        if comment:
+            self.close()
+            self.app.select_page("board")
+            self.app.revise_script(comment)
 
     # -- picture ---------------------------------------------------------------
     def _load_poster(self):
@@ -1398,191 +1528,6 @@ class ResultDialog(ctk.CTkToplevel):
     def close(self):
         self.stop()
         self._forget_sound()
-        self.destroy()
-
-
-class ScenePreviewDialog(ctk.CTkToplevel):
-    """The clip chosen for each scene, before rendering, with "Try another".
-
-    Searching and fetching stills happen on worker threads and come back
-    through the app's UI queue; this window only draws what arrives.
-    """
-
-    def __init__(self, app, rows, picker, frame_size):
-        super().__init__(app)
-        self.app = app
-        self.rows = rows
-        self.picker = picker
-        self.stopping = threading.Event()
-        # Read on this thread: workers must not touch Tk variables.
-        self.search = app.new_footage_search()
-        self.local_base = os.path.dirname(app.var_output.get().strip())
-        portrait = frame_size[1] >= frame_size[0]
-        self.box = (72, 128) if portrait else (160, 90)
-        self.widgets = {}   # row index -> {"picture", "status", "button"}
-        self.images = {}    # row index -> CTkImage, kept so Tk doesn't drop it
-        self.title("Preview scenes")
-        self.resizable(False, False)
-        self.configure(fg_color=MAIN_BG)
-        self.transient(app)
-        self.protocol("WM_DELETE_WINDOW", self.close)
-
-        card = Card(self)
-        card.pack(fill="both", expand=True, padx=14, pady=14)
-        ctk.CTkLabel(card, text="Preview scenes", font=app.font_title, text_color=TEXT,
-                     anchor="w").pack(fill="x", padx=20, pady=(18, 2))
-        ctk.CTkLabel(
-            card, font=app.font_body, text_color=TEXT_MUTED, justify="left",
-            wraplength=600, anchor="w",
-            text="These are the clips the video will use. Press Try another on any scene "
-                 "you don't like.",
-        ).pack(fill="x", padx=20, pady=(0, 10))
-
-        row_height = self.box[1] + 22
-        listing = ctk.CTkScrollableFrame(
-            card, width=620, height=min(len(rows) * row_height, 430), fg_color="transparent",
-            scrollbar_fg_color=SCROLLBAR_BG, scrollbar_button_color=SCROLLBAR_THUMB,
-            scrollbar_button_hover_color=SCROLLBAR_THUMB_HOVER)
-        listing.pack(padx=12)
-        listing.grid_columnconfigure(1, weight=1)
-        for position, row in enumerate(rows):
-            picture = ctk.CTkLabel(listing, text="", width=self.box[0], height=self.box[1],
-                                   fg_color=FIELD_BG, corner_radius=4)
-            picture.grid(row=position, column=0, padx=(8, 12), pady=6)
-            words = ctk.CTkFrame(listing, fg_color="transparent")
-            words.grid(row=position, column=1, sticky="w")
-            shown = os.path.basename(row.visual) if row.is_local else row.visual
-            ctk.CTkLabel(words, text=f"Scene {row.index + 1} · {ellipsize(shown, 44)}",
-                         font=app.font_bold, text_color=TEXT, anchor="w").pack(anchor="w")
-            if row.voice:
-                ctk.CTkLabel(words, text=row.voice, font=app.font_tiny, text_color=TEXT_MUTED,
-                             anchor="w", justify="left", wraplength=320).pack(anchor="w")
-            status = ctk.CTkLabel(words, text="Your own file" if row.is_local
-                                  else "AI picture, made with the video" if row.is_ai
-                                  else "Searching...",
-                                  font=app.font_tiny, text_color=TEXT_DIM, anchor="w")
-            status.pack(anchor="w")
-            button = None
-            if row.is_stock:
-                button = ctk.CTkButton(
-                    listing, text="Try another", width=104, height=30, corner_radius=4,
-                    font=app.font_body, fg_color=FIELD_BG, hover_color=CARD_HOVER,
-                    border_width=1, border_color=FIELD_BORDER, text_color=TEXT, state="disabled",
-                    command=lambda index=row.index: self.try_another(index))
-                button.grid(row=position, column=2, padx=(8, 12))
-            self.widgets[row.index] = {"picture": picture, "status": status, "button": button}
-
-        buttons = ctk.CTkFrame(card, fg_color="transparent")
-        buttons.pack(fill="x", padx=20, pady=(12, 18))
-        self.render_button = ctk.CTkButton(
-            buttons, text="Render with these clips", width=190, height=32, corner_radius=4,
-            font=app.font_body, fg_color=ACCENT, hover_color=ACCENT_HOVER,
-            text_color=ACCENT_TEXT, state="disabled", command=self.render)
-        self.render_button.pack(side="right")
-        ctk.CTkButton(
-            buttons, text="Close", width=96, height=32, corner_radius=4,
-            font=app.font_body, fg_color=FIELD_BG, hover_color=CARD_HOVER,
-            border_width=1, border_color=FIELD_BORDER, text_color=TEXT, command=self.close,
-        ).pack(side="right", padx=(0, 8))
-
-        centre_on(self, app)
-        threading.Thread(target=self._load, daemon=True).start()
-
-    # -- worker threads: never touch a widget ------------------------------------
-    def _post(self, **payload):
-        self.app._queue.put(("scene_preview", dict(payload, dialog=self)))
-
-    def _load(self):
-        """Find clips for the stock scenes, then a still for every scene."""
-        try:
-            for row in self.rows:
-                if self.stopping.is_set():
-                    return
-                if row.is_stock and row.index not in self.picker.options:
-                    scenes.find_options(self.search, [row], self.picker,
-                                        stop=self.stopping.is_set)
-                self._post(event="found", index=row.index)
-                self._still(row)
-        except Exception as exc:  # noqa: BLE001 - shown in the window, not raised in a thread
-            self._post(event="failed", message=str(exc))
-        self._post(event="done")
-
-    def _still(self, row):
-        """Fetch the still for the row's current clip and hand it to the window."""
-        key, path = "", None
-        try:
-            if row.is_local:
-                found, kind = footage.resolve_local(row.visual, self.local_base)
-                if kind == "image":
-                    path = found
-                else:
-                    width, height, _length = preview.probe(found)
-                    still = preview.poster(found, preview.fit((width, height), (320, 320)), at=0.5)
-                    os.makedirs(THUMB_DIR, exist_ok=True)
-                    path = os.path.join(THUMB_DIR, f"local_{row.index}.jpg")
-                    still.save(path)
-            else:
-                clip = self.picker.current(row.index)
-                if clip is not None:
-                    key, path = clip.key, scenes.fetch_thumb(clip, THUMB_DIR)
-        except Exception:  # noqa: BLE001 - a missing still is not worth an error
-            path = None
-        self._post(event="still", index=row.index, key=key, path=path)
-
-    # -- UI thread ---------------------------------------------------------------
-    def on_event(self, payload):
-        if not self.winfo_exists():
-            return
-        event, index = payload["event"], payload.get("index")
-        if event == "found":
-            widgets = self.widgets[index]
-            if widgets["button"] is not None:
-                total = self.picker.count(index)
-                widgets["status"].configure(
-                    text=self.picker.label(index) if total else "No clips found for these words",
-                    text_color=TEXT_DIM if total else ERR_COLOR)
-                widgets["button"].configure(state="normal" if total > 1 else "disabled")
-        elif event == "still":
-            clip = self.picker.current(index)
-            # A slow still for a clip the user has already stepped past is dropped.
-            if payload["key"] and (clip is None or clip.key != payload["key"]):
-                return
-            self._show(index, payload["path"])
-        elif event == "failed":
-            self.app.append_log(f"⚠️ Scene preview: {payload['message']}")
-        elif event == "done":
-            self.render_button.configure(state="normal")
-
-    def _show(self, index, path):
-        from PIL import Image, ImageOps
-
-        picture = self.widgets[index]["picture"]
-        try:
-            with Image.open(path) as opened:
-                # Twice the box, so it stays sharp on a scaled display.
-                fitted = ImageOps.fit(opened.convert("RGB"), (self.box[0] * 2, self.box[1] * 2))
-            self.images[index] = ctk.CTkImage(light_image=fitted, dark_image=fitted, size=self.box)
-            picture.configure(image=self.images[index], text="")
-        except Exception:  # noqa: BLE001 - no path, or not a picture
-            self.images.pop(index, None)
-            picture.configure(image=None, text="No picture", font=self.app.font_tiny,
-                              text_color=TEXT_DIM)
-
-    def try_another(self, index):
-        if self.picker.next(index) is None:
-            return
-        self.widgets[index]["status"].configure(text=self.picker.label(index))
-        row = next(r for r in self.rows if r.index == index)
-        threading.Thread(target=self._still, args=(row,), daemon=True).start()
-
-    def render(self):
-        self.close()
-        self.app.start_render()
-
-    def close(self):
-        """Keep the choices: Render Video on the Create page uses them too."""
-        self.stopping.set()
-        self.app.scene_picker = self.picker
         self.destroy()
 
 
@@ -2014,7 +1959,7 @@ class DraftDialog(ctk.CTkToplevel):
         app, result = self.app, self.result
         self._restore = self.show_review
         self._show(self.review_page, "Here is the script. You can still edit it after it is in "
-                   "the editor, and Preview scenes shows the clips it finds.",
+                   "the editor, and the Storyboard shows the clips it finds.",
                    "Use this script", self.use, back=self.show_ask)
         self.script_view.configure(state="normal")
         self.script_view.delete("1.0", "end")
@@ -2082,6 +2027,7 @@ class DraftDialog(ctk.CTkToplevel):
                                         "to replace it.", text_color=ERR_COLOR)
             self.main_button.configure(text="Replace my script")
             return
+        self.app.source_text = self.text()   # what "make it longer" can draw on later
         self.app.use_draft(self.result, self.audience(), self.var_mode.get())
         self.close()
 
@@ -2230,7 +2176,18 @@ class App(ctk.CTk):
         self._page_anim = None
         self._key_tests = {}   # token -> callback(ok, message)
         self._cancel = None    # threading.Event of the render in progress
-        self.scene_picker = None   # clips chosen in the scene preview
+        self.board = None          # the Storyboard's scenes (vidgen.board.Board)
+        self.board_text = None     # the script the Storyboard was last built from
+        self.board_clips = {}      # search words -> stock clips found for them
+        self.board_pos = {}        # search words -> which of those clips is chosen
+        self.board_pictures = {}   # AI picture key -> the file made for it
+        self.board_marked = set()  # scenes the last "Change it" rewrote
+        self.board_cards, self.board_images = [], {}
+        self.board_gen = 0         # goes up on every rebuild; late worker news is dropped
+        self._revising = False
+        self.source_text = ""      # the text the script in the editor was written from
+        self._after_draft = "board"   # or "render": what New from text does when used
+        self._slow_ok = None       # the script a slow processor render was agreed to for
         self._last_draft = None    # the last script "New from text" put in the editor
         self.writer_listeners = []     # callables told how the model download is going
         self.writer_downloading = False
@@ -2293,6 +2250,7 @@ class App(ctk.CTk):
         self.var_music_enabled = tk.BooleanVar(value=s["music_enabled"])
         self.var_ask_save = tk.BooleanVar(value=s["ask_save"])
         self.welcome_seen = s["welcome_seen"]
+        self.tour_seen = s["tour_seen"]
         self.var_check_updates = tk.BooleanVar(value=s["check_updates"])
         self.var_versions = tk.StringVar(value=str(s["versions"]))
         self.var_target = tk.StringVar(value=s["target_length"])
@@ -2308,6 +2266,7 @@ class App(ctk.CTk):
         self.var_ai_for = tk.StringVar(value=s["ai_images_for"])
         self.var_ai_look = tk.StringVar(value=s["ai_images_look"])
         self.ai_backend = s["ai_images_backend"]
+        self.key_tip = s["key_tip"]
         self.var_music_track = tk.StringVar(value="")
         self._tracks = {}
 
@@ -2329,6 +2288,7 @@ class App(ctk.CTk):
             "music_enabled": bool(self.var_music_enabled.get()),
             "ask_save": bool(self.var_ask_save.get()),
             "welcome_seen": self.welcome_seen,
+            "tour_seen": self.tour_seen,
             "check_updates": bool(self.var_check_updates.get()),
             "versions": 2 if self.var_versions.get() == "2" else 1,
             "target_length": self.var_target.get(),
@@ -2340,6 +2300,7 @@ class App(ctk.CTk):
             "ai_images_for": self.var_ai_for.get(),
             "ai_images_look": self.var_ai_look.get(),
             "ai_images_backend": self.ai_backend,
+            "key_tip": self.key_tip,
             "music_path": self.music_path,
             "output_path": self.var_output.get().strip(),
             "aspect": self.var_aspect.get(),
@@ -2381,7 +2342,8 @@ class App(ctk.CTk):
         self.nav_items = {}
         for key, glyph, label in (
             ("home", "home", "Home"),
-            ("create", "create", "Create"),
+            ("board", "scenes", "Storyboard"),
+            ("create", "create", "Script"),
             ("images", "images", "AI images"),
             ("log", "log", "Log"),
         ):
@@ -2457,6 +2419,8 @@ class App(ctk.CTk):
             item.set_selected(name == key)
         if key == "home":
             self.refresh_home()
+        elif key == "board":
+            self.refresh_board()
         elif key == "settings":
             self._refresh_tracks()
 
@@ -2526,6 +2490,7 @@ class App(ctk.CTk):
     def _build_pages(self):
         self.pages = {
             "home": self._build_home(),
+            "board": self._build_board(),
             "create": self._build_create(),
             "images": self._build_images(),
             "log": self._build_log(),
@@ -2538,48 +2503,97 @@ class App(ctk.CTk):
         page = self._scroll_page()
         page.grid_columnconfigure((0, 1, 2, 3), weight=1, uniform="cards")
 
+        # The front door: most people arrive with text, not with a script (issues #2, #3).
+        door = Card(page)
+        door.grid(row=0, column=0, columnspan=4, sticky="ew", pady=(0, PAD))
+        door.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(door, text="Paste your text or describe your video", font=self.font_title,
+                     text_color=TEXT, anchor="w").grid(row=0, column=0, columnspan=3, sticky="w",
+                                                       padx=16, pady=(14, 2))
+        ctk.CTkLabel(door, text="An article, a tip, a story, notes. The app writes the script, "
+                                "finds the pictures, reads it out and adds captions.",
+                     font=self.font_tiny, text_color=TEXT_DIM, anchor="w",
+                     ).grid(row=1, column=0, columnspan=3, sticky="w", padx=16)
+        self.door_box = ctk.CTkTextbox(door, height=130, font=self.font_body, corner_radius=4,
+                                       fg_color=FIELD_BG, text_color=TEXT, border_width=0,
+                                       wrap="word")
+        self.door_box.grid(row=2, column=0, columnspan=3, sticky="ew", padx=14, pady=(8, 8))
+        self.door_status = ctk.CTkLabel(door, text="", font=self.font_tiny, text_color=TEXT_DIM,
+                                        anchor="w")
+        self._look_bar(door).grid(row=3, column=0, columnspan=3, sticky="w", padx=16,
+                                  pady=(0, 10))
+        self.door_status.grid(row=4, column=0, sticky="w", padx=16, pady=(0, 14))
+        self.var_straight = tk.BooleanVar(value=False)
+        ctk.CTkCheckBox(door, text="Make it straight away", variable=self.var_straight,
+                        font=self.font_body, text_color=TEXT_MUTED, checkbox_width=18,
+                        checkbox_height=18, border_width=1,
+                        ).grid(row=4, column=1, sticky="e", padx=(0, 14), pady=(0, 14))
+        ctk.CTkButton(door, text=f"{self.icon('play')}   Make my video", width=170, height=36,
+                      corner_radius=4, font=self.font_bold, fg_color=ACCENT,
+                      hover_color=ACCENT_HOVER, text_color=ACCENT_TEXT,
+                      command=self.make_from_text).grid(row=4, column=2, sticky="e",
+                                                        padx=(0, 14), pady=(0, 14))
+
         self.row_aspect = InfoRow(page, self, self.icon("aspect"), "Aspect Ratio")
-        self.row_aspect.grid(row=0, column=0, columnspan=2, sticky="ew",
+        self.row_aspect.grid(row=1, column=0, columnspan=2, sticky="ew",
                              padx=(0, PAD // 2), pady=PAD // 2)
 
         self.row_resolution = InfoRow(page, self, self.icon("resolution"), "Resolution")
-        self.row_resolution.grid(row=0, column=2, columnspan=2, sticky="ew",
+        self.row_resolution.grid(row=1, column=2, columnspan=2, sticky="ew",
                                  padx=(PAD // 2, 0), pady=PAD // 2)
 
         self.row_voice = InfoRow(page, self, self.icon("voice"), "Voice")
-        self.row_voice.grid(row=1, column=0, columnspan=2, sticky="ew",
+        self.row_voice.grid(row=2, column=0, columnspan=2, sticky="ew",
                             padx=(0, PAD // 2), pady=PAD // 2)
 
         self.row_bitrate = InfoRow(page, self, self.icon("bitrate"), "Bitrate")
-        self.row_bitrate.grid(row=1, column=2, columnspan=2, sticky="ew",
+        self.row_bitrate.grid(row=2, column=2, columnspan=2, sticky="ew",
                               padx=(PAD // 2, 0), pady=PAD // 2)
 
         self.row_output = InfoRow(page, self, self.icon("folder"), "Output path")
-        self.row_output.grid(row=2, column=0, columnspan=2, sticky="ew",
+        self.row_output.grid(row=3, column=0, columnspan=2, sticky="ew",
                              padx=(0, PAD // 2), pady=PAD // 2)
 
         self.row_render = ActionRow(page, self, self.icon("play"), "Render",
                                     "Idle", self.icon("play"), self.start_render)
-        self.row_render.grid(row=2, column=2, columnspan=2, sticky="ew",
+        self.row_render.grid(row=3, column=2, columnspan=2, sticky="ew",
                              padx=(PAD // 2, 0), pady=PAD // 2)
 
         self.tile_scenes = Tile(page, self, self.icon("scenes"), "Scenes", "0")
-        self.tile_scenes.grid(row=3, column=0, sticky="ew",
+        self.tile_scenes.grid(row=4, column=0, sticky="ew",
                               padx=(0, PAD // 2), pady=(PAD, PAD // 2))
 
         self.tile_last = Tile(page, self, self.icon("status"), "Last render", "Never")
-        self.tile_last.grid(row=3, column=1, sticky="ew",
+        self.tile_last.grid(row=4, column=1, sticky="ew",
                             padx=PAD // 2, pady=(PAD, PAD // 2))
 
         self.tile_size = Tile(page, self, self.icon("resolution"), "Video",
                               "1080x1920", corner="1080p")
-        self.tile_size.grid(row=3, column=2, sticky="ew",
+        self.tile_size.grid(row=4, column=2, sticky="ew",
                             padx=PAD // 2, pady=(PAD, PAD // 2))
 
         self.tile_key = Tile(page, self, self.icon("key"), "Footage key", "Missing")
-        self.tile_key.grid(row=3, column=3, sticky="ew",
+        self.tile_key.grid(row=4, column=3, sticky="ew",
                            padx=(PAD // 2, 0), pady=(PAD, PAD // 2))
         return page
+
+    def make_from_text(self):
+        """The front door's button: write a script from the pasted text, then show it."""
+        text = self.door_box.get("1.0", "end").strip()
+        if self.is_rendering:
+            return
+        if not text:
+            self.door_status.configure(text="Paste or type some text first.",
+                                       text_color=ERR_COLOR)
+            return
+        if not self._has_footage_key() and not imagegen.installed():
+            WelcomeDialog(self)   # nothing to show the scenes with yet: the free key comes first
+            return
+        self.door_status.configure(text="", text_color=TEXT_DIM)
+        self._after_draft = "render" if self.var_straight.get() else "board"
+        dialog = DraftDialog(self)
+        dialog.prefill(text)
+        dialog.analyse()   # straight to the questions: the text is already here
 
     def refresh_home(self):
         if not hasattr(self, "row_aspect"):
@@ -2698,31 +2712,8 @@ class App(ctk.CTk):
         )
         self.preview_button.pack(side="left", padx=(8, 0))
 
-        # Captions: the same variables as the Settings section, in compact form.
-        caption_bar = ctk.CTkFrame(control_card, fg_color="transparent")
-        caption_bar.grid(row=1, column=0, sticky="ew", padx=16, pady=(10, 0))
-        ctk.CTkLabel(caption_bar, text=self.icon("captions"), font=self.font_icon,
-                     text_color=TEXT_MUTED).pack(side="left", padx=(0, 10))
-        ctk.CTkLabel(caption_bar, text="Captions", font=self.font_body,
-                     text_color=TEXT).pack(side="left", padx=(0, 12))
-        ctk.CTkSwitch(
-            caption_bar, text="", width=44, variable=self.var_captions,
-            onvalue=True, offvalue=False, progress_color=ACCENT,
-        ).pack(side="left", padx=(0, 6))
-        self.caption_menus = []
-        for key, allowed, _default in CAPTION_SETTINGS:
-            menu = ctk.CTkOptionMenu(
-                caption_bar, values=list(allowed), variable=self.caption_vars[key],
-                width=116, height=32, corner_radius=4, font=self.font_body,
-                fg_color=FIELD_BG, button_color=FIELD_BG, button_hover_color=CARD_HOVER,
-                text_color=TEXT, text_color_disabled=TEXT_DIM, dropdown_fg_color=CARD_BG,
-                dropdown_text_color=TEXT, dropdown_hover_color=CARD_HOVER,
-                dropdown_font=self.font_body, dynamic_resizing=False,
-            )
-            menu.pack(side="left", padx=(6, 0))
-            self.caption_menus.append(menu)
-        self.var_captions.trace_add("write", self._sync_caption_controls)
-        self._sync_caption_controls()
+        self._look_bar(control_card, shape=False).grid(row=1, column=0, sticky="ew", padx=16,
+                                                       pady=(10, 0))
 
         # Length and versions, with a running estimate of how long the script is.
         pace_bar = ctk.CTkFrame(control_card, fg_color="transparent")
@@ -2775,7 +2766,7 @@ class App(ctk.CTk):
         )
         self.render_button.grid(row=0, column=3, sticky="e")
         self.scenes_button = ctk.CTkButton(
-            top, text=f"{self.icon('scenes')}   Preview scenes", font=self.font_body,
+            top, text=f"{self.icon('scenes')}   Storyboard", font=self.font_body,
             width=150, height=38, corner_radius=4, fg_color=FIELD_BG, hover_color=CARD_HOVER,
             border_width=1, border_color=FIELD_BORDER, text_color=TEXT,
             command=self.open_scene_preview,
@@ -2795,6 +2786,55 @@ class App(ctk.CTk):
         self.progress.set(0)
         self.progress.grid_remove()
         return page
+
+    def _look_bar(self, parent, shape=True):
+        """One row for how the video looks: its shape and its captions.
+
+        The same variables as Settings, so every copy of this row (Home, Storyboard,
+        Script) shows and changes the same choices.
+        """
+        bar = ctk.CTkFrame(parent, fg_color="transparent")
+        if shape:
+            ctk.CTkLabel(bar, text=self.icon("aspect"), font=self.font_icon,
+                         text_color=TEXT_MUTED).pack(side="left", padx=(0, 10))
+            ctk.CTkLabel(bar, text="Shape", font=self.font_body,
+                         text_color=TEXT).pack(side="left", padx=(0, 10))
+            FluentSegmented(bar, self, RATIO_OPTIONS, self.var_aspect, 150).pack(
+                side="left", padx=(0, 18))
+        ctk.CTkLabel(bar, text=self.icon("captions"), font=self.font_icon,
+                     text_color=TEXT_MUTED).pack(side="left", padx=(0, 10))
+        ctk.CTkLabel(bar, text="Captions", font=self.font_body,
+                     text_color=TEXT).pack(side="left", padx=(0, 12))
+        ctk.CTkSwitch(
+            bar, text="", width=44, variable=self.var_captions,
+            onvalue=True, offvalue=False, progress_color=ACCENT,
+        ).pack(side="left", padx=(0, 6))
+        first = not hasattr(self, "caption_menus")
+        if first:
+            self.caption_menus = []
+        for key, allowed, _default in CAPTION_SETTINGS:
+            menu = ctk.CTkOptionMenu(
+                bar, values=list(allowed), variable=self.caption_vars[key],
+                width=116 if not shape else 106, height=32, corner_radius=4,
+                font=self.font_body,
+                fg_color=FIELD_BG, button_color=FIELD_BG, button_hover_color=CARD_HOVER,
+                text_color=TEXT, text_color_disabled=TEXT_DIM, dropdown_fg_color=CARD_BG,
+                dropdown_text_color=TEXT, dropdown_hover_color=CARD_HOVER,
+                dropdown_font=self.font_body, dynamic_resizing=False,
+            )
+            menu.pack(side="left", padx=(6, 0))
+            self.caption_menus.append(menu)
+        if first:
+            self.var_captions.trace_add("write", self._sync_caption_controls)
+            self.var_aspect.trace_add("write", self._shape_changed)
+        self._sync_caption_controls()
+        return bar
+
+    def _shape_changed(self, *_args):
+        """Another shape means other clips and other picture sizes: the Storyboard starts over."""
+        self.board_clips, self.board_pos, self.board_text = {}, {}, None
+        if self.current_page == "board":
+            self.refresh_board(force=True)
 
     def _sync_look_bar(self):
         """Show the AI pictures row on Create only while AI images are installed."""
@@ -2984,6 +3024,11 @@ class App(ctk.CTk):
                       fg_color=FIELD_BG, hover_color=CARD_HOVER,
                       border_width=1, border_color=FIELD_BORDER, text_color=TEXT,
                       command=lambda: WelcomeDialog(self)).pack(side="left")
+        ctk.CTkButton(bar, text=f"{self.icon('info')}  Show the tour",
+                      height=32, corner_radius=4, font=self.font_body,
+                      fg_color=FIELD_BG, hover_color=CARD_HOVER,
+                      border_width=1, border_color=FIELD_BORDER, text_color=TEXT,
+                      command=lambda: TourDialog(self)).pack(side="left", padx=(8, 0))
         help_bar = ctk.CTkFrame(actions, fg_color="transparent")
         help_bar.pack(fill="x", padx=14, pady=(0, 14))
         ctk.CTkButton(help_bar, text=f"{self.icon('feedback')}  Report a problem",
@@ -3481,11 +3526,15 @@ class App(ctk.CTk):
         self.append_log(f"🪟 Window effect: {self.effect_note}")
         self.append_log(f"🎞️ ffmpeg: {FFMPEG_EXE or 'system / imageio auto-detect'}")
         if not self.var_api.get().strip() and not self.var_pixabay.get().strip():
-            self.append_log("⚠️ No footage API key yet - add a Pexels or Pixabay key "
-                            "in Settings.")
+            self.append_log(
+                "🎨 No stock footage key: every scene will get an AI picture."
+                if imagegen.installed() else
+                "⚠️ No footage API key yet - add a Pexels or Pixabay key in Settings.")
         self.refresh_home()
         threading.Thread(target=self._warm_moviepy, daemon=True).start()
-        if not self._has_footage_key() and not self.welcome_seen:
+        if not self.tour_seen:
+            self.after(300, lambda: TourDialog(self))   # it leads into the key setup itself
+        elif not self._has_footage_key() and not self.welcome_seen:
             self.after(300, lambda: WelcomeDialog(self))
         if self.var_check_updates.get():
             self.check_for_updates()
@@ -3695,11 +3744,10 @@ class App(ctk.CTk):
                 elif kind == "cancelled":
                     self.last_render = "Cancelled"
                     self.refresh_home()
-                elif kind == "scene_preview":
-                    try:
-                        payload["dialog"].on_event(payload)
-                    except tk.TclError:
-                        pass   # the preview window was closed meanwhile
+                elif kind == "board":
+                    self._board_event(payload)
+                elif kind == "line":
+                    self._line_ready(payload)
                 elif kind == "draft":
                     try:
                         payload["dialog"].on_event(payload)
@@ -3798,21 +3846,7 @@ class App(ctk.CTk):
         if looks_like_plain_text(script):   # as Render Video does: it wants New from text
             DraftDialog(self).prefill(script.strip())
             return
-        try:
-            rows = scenes.plan_preview(script)
-        except ScriptError as exc:
-            Dialog(self, "Check your script", str(exc), ok=False)
-            return
-        if not self._has_footage_key() and any(row.is_stock for row in rows):
-            WelcomeDialog(self)
-            return
-        # Reopening keeps the clips already chosen, as long as nothing changed.
-        picker = self.scene_picker
-        if picker is None or not picker.matches(script, self.frame_label()):
-            picker = scenes.ScenePicker(script, self.frame_label())
-        width, height, _orientation, _bitrate = resolve_target(
-            self.var_aspect.get(), self.var_resolution.get())
-        ScenePreviewDialog(self, rows, picker, (width, height))
+        self.select_page("board")
 
     # -- new from text -------------------------------------------------------
     def open_draft(self):
@@ -3835,9 +3869,12 @@ class App(ctk.CTk):
         self.var_voice.set(voices.persona(result.voice).label)
         self.var_aspect.set(result.aspect)
         self.var_target.set(result.target)
-        self.scene_picker = None
         self._commit_script()
-        self.select_page("create")
+        # Look before it is made, unless the user asked for the video straight away.
+        after, self._after_draft = self._after_draft, "board"
+        self.select_page("board")
+        if after == "render":
+            self.start_render()
 
     # -- the Smart writer's one-time download --------------------------------
     def start_writer_download(self):
@@ -3933,6 +3970,468 @@ class App(ctk.CTk):
             return
         self.repair_writer()
 
+    # ---------------------------------------------------------- STORYBOARD --
+    # The script as a card per scene. vidgen.board holds the scenes and every edit
+    # is written straight back to the script editor, so the two never disagree.
+    def _build_board(self):
+        page = ctk.CTkFrame(self.content, fg_color="transparent")
+        page.grid_columnconfigure(0, weight=1)
+        page.grid_rowconfigure(1, weight=1)
+        self._caption(page, "STORYBOARD", 0, pady=(0, 6))
+        self.board_list = ctk.CTkScrollableFrame(
+            page, fg_color="transparent", scrollbar_fg_color=SCROLLBAR_BG,
+            scrollbar_button_color=SCROLLBAR_THUMB,
+            scrollbar_button_hover_color=SCROLLBAR_THUMB_HOVER)
+        self.board_list.grid(row=1, column=0, sticky="nsew")
+        self.board_list.grid_columnconfigure(0, weight=1)
+
+        bar = Card(page)
+        bar.grid(row=2, column=0, sticky="ew", pady=(PAD // 2, 0))
+        bar.grid_columnconfigure(0, weight=1)
+        self._look_bar(bar).grid(row=0, column=0, columnspan=3, sticky="w", padx=14,
+                                 pady=(12, 0))
+        self.board_comment = focus_accent(ctk.CTkEntry(
+            bar, height=34, corner_radius=4, font=self.font_body, fg_color=FIELD_BG,
+            border_color=FIELD_BORDER, text_color=TEXT,
+            placeholder_text="Say what to change: make it shorter, more exciting start, "
+                             "remove the part about..."))
+        self.board_comment.grid(row=1, column=0, sticky="ew", padx=(14, 8), pady=(10, 4))
+        self.board_comment.bind(
+            "<Return>", lambda _event: self.revise_script(self.board_comment.get()))
+        self.board_change = ctk.CTkButton(
+            bar, text="Change it", width=110, height=34, corner_radius=4, font=self.font_body,
+            fg_color=FIELD_BG, hover_color=CARD_HOVER, border_width=1,
+            border_color=FIELD_BORDER, text_color=TEXT,
+            command=lambda: self.revise_script(self.board_comment.get()))
+        self.board_change.grid(row=1, column=1, padx=(0, 8), pady=(10, 4))
+        ctk.CTkButton(
+            bar, text=f"{self.icon('play')}   Make video", width=150, height=34,
+            corner_radius=4, font=self.font_bold, fg_color=ACCENT, hover_color=ACCENT_HOVER,
+            text_color=ACCENT_TEXT, command=self.start_render,
+        ).grid(row=1, column=2, padx=(0, 14), pady=(10, 4))
+        self.board_status = ctk.CTkLabel(bar, text="", font=self.font_tiny, text_color=TEXT_DIM,
+                                         anchor="w", justify="left", wraplength=820)
+        self.board_status.grid(row=2, column=0, columnspan=3, sticky="w", padx=16, pady=(0, 10))
+        return page
+
+    def board_box(self):
+        """The size of a card's picture: the shape of the video, small."""
+        return (81, 144) if self.var_aspect.get() == "9:16" else (176, 99)
+
+    def refresh_board(self, force=False):
+        """Rebuild the cards if the script changed since they were built."""
+        text = self.script_box.get("1.0", "end").strip()
+        if not force and text == self.board_text and self.board_cards:
+            return
+        for child in self.board_list.winfo_children():
+            child.destroy()
+        self.board_cards, self.board_images = [], {}
+        self.board_gen += 1
+        try:
+            self.board = boards.Board.from_text(text)
+        except ScriptError as exc:
+            self.board, self.board_text = None, None
+            hint = ("There is plain text in the script box. Paste it on Home instead and press "
+                    "Make my video." if looks_like_plain_text(text) else
+                    f"The script has a mistake, so there is nothing to show yet.\n{exc}\n"
+                    "Fix it on the Script page.")
+            ctk.CTkLabel(self.board_list, text=hint, font=self.font_body, text_color=TEXT_MUTED,
+                         justify="left", anchor="w").grid(row=0, column=0, sticky="w",
+                                                          padx=8, pady=20)
+            return
+        self.board_text = text
+        for index in range(len(self.board)):
+            self._board_card(index)
+        if not self._revising:
+            self.board_status.configure(
+                text=f"{len(self.board)} scenes. Change anything here; it is the same video as "
+                     "on the Script page.", text_color=TEXT_DIM)
+        threading.Thread(target=self._board_load, daemon=True,
+                         args=(self.board_gen, list(self.board.scenes), self._board_ctx())).start()
+
+    def _board_card(self, index):
+        scene, kind = self.board.scenes[index], self.board.source(index)
+        box = self.board_box()
+        card = Card(self.board_list)
+        card.grid(row=index, column=0, sticky="ew", pady=(0, 6))
+        card.grid_columnconfigure(1, weight=1)
+        picture = ctk.CTkLabel(card, text="...", width=box[0], height=box[1], fg_color=FIELD_BG,
+                               corner_radius=4, font=self.font_tiny, text_color=TEXT_DIM)
+        picture.grid(row=0, column=0, rowspan=4, padx=(10, 12), pady=10)
+
+        head = ctk.CTkFrame(card, fg_color="transparent")
+        head.grid(row=0, column=1, sticky="ew", pady=(8, 0))
+        ctk.CTkLabel(head, text=f"Scene {index + 1}", font=self.font_bold,
+                     text_color=TEXT).pack(side="left")
+        if index in self.board_marked:
+            ctk.CTkLabel(head, text="  changed", font=self.font_tiny,
+                         text_color=WARN_COLOR).pack(side="left")
+        status = ctk.CTkLabel(head, text="", font=self.font_tiny, text_color=TEXT_DIM)
+        status.pack(side="left", padx=(10, 0))
+
+        def field(row, name, value, hint):
+            entry = focus_accent(ctk.CTkEntry(
+                card, height=30, corner_radius=4, font=self.font_body, fg_color=FIELD_BG,
+                border_color=FIELD_BORDER, text_color=TEXT, placeholder_text=hint))
+            if value:
+                entry.insert(0, value)
+            entry.grid(row=row, column=1, sticky="ew", pady=2)
+            for event in ("<FocusOut>", "<Return>"):
+                entry.bind(event, lambda _e, i=index, n=name, w=entry: self._board_edit(i, n, w.get()))
+            return entry
+
+        field(1, "voice", scene.voice, "What is said in this scene")
+        field(2, "visual", self.board.shown(index),
+              {boards.STOCK: "Search words for stock footage",
+               boards.AI: "What the AI picture shows", boards.LOCAL: "Your file"}[kind])
+        field(3, "card", scene.card, "Card (optional): Win + V   or   $120,000 | after 30 years")
+
+        def button(parent, text, command, width=118):
+            return ctk.CTkButton(parent, text=text, width=width, height=28, corner_radius=4,
+                                 font=self.font_tiny, fg_color=FIELD_BG, hover_color=CARD_HOVER,
+                                 border_width=1, border_color=FIELD_BORDER, text_color=TEXT,
+                                 command=command)
+
+        side = ctk.CTkFrame(card, fg_color="transparent")
+        side.grid(row=0, column=2, rowspan=4, padx=(10, 4), pady=8, sticky="n")
+        action = None
+        if kind == boards.STOCK:
+            action = button(side, "Another clip", lambda i=index: self._board_another(i))
+        elif kind == boards.AI:
+            action = button(side, "Make picture", lambda i=index: self._board_make(i))
+        if action is not None:
+            action.pack(pady=(0, 4))
+        if kind == boards.AI:
+            button(side, "Use a stock clip",
+                   lambda i=index: self._board_do(lambda: self.board.set_source(i, boards.STOCK)),
+                   ).pack(pady=(0, 4))
+        elif kind == boards.STOCK and imagegen.installed():
+            button(side, "Use an AI picture",
+                   lambda i=index: self._board_do(lambda: self.board.set_source(i, boards.AI)),
+                   ).pack(pady=(0, 4))
+        if scene.voice:
+            button(side, "Hear it", lambda i=index: self.hear_line(self.board.scenes[i].voice),
+                   ).pack(pady=(0, 4))
+
+        order = ctk.CTkFrame(card, fg_color="transparent")
+        order.grid(row=0, column=3, rowspan=4, padx=(0, 10), pady=8, sticky="n")
+        for text, act in (("Up", lambda i=index: self.board.move(i, -1)),
+                          ("Down", lambda i=index: self.board.move(i, 1)),
+                          ("Add", lambda i=index: self.board.insert(i)),
+                          ("Delete", lambda i=index: self.board.delete(i))):
+            button(order, text, lambda a=act: self._board_do(a), width=64).pack(pady=(0, 4))
+        self.board_cards.append({"picture": picture, "status": status, "action": action})
+
+    # -- edits: every one is written back to the script -------------------------------
+    def _board_write(self):
+        text = self.board.text()
+        self.board_text = text
+        self.script_box.delete("1.0", "end")
+        self.script_box.insert("1.0", text)
+        self._commit_script()
+        self.refresh_estimate()
+
+    def _board_edit(self, index, name, value):
+        if self.board is None or index >= len(self.board):
+            return
+        before = self.board.text()
+        self.board.set(index, name, value)
+        if self.board.text() == before:
+            return
+        self._board_write()
+        if name == "visual":   # other words, another clip or picture: load this card again
+            scene = self.board.scenes[index]
+            threading.Thread(target=self._board_load_one, daemon=True,
+                             args=(self.board_gen, index, scene, self._board_ctx())).start()
+
+    def _board_do(self, change):
+        """A change to the order or the kind of a scene: every card is built again."""
+        if self.board is None or self.is_rendering:
+            return
+        before = self.board.text()
+        change()
+        if self.board.text() != before:
+            self.board_marked = set()
+            self._board_write()
+            self.refresh_board(force=True)
+
+    # -- pictures: found on worker threads, shown through the queue ---------------------
+    def _picture_key(self, scene, ctx=None) -> str:
+        ctx = ctx or self._board_ctx(search=False)
+        return f"{scene.ai_prompt}|{ctx['look']}|{ctx['aspect']}"
+
+    def _board_ctx(self, search=True) -> dict:
+        """UI thread: what the picture workers need, read here because they must not touch Tk."""
+        return {"look": self.var_ai_look.get(), "aspect": self.var_aspect.get(),
+                "has_key": self._has_footage_key(), "ai": imagegen.installed(),
+                "base": os.path.dirname(os.path.abspath(self.var_output.get() or ".")),
+                "search": self.new_footage_search() if search else None}
+
+    def _board_post(self, gen, **payload):
+        self._queue.put(("board", dict(payload, gen=gen)))
+
+    def _board_load(self, gen, scenes_now, ctx):
+        for index, scene in enumerate(scenes_now):
+            if gen != self.board_gen:
+                return
+            self._board_load_one(gen, index, scene, ctx)
+
+    def _board_load_one(self, gen, index, scene, ctx):
+        """Worker thread: the still for one card, and what to say beside it."""
+        path, note = None, ""
+        try:
+            if scene.is_local:
+                found, kind = footage.resolve_local(scene.local_path, ctx["base"])
+                note = "Your own file"
+                if kind == "image":
+                    path = found
+                else:
+                    width, height, _length = preview.probe(found)
+                    still = preview.poster(found, preview.fit((width, height), (320, 320)), at=0.5)
+                    os.makedirs(THUMB_DIR, exist_ok=True)
+                    path = os.path.join(THUMB_DIR, f"board_local_{index}.jpg")
+                    still.save(path)
+            elif scene.is_ai:
+                path = self.board_pictures.get(self._picture_key(scene, ctx))
+                note = "AI picture" if path else (
+                    "AI picture: made with the video, or press Make picture to see it now"
+                    if ctx["ai"] else "AI picture: download AI images to use it")
+            elif not ctx["has_key"]:
+                note = "Stock clip: add a free key in Settings to see it"
+            else:
+                query = scene.visual
+                if query not in self.board_clips:
+                    self.board_clips[query] = ctx["search"].find(query, 6)
+                clips = self.board_clips[query]
+                if clips:
+                    at = self.board_pos.get(query, 0) % len(clips)
+                    path = scenes.fetch_thumb(clips[at], THUMB_DIR)
+                    told = clips[at].about[:48]
+                    note = f"Stock clip {at + 1} of {len(clips)}" + (f": {told}" if told else "")
+                else:
+                    note = "No stock clip found for these words"
+        except Exception as exc:  # noqa: BLE001 - a missing still is not worth an error
+            note = note or f"Could not load a picture ({type(exc).__name__})"
+        self._board_post(gen, event="still", index=index, path=path, note=note)
+
+    def _board_another(self, index):
+        scene = self.board.scenes[index]
+        clips = self.board_clips.get(scene.visual) or []
+        if len(clips) > 1:
+            self.board_pos[scene.visual] = (self.board_pos.get(scene.visual, 0) + 1) % len(clips)
+            threading.Thread(target=self._board_load_one, daemon=True,
+                             args=(self.board_gen, index, scene, self._board_ctx())).start()
+
+    def _board_make(self, index):
+        """Make (or make again) the AI picture for a scene; the video will use this one."""
+        scene = self.board.scenes[index]
+        if self._making_picture or self.is_rendering:
+            self.board_status.configure(text="One picture at a time: wait for the last one.",
+                                        text_color=WARN_COLOR)
+            return
+        if not imagegen.installed():
+            self.select_page("images")
+            return
+        self._making_picture = True
+        gen, key = self.board_gen, self._picture_key(scene)
+        size, look, backend = imagegen.size_for(self.var_aspect.get()), self.var_ai_look.get(), \
+            self.ai_backend
+        self.board_cards[index]["status"].configure(text="Making the picture...")
+
+        def worker():
+            import hashlib
+
+            try:
+                os.makedirs(PREVIEW_DIR, exist_ok=True)
+                name = hashlib.sha1(f"{key}|{time.time()}".encode()).hexdigest()[:16]
+                path = os.path.join(PREVIEW_DIR, f"board_{name}.png")
+                made = imagegen.make(scene.ai_prompt, size, path, look, backend=backend,
+                                     log=self.ui.log)
+                self._board_post(gen, event="made", index=index, key=key, path=path,
+                                 seconds=made.seconds, backend=made.backend)
+            except Exception as exc:  # noqa: BLE001 - shown on the card
+                self._board_post(gen, event="not_made", index=index, message=str(exc))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _board_event(self, payload):
+        """UI thread: news from the Storyboard's workers."""
+        event, index = payload["event"], payload.get("index")
+        if event in ("made", "not_made"):
+            self._making_picture = False
+            if event == "made":
+                self.board_pictures[payload["key"]] = payload["path"]
+                if payload["backend"] == imagegen.CPU:
+                    self.remember_ai_backend(imagegen.CPU)
+        if event == "revised":
+            self._revised(payload)
+            return
+        if payload["gen"] != self.board_gen or index is None or index >= len(self.board_cards):
+            return   # the cards were rebuilt meanwhile
+        widgets = self.board_cards[index]
+        if event == "not_made":
+            widgets["status"].configure(text=ellipsize(payload["message"], 70),
+                                        text_color=ERR_COLOR)
+            return
+        if event == "made":
+            payload = dict(payload, note=f"AI picture, made in {payload['seconds']:.0f} s")
+        widgets["status"].configure(text=payload["note"], text_color=TEXT_DIM)
+        if widgets["action"] is not None and self.board.source(index) == boards.AI:
+            widgets["action"].configure(text="Make another" if payload["path"] else "Make picture")
+        self._board_show(index, payload["path"])
+
+    def _board_show(self, index, path):
+        from PIL import Image, ImageOps
+
+        picture, box = self.board_cards[index]["picture"], self.board_box()
+        try:
+            with Image.open(path) as opened:
+                fitted = ImageOps.fit(opened.convert("RGB"), (box[0] * 2, box[1] * 2))
+            self.board_images[index] = ctk.CTkImage(light_image=fitted, dark_image=fitted, size=box)
+            picture.configure(image=self.board_images[index], text="")
+        except Exception:  # noqa: BLE001 - no path, or not a picture
+            self.board_images.pop(index, None)
+            picture.configure(image=None, text="No picture\nyet")
+
+    def board_choices(self, script: str):
+        """(stock clips, AI pictures) chosen in the Storyboard, by scene, for ``script``.
+
+        Empty when the Storyboard shows another script: a choice belongs to the
+        scene it was made for.
+        """
+        if self.board is None or (self.board_text or "").strip() != (script or "").strip():
+            return {}, {}
+        clips, pictures = {}, {}
+        for index, scene in enumerate(self.board.scenes):
+            if scene.is_ai:
+                path = self.board_pictures.get(self._picture_key(scene))
+                if path and os.path.isfile(path):
+                    pictures[index] = path
+            elif not scene.is_local:
+                found = self.board_clips.get(scene.visual) or []
+                at = self.board_pos.get(scene.visual, 0)
+                if found and at:   # the first clip is what the search gives anyway
+                    at %= len(found)
+                    clips[index] = found[at:] + found[:at]
+        return clips, pictures
+
+    # -- "Change it": the Smart writer rewrites the script from a comment ----------------
+    def revise_script(self, comment):
+        comment = (comment or "").strip()
+        if self._revising or self.is_rendering or not comment:
+            return
+        self.refresh_board()
+        if self.board is None:
+            return
+        ok, why = writer.ready()
+        if not ok:
+            self.board_status.configure(text=f"Change it needs the Smart writer. {why}",
+                                        text_color=WARN_COLOR)
+            return
+        if any(not scene.voice for scene in self.board.scenes):
+            self.board_status.configure(
+                text="Change it can't rewrite a script with silent scenes yet. Edit the cards "
+                     "instead.", text_color=WARN_COLOR)
+            return
+        self._revising = True
+        self.board_change.configure(state="disabled", text="Thinking...")
+        self.board_status.configure(text=f"The Smart writer is changing the script: {comment}",
+                                    text_color=TEXT_DIM)
+        before = list(self.board.scenes)
+        shown = [(self.board.shown(i), scene.voice) for i, scene in enumerate(before)]
+        gpu, source = bool(self.var_writer_gpu.get()), self.source_text
+
+        def worker():
+            try:
+                with writer.Session(lambda: False, gpu=gpu) as session:
+                    answer = session.revise(shown, comment, source)
+                self._queue.put(("board", {"event": "revised", "before": before,
+                                           "answer": answer, "gen": 0}))
+            except Exception as exc:  # noqa: BLE001 - shown under the box
+                self._queue.put(("board", {"event": "revised", "before": before,
+                                           "error": str(exc), "gen": 0}))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _revised(self, payload):
+        self._revising = False
+        self.board_change.configure(state="normal", text="Change it")
+        if payload.get("error"):
+            self.board_status.configure(text=payload["error"], text_color=ERR_COLOR)
+            return
+        before = payload["before"]
+        if self.board is None or self.board.scenes != before:
+            self.board_status.configure(text="The script changed meanwhile, so the rewrite was "
+                                             "not used.", text_color=WARN_COLOR)
+            return
+        cards = draft.suggest_card if self.var_auto_cards.get() else None
+        after = boards.apply_revision(before, payload["answer"], cards)
+        marked = set(boards.changed(before, after))
+        if not marked and len(after) == len(before) and after == before:
+            self.board_status.configure(text="Nothing was changed. Try saying it another way.",
+                                        text_color=WARN_COLOR)
+            return
+        self.board = boards.Board(after)
+        self.board_marked = marked
+        self._board_write()
+        self.refresh_board(force=True)
+        self.board_comment.delete(0, "end")
+        gone = len(before) - len(after)
+        parts = [f"{len(marked)} scene{'s' if len(marked) != 1 else ''} changed"] if marked else []
+        if gone:
+            parts.append(f"{abs(gone)} {'removed' if gone > 0 else 'added'}")
+        if not marked and not gone:
+            parts = ["the order changed"]
+        self.board_status.configure(
+            text=", ".join(parts).capitalize() + ". Look them over, then press Make video. "
+                 "The Script page has the old lines if you undo there (Ctrl+Z).",
+            text_color=OK_COLOR)
+
+    # -- hearing one line -----------------------------------------------------------------
+    def hear_line(self, text):
+        """Speak one line in the chosen voice, without blocking the window."""
+        if not text or self.voice_missing():
+            return
+        persona, online = voices.persona(self.var_voice.get()), bool(self.var_voice_online.get())
+
+        def worker():
+            import hashlib
+
+            try:
+                os.makedirs(PREVIEW_DIR, exist_ok=True)
+                name = hashlib.sha1(f"{persona.id}|{online}|{text}".encode()).hexdigest()[:16]
+                stem = os.path.join(PREVIEW_DIR, f"line_{name}")
+                playable = stem + ".play.wav"
+                if not os.path.exists(playable):
+                    from vidgen import mastering
+
+                    made = generate_voiceover(text, stem + ".mp3", lambda _line: None,
+                                              persona.id, online)
+                    partial = stem + ".tmp.wav"
+                    mastering.run_ffmpeg(["-y", "-i", made, "-ar", "44100", "-ac", "1",
+                                          "-c:a", "pcm_s16le", partial])
+                    os.replace(partial, playable)
+                self._queue.put(("line", {"path": playable, "error": None}))
+            except Exception as exc:  # noqa: BLE001 - reported in the window
+                self._queue.put(("line", {"path": None, "error": str(exc)}))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _line_ready(self, payload):
+        if payload["error"]:
+            self.append_log(f"⚠️ Could not read the line out: {payload['error']}")
+            self.board_status.configure(text="Could not read the line out - see the Log",
+                                        text_color=ERR_COLOR)
+        elif sys.platform == "win32":
+            import winsound
+
+            winsound.PlaySound(payload["path"], winsound.SND_FILENAME | winsound.SND_ASYNC)
+
+    def set_key_tip(self, on):
+        """The free-key reminder after a keyless video: "Don't show again" turns it off."""
+        self.key_tip = bool(on)
+        save_settings(self._collect_settings())
+
     # ----------------------------------------------------------- AI IMAGES --
     def _build_images(self):
         page = self._scroll_page()
@@ -4011,10 +4510,44 @@ class App(ctk.CTk):
         variable.trace_add(
             "write", lambda *_args: label.configure(text=hints.get(variable.get(), "")))
 
+    def pictures_to_make(self) -> int:
+        """How many AI pictures the script in the editor still needs made."""
+        try:
+            parsed = parse_script(self.script_box.get("1.0", "end"))
+        except ScriptError:
+            return 0
+        if not imagegen.installed():
+            return 0
+        keyless = not self._has_footage_key()
+        ready = set(self.board_choices(self.script_box.get("1.0", "end").strip())[1])
+        return sum(1 for i, scene in enumerate(parsed)
+                   if i not in ready and (scene.is_ai or (keyless and not scene.is_local)))
+
+    def _slow_pictures_need_a_yes(self) -> bool:
+        """On a PC that draws on the processor, say how long it will take before starting.
+
+        The first press of Render explains; the second, for the same script, goes ahead.
+        """
+        count = self.pictures_to_make()
+        script = self.script_box.get("1.0", "end").strip()
+        if self.ai_backend != imagegen.CPU or not count or self._slow_ok == script:
+            return False
+        self._slow_ok = script
+        message = (f"This PC makes AI pictures on its processor: {count} of them will take "
+                   f"very roughly {count * 4} to {count * 10} minutes. Press Render again to "
+                   "go ahead.")
+        self.status_label.configure(text=message)
+        self.append_log("⏳ " + message)
+        if hasattr(self, "board_status"):
+            self.board_status.configure(text=message, text_color=WARN_COLOR)
+        return True
+
     def ai_mode(self) -> str:
         """Which scenes New from text gives an AI picture: none unless AI images are here."""
         if not imagegen.installed():
             return draft.AI_NONE
+        if not self._has_footage_key():
+            return draft.AI_ALL   # nothing else to show a scene with
         return {AI_IMAGES_FOR[0]: draft.AI_UNFILMABLE,
                 AI_IMAGES_FOR[1]: draft.AI_ALL}.get(self.var_ai_for.get(), draft.AI_NONE)
 
@@ -4291,9 +4824,13 @@ class App(ctk.CTk):
         if looks_like_plain_text(pasted):
             DraftDialog(self).prefill(pasted)
             return
-        # No key yet: walk the user through getting one instead of failing.
-        if not self._has_footage_key() and self._needs_stock_footage():
+        # No key yet: walk the user through getting one instead of failing. With AI images
+        # downloaded there is nothing to walk through: every scene gets a picture.
+        if not self._has_footage_key() and self._needs_stock_footage() \
+                and not imagegen.installed():
             WelcomeDialog(self)
+            return
+        if self._slow_pictures_need_a_yes():
             return
         if self.voice_missing():
             self.select_page("log")
@@ -4314,20 +4851,15 @@ class App(ctk.CTk):
         self.settings = settings
         save_settings(settings)
         self._cancel = threading.Event()
-        # Clips picked in the scene preview hold only for this script and frame.
-        choices = {}
-        if self.scene_picker is not None:
-            if self.scene_picker.matches(settings["script"], self.frame_label()):
-                choices = self.scene_picker.choices()
-            else:
-                self.scene_picker = None
+        # What was chosen in the Storyboard holds only for the script it shows.
+        choices, pictures = self.board_choices(settings["script"])
         cfg = dict(settings, cache_dir=SEARCH_CACHE_DIR, overwrite=overwrite,
-                   cancel=self._cancel, clip_choices=choices,
+                   cancel=self._cancel, clip_choices=choices, ai_pictures=pictures,
                    target_length=pacing.TARGETS.get(settings["target_length"]))
 
         self._set_busy(True)
         if choices:
-            self.append_log("🎬 Using the clips chosen in the scene preview.")
+            self.append_log("🎬 Using the clips chosen in the Storyboard.")
         for bar in self._progress_bars():
             bar.configure(mode="determinate")
             bar.set(0)

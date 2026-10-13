@@ -20,6 +20,7 @@ import hashlib
 import json
 import os
 import random
+import re
 import socket
 import subprocess
 import sys
@@ -384,6 +385,75 @@ def filmable(visual: str, turn: int = 0) -> str:
     return _COMPUTER_SHOTS[turn % len(_COMPUTER_SHOTS)]
 
 
+# --- changing a finished script ------------------------------------------------------
+
+_REVISE_TOKENS = 1500
+_REVISE_PROMPT = (
+    "You edit the script of a short narrated video. The user gives the script as scenes "
+    "and one comment saying what to change. Make that change and nothing else.\n"
+    "Rules:\n"
+    "- A comment about how the script sounds (more exciting, more serious, funnier, simpler, "
+    "for another audience) means rewriting the voice lines in that way: new wording, same "
+    "facts.\n"
+    "- A comment about one part (the start, one scene, one topic) means changing only that "
+    "part; the other scenes come back exactly as they were.\n"
+    "- \"voice\" is one full spoken sentence of 8 to 18 words.\n"
+    "- \"picture\" says what is seen in that scene, in the same style as the other scenes.\n"
+    "- To shorten, remove the least important scenes. To remove a topic, remove its scenes.\n"
+    "- Do not add facts that are not already in the script.\n"
+    "Answer with JSON only: the whole script after the change."
+)
+_REVISE_EXAMPLE_BEFORE = [
+    {"picture": "honey jar spoon", "voice": "There is one food in your kitchen that will never go bad."},
+    {"picture": "egyptian pyramid desert",
+     "voice": "Honey found in Egyptian tombs was still safe to eat after 3,000 years."},
+    {"picture": "bees honeycomb", "voice": "It holds so little water that bacteria simply cannot live in it."},
+]
+_REVISE_EXAMPLE_COMMENT = "make the first line more exciting"
+_REVISE_EXAMPLE_AFTER = [
+    {"picture": "honey jar spoon", "voice": "Stop throwing this away, because it is the one food that never dies."},
+    *_REVISE_EXAMPLE_BEFORE[1:],
+]
+def _revise_schema(fewest: int, most: int) -> dict:
+    return {
+        "type": "object",
+        "properties": {"scenes": {
+            "type": "array", "minItems": fewest, "maxItems": most,
+            "items": {"type": "object",
+                      "properties": {"picture": {"type": "string"}, "voice": {"type": "string"}},
+                      "required": ["picture", "voice"]}}},
+        "required": ["scenes"],
+    }
+
+
+_REVISE_SCHEMA = _revise_schema(1, MAX_SCENES)
+_LONGER = re.compile(r"\b(longer|lengthen|extend|expand|more detail|add more|more scenes|"
+                     r"too short|not long enough)\b", re.I)
+_SHORTER = re.compile(r"\b(shorter|shorten|trim|condense|briefer|cut it down|fewer scenes|"
+                      r"too long)\b", re.I)
+_A_LITTLE = re.compile(r"\b(little|bit|slightly|tad|somewhat|touch)\b", re.I)
+_A_LOT = re.compile(r"\b(much|lot|way|far|twice|double|half|significantly|really)\b", re.I)
+
+
+def length_change(comment: str, scenes: int) -> int | None:
+    """How many scenes a comment about length asks for, or None if it is about something else.
+
+    "A little" is about a fifth, "a lot" about half, and anything in between a
+    third; always at least one scene's difference, and never fewer than two scenes.
+    """
+    longer, shorter = bool(_LONGER.search(comment)), bool(_SHORTER.search(comment))
+    if longer == shorter:
+        return None
+    share = 0.2 if _A_LITTLE.search(comment) else 0.5 if _A_LOT.search(comment) else 0.33
+    step = max(1, round(scenes * share))
+    wanted = min(scenes + step, MAX_SCENES) if longer else max(scenes - step, 2)
+    return wanted if wanted != scenes else None
+
+
+def _revise_turn(scenes, comment: str) -> str:
+    return f"Script:\n{json.dumps({'scenes': scenes})}\n\nComment: {comment}"
+
+
 def parse_scenes(content: str) -> list[draft.DraftScene]:
     """The model's answer as scenes. Repeated and empty lines are dropped."""
     try:
@@ -603,6 +673,59 @@ class Session:
                                             persona.enhanced) + padding for s in scenes)
         return draft.Draft(script, scenes, seconds, length, persona.id, audience.aspect,
                            source="Smart writer")
+
+    def revise(self, scenes: list[tuple[str, str]], comment: str,
+               source: str = "") -> list[tuple[str, str]]:
+        """The script changed the way ``comment`` asks. Scenes are (picture, voice) pairs.
+
+        The answer keeps the scene format, so it is always a usable script; what
+        the comment did not ask about should come back word for word. ``source``
+        is the text the script was written from, if known: more to draw on when
+        the comment asks for a longer video.
+        """
+        comment = " ".join((comment or "").split())
+        if not comment:
+            raise WriterError("Say what you would like changed first.")
+        script = json.dumps({"scenes": [{"picture": p, "voice": v} for p, v in scenes]})
+        _check_fits(script + comment, _REVISE_TOKENS)
+        # "A little longer" is not something this model can weigh, but it does write the
+        # number of scenes it is told to (see script_schema): so the length is settled here.
+        wanted = length_change(comment, len(scenes))
+        schema, asked = _REVISE_SCHEMA, comment
+        if wanted:
+            schema = _revise_schema(wanted, wanted)
+            more = wanted > len(scenes)
+            asked += (f"\n(The script has {len(scenes)} scenes now. Write exactly {wanted}: "
+                      + ("keep the scenes there are and add new ones that say more about the "
+                         "same subject." if more else
+                         "keep the most important scenes as they are and drop the rest.") + ")")
+            source = " ".join(source.split())[:1500]
+            if more and source:
+                asked += f"\nMore to draw on, from the text the video is about: {source}"
+        turns = [("user", _revise_turn(_REVISE_EXAMPLE_BEFORE, _REVISE_EXAMPLE_COMMENT)),
+                 ("assistant", json.dumps({"scenes": _REVISE_EXAMPLE_AFTER})),
+                 ("user", _revise_turn(json.loads(script)["scenes"], asked))]
+        found = []
+        for attempt in range(2):
+            content = self._ask(_REVISE_PROMPT, turns, schema, _REVISE_TOKENS)
+            try:
+                items = json.loads(content)["scenes"]
+                found = [(" ".join(str(i["picture"]).split()), " ".join(str(i["voice"]).split()))
+                         for i in items]
+            except (ValueError, KeyError, TypeError) as exc:
+                raise WriterError(
+                    "The Smart writer gave an answer the app could not read.") from exc
+            found = [(picture, voice) for picture, voice in found if voice]
+            if found != list(scenes):
+                break
+            # Told to leave the rest alone, this model sometimes leaves everything alone.
+            self._stopping()
+            turns += [("assistant", content),
+                      ("user", "That is the same script: nothing was changed. Carry out the "
+                               f"comment this time: {comment}")]
+        if not found:
+            raise WriterError("The Smart writer gave an empty answer.")
+        return found
 
     def _write_once(self, text, audience, words, pictures=False):
         room = _answer_tokens(words, pictures)

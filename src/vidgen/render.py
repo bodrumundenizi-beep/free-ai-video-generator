@@ -269,6 +269,15 @@ def _render(cfg, ui, work_dir, job):
         cfg.get("api_key"), cfg.get("pixabay_key"), target_w, target_h,
         orientation, quality, cfg.get("cache_dir"), ui.log,
     )
+    # No stock key, but AI images are here: draw every scene. The app then needs no key.
+    if not search.providers:
+        from . import imagegen
+
+        if imagegen.ready()[0]:
+            for plan in plans:
+                if not plan.scene.is_local and not plan.scene.is_ai:
+                    plan.scene = _ai_instead(plan.scene)
+
     # AI pictures are optional. Without them those scenes use stock footage instead.
     wants_ai = [p for p in plans if p.scene.is_ai]
     if wants_ai:
@@ -672,6 +681,13 @@ def _timeline_words(plans, starts):
     return words
 
 
+def _ai_instead(scene):
+    """``scene`` asking for an AI picture in place of stock footage: its Picture: line if it
+    has one, else its search words and what is said over them."""
+    described = scene.picture or ", ".join(filter(None, [scene.visual, scene.voice]))
+    return dataclasses.replace(scene, visual="ai: " + described.replace(":", " "))
+
+
 def _stock_instead(scene):
     """``scene`` with search words in place of its AI picture, for when none can be made."""
     words = [w for w in re.findall(r"[a-z]+", scene.ai_prompt.lower())
@@ -687,6 +703,12 @@ def _ai_picture(plan, index, cfg, ratio, work_dir, ui, version, search, stop) ->
     """
     from . import imagegen
 
+    # A picture already made in the Storyboard is the one the user looked at: use it.
+    ready_made = (cfg.get("ai_pictures") or {}).get(index)
+    if version == 1 and ready_made and os.path.isfile(ready_made):
+        ui.log(f"🎨 Scene {index + 1}: using the AI picture from the Storyboard")
+        plan.parts, plan.sources = 1, [_Source(ready_made, "image")]
+        return True
     path = os.path.join(work_dir, f"ai_{version}_{index}.png")
     ui.log(f"🎨 Scene {index + 1}: making an AI picture of '{plan.scene.ai_prompt}'...")
     try:

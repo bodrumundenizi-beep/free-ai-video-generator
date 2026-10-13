@@ -14,6 +14,8 @@ Any scene can add optional keys, in any order after its ``Visual:``:
     Padding: 0.5s       silence after the voice; default comes from Settings
     Zoom: in            in, out, none, or auto (default: a subtle zoom)
     Card: Win + V       drawn over the footage; see cards.py for the three looks
+    Picture: a robot    what an AI picture of this scene would show, kept beside a stock
+                        scene so the Storyboard can switch it to one in a click
 
 ``Visual: ai: a robot holding a clipboard`` asks for an AI picture of that
 (imagegen.py) instead of stock footage, the way ``local:`` asks for a file.
@@ -27,7 +29,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-KEYS = ("visual", "voice", "duration", "padding", "zoom", "card")
+KEYS = ("visual", "voice", "duration", "padding", "zoom", "card", "picture")
 ZOOM_MODES = ("auto", "in", "out", "none")
 _ZOOM_ALIASES = {"off": "none", "no": "none", "default": "auto"}
 
@@ -54,6 +56,7 @@ class Scene:
     padding: float | None = None  # None means the Settings default
     zoom: str = "auto"
     card: str | None = None  # text drawn over the footage (cards.py)
+    picture: str | None = None  # a description for an AI picture, should one be wanted
     line: int = 0  # 1-based line of the scene's Visual:
 
     @property
@@ -146,7 +149,7 @@ def parse_script(script_text, warnings=None):
         if key not in KEYS:
             raise ScriptError(
                 f"Error on Line {line_no}: Line must begin with 'Visual:' or 'Voice:' "
-                "(or Duration:, Padding:, Zoom:, Card:)"
+                "(or Duration:, Padding:, Zoom:, Card:, Picture:)"
             )
         value = match.group(2).strip()
         label = key.capitalize()
@@ -189,6 +192,8 @@ def parse_script(script_text, warnings=None):
             if not value:
                 raise ScriptError(f"Error on Line {line_no}: Card: is empty")
             current.card = value
+        elif key == "picture":
+            current.picture = value or None
         else:
             current.zoom = _zoom(value, line_no)
 
@@ -196,6 +201,27 @@ def parse_script(script_text, warnings=None):
     if not scenes:
         raise ScriptError("No valid scenes found.")
     return scenes
+
+
+def to_text(scenes) -> str:
+    """Script text for ``scenes``: what parse_script would read back as the same scenes."""
+    blocks = []
+    for scene in scenes:
+        lines = [f"Visual: {scene.visual}"]
+        if scene.voice:
+            lines.append(f"Voice: {scene.voice}")
+        if scene.duration is not None:
+            lines.append(f"Duration: {scene.duration:g}s")
+        if scene.padding is not None:
+            lines.append(f"Padding: {scene.padding:g}s")
+        if scene.zoom != "auto":
+            lines.append(f"Zoom: {scene.zoom}")
+        if scene.card:
+            lines.append(f"Card: {scene.card}")
+        if scene.picture:
+            lines.append(f"Picture: {scene.picture}")
+        blocks.append("\n".join(lines))
+    return "\n\n".join(blocks)
 
 
 def looks_like_plain_text(script_text) -> bool:

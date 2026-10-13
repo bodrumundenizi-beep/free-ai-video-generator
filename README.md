@@ -10,12 +10,12 @@ voiceover, and renders a 1080p or 720p MP4 in portrait or landscape.
   <em>Made from a six-scene script: footage, voice and captions are automatic.</em>
 </p>
 
-![Home](docs/home.png)
-
 ## Features
+- **Paste text, get a video:** The Home page is one box and one button. Paste an article, a tip or your notes and press **Make my video**.
+- **Storyboard:** See the video as a card per scene before it is made. Change a line, swap a clip, make another AI picture, reorder scenes, and hear any line read out.
+- **Tell it what to change:** Type "make it shorter" or "more exciting start" and the built-in AI rewrites the script; you see what changed before anything is rendered.
 - **Paste any text, get a script:** Paste plain text, say who the video is for and how long it should be, and a built-in open-source AI writes the script. It runs on your PC: no account, no key, nothing sent anywhere.
 - **Automated Stock Footage:** Automatically fetches relevant video clips from Pexels or Pixabay.
-- **Preview and choose your clips:** See the clip picked for each scene before rendering, and swap any you don't like with one click.
 - **Two versions in one go:** Optionally render the same script twice with different clips, and keep the better one.
 - **Pick a length:** Fit the video to 15, 30 or 60 seconds, with a live estimate as you type.
 - **Neural AI Voices, on your PC:** 20 natural-sounding male and female voices from an open-source speech model that runs offline. No account, no key, no service that can be switched off.
@@ -57,10 +57,58 @@ You can confirm you have the real file by checking its hash against
 `SHA256SUMS.txt` on the release page:
 
 ```powershell
-Get-FileHash .\AIVideoStudio-3.9.2-setup.exe -Algorithm SHA256
+Get-FileHash .\AIVideoStudio-4.0.0-setup.exe -Algorithm SHA256
 ```
 
+## The quick way
+
+1. On **Home**, paste your text into the box and press **Make my video**.
+2. Check the three answers the app suggests (who it is for, how long, where it will be
+   posted) and press **Write script**, then **Use this script**.
+3. The **Storyboard** opens: one card per scene, with its picture and its line. Change what
+   you don't like, then press **Make video**.
+
+Tick **Make it straight away** on Home to skip step 3.
+
+![Home](docs/home.png)
+
+## Storyboard
+
+The Storyboard is the same video as the script, shown as cards. Everything you change
+there is written into the script, and the other way round.
+
+![Storyboard](docs/storyboard.png)
+
+| On each card | What you can do |
+|---|---|
+| The picture | **Another clip** steps through up to six stock clips. **Make picture** / **Make another** draws the AI picture now, and the video then uses exactly that one. **Use an AI picture** and **Use a stock clip** switch the scene between the two. |
+| The line | Edit it in place. **Hear it** reads that one line in the chosen voice. |
+| The search words or picture description | Edit in place; the picture reloads. |
+| The card | Add, change or remove a `Win + V` style card. |
+| Up, Down, Add, Delete | Change the order, add a scene, remove one. |
+
+### Tell it what to change
+
+At the bottom of the Storyboard, and in the window that opens when a video is finished,
+there is a box: **Say what to change**. Type it in your own words and press **Change it**:
+
+- "make it shorter", "make the start more exciting", "sound more serious", "write it for kids"
+- "remove the part about pinning", "put the last scene first"
+- "the third picture should be a cat on a laptop", "add a line telling people to subscribe"
+
+The Smart writer rewrites the script, the Storyboard marks the scenes that **changed**, and
+nothing is rendered until you press **Make video**. Scenes that did not change keep their
+clips and pictures.
+
+It changes the script only: not the voice, the captions or the music, which you set on the
+Script page. It needs the Smart writer download, and it is a small AI model: if it changes
+nothing, or the wrong thing, say it another way or edit the card yourself. Ctrl+Z on the
+Script page brings the old lines back.
+
 ## First run
+
+The very first time, a short four-screen tour shows how the app is used. It is not shown
+again after an update; **Feedback → Show the tour** brings it back.
 
 The app needs **one free stock footage key**, from either
 [Pixabay](https://pixabay.com/api/docs/) or [Pexels](https://www.pexels.com/api/).
@@ -74,14 +122,19 @@ With both keys set, the app searches Pexels first and falls back to Pixabay when
 Pexels has nothing good. Scripts that only use your own files (see `local:`
 below) need no key at all.
 
+**No key at all?** If you have downloaded [AI pictures](#ai-pictures-optional) (they need a
+good graphics card), the app draws a picture for every scene and never asks for a key. When
+the video is done it mentions once that a free key would add real video clips; tick **Don't
+show again** and it won't.
+
 Keys are stored in plain text in `%APPDATA%\AIVideoStudio\settings.json`.
 
 ![Settings](docs/settings.png)
 
 ## New from text
 
-You don't have to write the script format by hand. Press **New from text** on the
-Create page:
+You don't have to write the script format by hand. Paste your text on **Home**, or press
+**New from text** on the Script page:
 
 1. **Paste your text** and press **Analyse**. Any plain text works: notes, an
    article, a list.
@@ -256,7 +309,7 @@ file.
 
 ### Voices
 
-Pick a voice on the **Create** page and press **▶ Preview Voice** to hear it
+Pick a voice on the **Script** page and press **▶ Preview Voice** to hear it
 before rendering. All voices are free — no account or key needed.
 
 The voices are spoken on your PC by [Kokoro](https://huggingface.co/hexgrad/Kokoro-82M),
@@ -279,19 +332,6 @@ commas and full stops, then broadcast mastering — low-end warmth, compression
 so every word is audible, and loudness set to −14 LUFS, the level YouTube
 Shorts, Reels and TikTok play at.
 
-### Choosing your clips
-
-Press **Preview scenes** on the Create page to see the clip the app picked for
-each scene, next to the line spoken over it. **Try another** steps through up to
-six clips for that scene. When they all look right, press **Render with these
-clips**. If you close the window instead, **Render Video** still uses your
-choices, until you edit the script.
-
-A long voice line uses two clips: the preview chooses the first, and the second
-is the next clip in the list.
-
-![Preview scenes](docs/preview.png)
-
 ### Two versions
 
 Set **Versions** to `2` and the app renders the script twice: the same voice and
@@ -302,7 +342,7 @@ versions take well under twice as long as one.
 
 ### Video length
 
-The Create page shows about how long your script will be, and updates as you
+The Script page shows about how long your script will be, and updates as you
 type. It is an estimate: the voice paces every line a little differently.
 
 Set **Length** to `15 s`, `30 s` or `60 s` to fit the video to that length. The
@@ -321,7 +361,7 @@ stops within a second or two and leaves no unfinished file behind.
 
 Captions are on by default: the words appear on screen as they are spoken, timed
 from the voice itself, so they stay in sync without any setup. Change how they
-look, or turn them off, in the **Captions** row on the Create page or under
+look, or turn them off, in the **Captions** row on the Script page or under
 **Settings → Captions**. Scenes without a `Voice:`
 line have no captions.
 
@@ -334,7 +374,7 @@ Next to each video the app writes `<name>.credits.txt`, listing the Pexels or
 Pixabay creator and page for every stock clip used — handy for a YouTube
 description.
 
-![Create](docs/create.png)
+![Script](docs/create.png)
 
 ## Options
 
@@ -428,7 +468,7 @@ You can use ChatGPT, Claude, or Gemini to automatically write scripts formatted 
 ### How to use:
 1. Replace `[INSERT TOPIC HERE]` with your video idea (e.g., *'3 hidden iPhone camera features'* or *'How to clear cache on Windows'*).
 2. Copy the AI's exact text output.
-3. Paste it directly into the **Create** page script box and click **Render Video**!
+3. Paste it directly into the **Script** page's box and click **Render Video**!
 
 ## Run from source
 
@@ -459,7 +499,7 @@ python -m pytest
 python packaging/make_icon.py
 python packaging/fetch_llama.py
 pyinstaller --noconfirm --clean packaging/ai_video_studio.spec
-"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion=3.9.2 packaging\installer.iss
+"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion=4.0.0 packaging\installer.iss
 ```
 
 Releases are built automatically by GitHub Actions when a `v*` tag is pushed.

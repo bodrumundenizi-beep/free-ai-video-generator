@@ -58,6 +58,7 @@ class Candidate:
     page_url: str = ""
     creator: str = ""
     thumb: str = ""  # a small still of the clip, for the scene preview
+    about: str = ""  # what the site says the clip shows: Pixabay's tags, Pexels' page name
 
     @property
     def key(self) -> str:
@@ -193,6 +194,8 @@ def parse_pexels(data: dict, target_w: int, target_h: int) -> list[Candidate]:
                 "Pexels", str(video.get("id")), best["url"], best["width"], best["height"],
                 best.get("fps"), video.get("url") or "", (video.get("user") or {}).get("name", ""),
                 video.get("image") or "",
+                # .../video/a-man-typing-on-his-laptop-8519534/ is the only description given
+                " ".join(re.findall(r"[a-z]+", (video.get("url") or "").rsplit("/video/", 1)[-1])),
             ))
     return found
 
@@ -218,7 +221,7 @@ def parse_pixabay(data: dict, target_w: int, target_h: int) -> list[Candidate]:
             found.append(Candidate(
                 "Pixabay", str(hit.get("id")), best["url"], best["width"], best["height"],
                 None, hit.get("pageURL") or "", hit.get("user") or "",
-                stills[0] if stills else "",
+                stills[0] if stills else "", str(hit.get("tags") or ""),
             ))
     return found
 

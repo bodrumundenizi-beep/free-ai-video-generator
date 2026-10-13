@@ -516,6 +516,12 @@ def to_script(scenes, cards: bool = True, ai: str = AI_NONE) -> str:
     spoken = [s for s in scenes if _one_line(s.voice)]
     blocks = [f"Visual: {'ai: ' + picture_for(s) if wants_picture(s, ai) else _visual(s.visual)}"
               f"\nVoice: {_one_line(s.voice)}" for s in spoken]
+    if ai:
+        # A stock scene keeps its description too, so the Storyboard can switch it to an
+        # AI picture without anyone having to write one.
+        blocks = [block + (f"\nPicture: {picture_for(s)}"
+                           if getattr(s, "picture", "") and not wants_picture(s, ai) else "")
+                  for block, s in zip(blocks, spoken)]
     if cards:
         found = add_cards([_one_line(s.voice) for s in spoken])
         blocks = [block + (f"\nCard: {card}" if card else "")
