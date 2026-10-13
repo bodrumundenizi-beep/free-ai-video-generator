@@ -10,8 +10,11 @@ program once per picture, as a separate process that is stopped the moment the
 user cancels, and the renderer treats the result like any still image.
 
 It wants a graphics card: about 20 seconds a picture on an RTX 4060, minutes
-without one. Every ordinary failure raises ImageError with a sentence for the
-user, so the renderer can fall back to stock footage and say why.
+without one. If the card cannot make the picture (issue #4: an Intel laptop
+chip with 16 GB) it is tried again on the processor, smaller. Every ordinary
+failure raises ImageError with a sentence for the user and the program's own
+words in ``detail``, so the renderer can fall back to stock footage, say why,
+and leave something in the Log to diagnose it by.
 
 Pure of Tk. The download and the program can both be replaced in tests.
 """
@@ -20,21 +23,38 @@ from __future__ import annotations
 
 import os
 import random
+import re
 import shutil
 import subprocess
 import time
 import zipfile
+from dataclasses import dataclass
 
 from . import writer
 from .footage import Stopped
 from .writer import Model
 
-__all__ = ["FILES", "LOOKS", "ImageError", "Stopped", "download", "installed", "make",
-           "ready", "remove", "size_for"]
+__all__ = ["CPU", "FILES", "GPU", "LOOKS", "ImageError", "Made", "Stopped", "download",
+           "installed", "make", "ready", "remove", "size_for"]
 
 
 class ImageError(Exception):
-    """An AI picture could not be made. The message is for the user."""
+    """An AI picture could not be made. The message is for the user.
+
+    ``detail`` is what the program itself said, scrubbed, for the Log and a bug report.
+    """
+
+    def __init__(self, message: str, detail: str = ""):
+        super().__init__(message)
+        self.detail = detail
+
+
+@dataclass(frozen=True)
+class Made:
+    """How a picture was made, for the Log and for remembering what works on this PC."""
+    seconds: float
+    backend: str  # GPU or CPU
+    size: tuple[int, int]
 
 
 # Chosen on 2026-10-10: the best pictures of the open models that fit an 8 GB card,
@@ -72,10 +92,17 @@ FILES = (PROGRAM, DECODER, MODEL)  # smallest first
 SIZE = sum(m.size for m in FILES)
 
 EXE = "sd-cli.exe"
-STEPS = "8"  # what this model is distilled for
-# Free memory a picture needs: the three models sit in RAM and move to the card in turn.
-NEEDED_MEMORY = 7_000_000_000
+GPU, CPU = "gpu", "cpu"  # the graphics card (whichever the program picks), or the processor
+STEPS = 8  # what this model is distilled for
+CPU_STEPS = 4  # half the wait on a processor, for a picture that is a little rougher
+# Free memory needed, measured on 2026-10-13 with the weights kept on disk: the program's
+# peak was 3.1 GB at full size on a graphics card and 4.2 GB small on the processor. On a
+# laptop chip the "graphics memory" is ordinary RAM too, hence the room above the 3.1.
+FULL_MEMORY = 5_000_000_000  # at or above this: the full size
+SMALL_MEMORY = 3_500_000_000  # down to this: a smaller picture; below it, none
+CPU_MEMORY = 4_500_000_000
 TIMEOUT = 900.0  # seconds for one picture before the PC is judged too slow
+DETAIL_LINES = 15  # of the program's output kept when it fails
 MAX_PROMPT = 400  # characters; the model's text limit is far above what a scene needs
 SIZES = {"9:16": (576, 1024), "16:9": (1024, 576)}
 # One look for a whole video, so its pictures match each other.
@@ -167,11 +194,14 @@ def ready(memory=writer.free_memory) -> tuple[bool, str]:
         return False, ("AI images need the Smart writer's file, which is missing. "
                        "Download it in Settings.")
     free = memory()
-    if free is not None and free < NEEDED_MEMORY:
-        return False, ("This PC doesn't have enough free memory for an AI picture right now "
-                       f"(it needs about {NEEDED_MEMORY / 1e9:.0f} GB). Closing other programs "
-                       "may help.")
+    if free is not None and free < SMALL_MEMORY:
+        return False, _too_little(SMALL_MEMORY)
     return True, ""
+
+
+def _too_little(needed: int) -> str:
+    return ("This PC doesn't have enough free memory for an AI picture right now "
+            f"(it needs about {needed / 1e9:.1f} GB). Closing other programs may help.")
 
 
 # --- making a picture ----------------------------------------------------------------
@@ -188,14 +218,37 @@ def full_prompt(prompt: str, look: str = DEFAULT_LOOK) -> str:
     return f"{words}, {LOOKS.get(look, LOOKS[DEFAULT_LOOK])}"
 
 
-def command(exe: str, prompt: str, size, out_path: str, seed: int) -> list[str]:
+def smaller(size) -> tuple[int, int]:
+    """The reduced size for a PC short of memory, or for the processor: the same shape."""
+    width, height = size
+    return (384, 672) if height >= width else (672, 384)
+
+
+def fit(size, backend: str, free: int | None) -> tuple[tuple[int, int], int]:
+    """(size, steps) this PC can manage now on ``backend``; ImageError if it cannot."""
+    if backend == CPU:
+        if free is not None and free < CPU_MEMORY:
+            raise ImageError(_too_little(CPU_MEMORY))
+        return smaller(size), CPU_STEPS
+    if free is None or free >= FULL_MEMORY:
+        return tuple(size), STEPS
+    if free >= SMALL_MEMORY:
+        return smaller(size), STEPS
+    raise ImageError(_too_little(SMALL_MEMORY))
+
+
+def command(exe: str, prompt: str, size, out_path: str, seed: int, backend: str = GPU,
+            steps: int = STEPS) -> list[str]:
     width, height = size
     return [exe, "--diffusion-model", writer.model_path(MODEL),
             "--vae", writer.model_path(DECODER), "--llm", writer.model_path(),
-            "-p", prompt, "--cfg-scale", "1.0", "--steps", STEPS,
+            "-p", prompt, "--cfg-scale", "1.0", "--steps", str(steps),
             "-W", str(width), "-H", str(height), "-s", str(seed),
-            # Keeps the models in RAM and lends the card one at a time: what lets 8 GB do it.
-            "--offload-to-cpu", "--diffusion-fa", "-o", out_path]
+            # Leaves the weights in their files and reads each model in when its turn comes:
+            # a third of the memory of holding them all in RAM, at the same speed.
+            "--params-backend", "disk", "--diffusion-fa", "-o", out_path,
+            # With nothing said the program takes the first graphics card it finds.
+            *(["--backend", "cpu"] if backend == CPU else [])]
 
 
 def _launch(args, log_path):
@@ -206,31 +259,65 @@ def _launch(args, log_path):
                                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
 
 
-def _last_line(log_path) -> str:
+def _output(log_path) -> list[str]:
+    """What the program printed, one entry per line; progress bars are dropped."""
     try:
         with open(log_path, encoding="utf-8", errors="replace") as fh:
-            lines = [line.strip() for line in fh if line.strip()]
+            text = fh.read()
     except OSError:
-        return ""
-    return lines[-1][:200] if lines else ""
+        return []
+    lines = [line.strip() for line in text.replace("\r", "\n").split("\n")]
+    return [line for line in lines if line and not line.startswith("|")]
 
 
-def make(prompt: str, size, out_path: str, look: str = DEFAULT_LOOK, seed: int | None = None,
-         should_stop=None, launch=_launch, check=ready) -> float:
-    """Make one picture at ``out_path`` (a .png). Returns the seconds it took.
+def _scrub(text: str) -> str:
+    """``text`` without this PC's user name: the program prints full paths."""
+    home = os.path.expanduser("~")
+    name = os.path.basename(home)
+    text = text.replace(home, "~")
+    return re.sub(re.escape(name), "<user>", text, flags=re.I) if len(name) > 2 else text
 
-    Raises Stopped when ``should_stop`` says so (the program is killed at
-    once) and ImageError for anything else.
-    """
-    ok, why = check()
-    if not ok:
-        raise ImageError(why)
-    text = full_prompt(prompt, look)
-    seed = random.randrange(1, 2**31) if seed is None else seed
-    log_path = out_path + ".log"
-    began = time.monotonic()
+
+def device_name(lines) -> str:
+    """The graphics card the program picked, as it named it, or ""."""
+    for line in lines:
+        found = re.match(r"ggml_vulkan: 0 = (.+?) \|", line)
+        if found:
+            return found.group(1).strip()
+    return ""
+
+
+def _gigabytes(count) -> str:
+    return "?" if count is None else f"{count / 1e9:.1f}"
+
+
+def _file_sizes() -> str:
+    def size(model):
+        try:
+            return f"{os.path.getsize(writer.model_path(model)) / 1e9:.2f} GB"
+        except OSError:
+            return "missing"
+
+    return f"picture model {size(MODEL)}, decoder {size(DECODER)}, text model {size(writer.MODEL)}"
+
+
+def damaged_files(should_stop=None) -> list[str]:
+    """Names of model files whose contents no longer match their SHA-256. Slow: reads them all."""
+    bad = []
+    for model in (DECODER, MODEL, writer.MODEL):
+        try:
+            if writer._hash_file(writer.model_path(model), should_stop).hexdigest() != model.sha256:
+                bad.append(model.name)
+                writer.remove(model)
+        except OSError:
+            bad.append(model.name)
+    return bad
+
+
+def _run(args, log_path, should_stop, launch, began):
+    """Run the program to its end. Returns its exit code; Stopped or ImageError otherwise."""
     try:
-        process = launch(command(program_path() or EXE, text, size, out_path, seed), log_path)
+        process = launch(args, log_path)
     except OSError as exc:
         raise ImageError(f"The AI images program could not start ({exc}).") from exc
     try:
@@ -244,8 +331,64 @@ def make(prompt: str, size, out_path: str, look: str = DEFAULT_LOOK, seed: int |
         if process.poll() is None:
             process.kill()
             process.wait()
-    if process.returncode != 0 or not os.path.isfile(out_path) or not os.path.getsize(out_path):
-        detail = _last_line(log_path)
-        raise ImageError("The AI picture could not be made"
-                         + (f" ({detail})." if detail else "."))
-    return time.monotonic() - began
+    return process.returncode
+
+
+def make(prompt: str, size, out_path: str, look: str = DEFAULT_LOOK, seed: int | None = None,
+         should_stop=None, launch=_launch, check=ready, backend: str = "", log=None,
+         memory=writer.free_memory, verify=damaged_files) -> Made:
+    """Make one picture at ``out_path`` (a .png) and say how it was made.
+
+    The graphics card is tried first, then the processor: a card can start
+    cleanly and still fail part-way (issue #4). ``backend=CPU`` goes straight
+    to the processor, for a PC where the card is known not to work. Short of
+    memory, the picture is made smaller rather than not at all. ``log`` is
+    told what is being tried and, on failure, what the program said.
+
+    Raises Stopped when ``should_stop`` says so (the program is killed at
+    once) and ImageError when no attempt produced a picture.
+    """
+    say = log or (lambda _line: None)
+    ok, why = check()
+    if not ok:
+        raise ImageError(why)
+    text = full_prompt(prompt, look)
+    seed = random.randrange(1, 2**31) if seed is None else seed
+    log_path = out_path + ".log"
+    failure, ran = None, False
+    for attempt in ([CPU] if backend == CPU else [GPU, CPU]):
+        where = "processor" if attempt == CPU else "graphics card"
+        free = memory()
+        try:
+            fitted, steps = fit(size, attempt, free)
+        except ImageError as exc:
+            failure = failure or exc
+            say(f"🎨 Not trying the {where}: {_gigabytes(free)} GB of memory free.")
+            continue
+        say(f"🎨 AI picture on the {where}: {fitted[0]}x{fitted[1]}, {steps} steps · memory "
+            f"{_gigabytes(free)} of {_gigabytes(writer.total_memory())} GB free · {_file_sizes()}")
+        began, ran = time.monotonic(), True
+        if os.path.isfile(out_path):
+            os.remove(out_path)   # a picture left by an earlier try must not pass for this one
+        code = _run(command(program_path() or EXE, text, fitted, out_path, seed, attempt, steps),
+                    log_path, should_stop, launch, began)
+        lines = _output(log_path)
+        device = device_name(lines) if attempt == GPU else ""
+        if device:
+            say(f"🎨 Graphics card used: {device}")
+        if code == 0 and os.path.isfile(out_path) and os.path.getsize(out_path):
+            return Made(time.monotonic() - began, attempt, fitted)
+        detail = _scrub("\n".join(
+            [f"AI picture failed on the {where} after {time.monotonic() - began:.0f} s: exit "
+             f"code {code}, {_gigabytes(memory())} GB free at that moment"]
+            + lines[-DETAIL_LINES:]))
+        for line in detail.split("\n"):
+            say("   " + line)
+        failure = ImageError(f"The AI picture could not be made on the {where}.", detail)
+    if ran:
+        bad = verify(should_stop)
+        if bad:
+            raise ImageError(f"An AI images file was damaged and has been removed "
+                             f"({', '.join(bad)}). Download it again in the AI images tab.",
+                             failure.detail)
+    raise failure

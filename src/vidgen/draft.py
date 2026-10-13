@@ -405,7 +405,9 @@ AI_NONE, AI_UNFILMABLE, AI_ALL = "", "unfilmable", "all"
 
 # Named in a description, a brand gets its logo drawn; the picture should have none.
 _BRANDS = re.compile(r"\b(?:microsoft|windows|google|youtube|tiktok|instagram|facebook|chrome|"
-                     r"android|apple|iphone|macbook|samsung|amazon|netflix)(?:'s)?\b\s*", re.I)
+                     r"android|apple|iphone|macbook|samsung|amazon|netflix)(?:'s)?\b"
+                     # with its version: "Windows 11" must not leave "a 11 laptop" (issue #4)
+                     r"(?:\s+\d+(?:\.\d+)?\b)?\s*", re.I)
 
 
 def picture_for(scene) -> str:

@@ -90,6 +90,10 @@ class UiBridge:
     def busy(self, on):
         self._post("busy", on=on)
 
+    def ai_backend(self, backend):
+        """What AI pictures turned out to need on this PC, for the window to remember."""
+        self._post("ai_backend", backend=backend)
+
     def finished(self, ok, title, message, path=None, paths=None):
         """``paths`` are the saved videos (one per version), so the window can
         show them; ``path`` is the first."""
@@ -686,9 +690,10 @@ def _ai_picture(plan, index, cfg, ratio, work_dir, ui, version, search, stop) ->
     path = os.path.join(work_dir, f"ai_{version}_{index}.png")
     ui.log(f"🎨 Scene {index + 1}: making an AI picture of '{plan.scene.ai_prompt}'...")
     try:
-        took = imagegen.make(plan.scene.ai_prompt, imagegen.size_for(ratio), path,
+        made = imagegen.make(plan.scene.ai_prompt, imagegen.size_for(ratio), path,
                              cfg.get("ai_images_look") or imagegen.DEFAULT_LOOK,
-                             should_stop=stop)
+                             should_stop=stop, backend=cfg.get("ai_images_backend") or "",
+                             log=ui.log)
     except imagegen.Stopped as exc:
         raise RenderCancelled() from exc
     except imagegen.ImageError as exc:
@@ -696,7 +701,12 @@ def _ai_picture(plan, index, cfg, ratio, work_dir, ui, version, search, stop) ->
             raise Exception(f"Scene {index + 1}: {exc}") from exc
         ui.log(f"⚠️ {exc} Using stock footage for scene {index + 1}.")
         return False
-    ui.log(f"🎨 Picture made in {took:.0f} s")
+    ui.log(f"🎨 Picture made in {made.seconds:.0f} s")
+    if made.backend == imagegen.CPU and cfg.get("ai_images_backend") != imagegen.CPU:
+        # The card failed and the processor worked: don't pay for that failure again,
+        # in this video's other scenes or the next video.
+        cfg["ai_images_backend"] = imagegen.CPU
+        ui.ai_backend(imagegen.CPU)
     plan.parts, plan.sources = 1, [_Source(path, "image")]
     return True
 

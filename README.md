@@ -57,7 +57,7 @@ You can confirm you have the real file by checking its hash against
 `SHA256SUMS.txt` on the release page:
 
 ```powershell
-Get-FileHash .\AIVideoStudio-3.9.1-setup.exe -Algorithm SHA256
+Get-FileHash .\AIVideoStudio-3.9.2-setup.exe -Algorithm SHA256
 ```
 
 ## First run
@@ -210,7 +210,10 @@ press **Download** there.
 ![The AI images tab](docs/aiimages.png)
 
 - **It needs a graphics card with about 8 GB of video memory.** A picture takes around
-  20 seconds on an RTX 4060. Without a graphics card it can take several minutes.
+  20 seconds on an RTX 4060. If the graphics card can't make the picture, the app tries
+  again on the processor with a smaller picture, which can take several minutes, and
+  remembers that for next time. It needs about 5 GB of free memory for a full-size picture
+  and makes a smaller one with less.
 - **The download is about 4.2 GB**, once. It also uses the Smart writer's file.
 - Ask for a picture in any script with `ai:` and a description:
 
@@ -456,7 +459,7 @@ python -m pytest
 python packaging/make_icon.py
 python packaging/fetch_llama.py
 pyinstaller --noconfirm --clean packaging/ai_video_studio.spec
-"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion=3.9.1 packaging\installer.iss
+"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion=3.9.2 packaging\installer.iss
 ```
 
 Releases are built automatically by GitHub Actions when a `v*` tag is pushed.

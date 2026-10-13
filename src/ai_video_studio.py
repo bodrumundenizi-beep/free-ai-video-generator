@@ -151,7 +151,7 @@ from vidgen.voice import generate_voiceover  # noqa: E402
 
 
 APP_NAME = "AI Video Studio"
-APP_VERSION = "3.9.1"
+APP_VERSION = "3.9.2"
 # Must match AppUserModelID in packaging/installer.iss, or a pinned taskbar
 # shortcut will not group with the running window.
 APP_MODEL_ID = "AIVideoStudio.Desktop.3"
@@ -257,7 +257,8 @@ AI_LOOK_HINTS = {
 }
 AI_IMAGES_WARNING = (
     "Needs a graphics card with about 8 GB of video memory. Around 20 seconds per picture "
-    "on an RTX 4060. Without a graphics card a picture can take several minutes.")
+    "on an RTX 4060. If the graphics card can't do it, the app uses the processor instead, "
+    "with a smaller picture that can take several minutes.")
 
 
 def default_settings() -> dict:
@@ -280,6 +281,7 @@ def default_settings() -> dict:
         "auto_cards": True,
         "ai_images_for": AI_IMAGES_FOR[0],
         "ai_images_look": imagegen.DEFAULT_LOOK,
+        "ai_images_backend": "",   # "cpu" once the graphics card has failed on this PC
         "music_path": "",
         "output_path": os.path.join(default_output_dir(), "final_video.mp4"),
         "aspect": "9:16",
@@ -339,6 +341,8 @@ def load_settings() -> dict:
         data["ai_images_for"] = AI_IMAGES_FOR[0]
     if data["ai_images_look"] not in imagegen.LOOKS:
         data["ai_images_look"] = imagegen.DEFAULT_LOOK
+    if data["ai_images_backend"] != imagegen.CPU:
+        data["ai_images_backend"] = ""
     if data["music_path"] and not os.path.isfile(str(data["music_path"])):
         data["music_path"] = ""
 
@@ -2303,6 +2307,7 @@ class App(ctk.CTk):
         self.var_auto_cards = tk.BooleanVar(value=s["auto_cards"])
         self.var_ai_for = tk.StringVar(value=s["ai_images_for"])
         self.var_ai_look = tk.StringVar(value=s["ai_images_look"])
+        self.ai_backend = s["ai_images_backend"]
         self.var_music_track = tk.StringVar(value="")
         self._tracks = {}
 
@@ -2334,6 +2339,7 @@ class App(ctk.CTk):
             "auto_cards": bool(self.var_auto_cards.get()),
             "ai_images_for": self.var_ai_for.get(),
             "ai_images_look": self.var_ai_look.get(),
+            "ai_images_backend": self.ai_backend,
             "music_path": self.music_path,
             "output_path": self.var_output.get().strip(),
             "aspect": self.var_aspect.get(),
@@ -3707,6 +3713,8 @@ class App(ctk.CTk):
                     self._voice_event(payload)
                 elif kind == "images":
                     self._images_event(payload)
+                elif kind == "ai_backend":
+                    self.remember_ai_backend(payload["backend"])
                 elif kind == "crash":
                     self._unexpected(payload["trace"])
                 elif kind == "update":
@@ -3787,6 +3795,9 @@ class App(ctk.CTk):
         if self.is_rendering:
             return
         script = self.script_box.get("1.0", "end")
+        if looks_like_plain_text(script):   # as Render Video does: it wants New from text
+            DraftDialog(self).prefill(script.strip())
+            return
         try:
             rows = scenes.plan_preview(script)
         except ScriptError as exc:
@@ -3942,6 +3953,12 @@ class App(ctk.CTk):
             font=self.font_body, fg_color=FIELD_BG, hover_color=CARD_HOVER,
             border_width=1, border_color=FIELD_BORDER, text_color=TEXT)
         self.images_button.pack(side="left")
+        # Only shown once the graphics card has failed here and the processor took over.
+        self.images_retry = ctk.CTkButton(
+            pack_row.control, text="Try the graphics card again", width=190, height=32,
+            corner_radius=4, font=self.font_body, fg_color=FIELD_BG, hover_color=CARD_HOVER,
+            border_width=1, border_color=FIELD_BORDER, text_color=TEXT,
+            command=lambda: self.remember_ai_backend(""))
 
         warning = Card(page)
         warning.grid(row=next(rows), column=0, sticky="ew", pady=PAD // 2)
@@ -4015,7 +4032,8 @@ class App(ctk.CTk):
             self.images_state.configure(text=ellipsize(payload["message"], 60),
                                         text_color=ERR_COLOR)
         elif imagegen.installed():
-            self.images_state.configure(text=f"Installed · {imagegen.SIZE / 1e9:.1f} GB",
+            slow = " · using the processor (slower)" if self.ai_backend == imagegen.CPU else ""
+            self.images_state.configure(text=f"Installed · {imagegen.SIZE / 1e9:.1f} GB{slow}",
                                         text_color=OK_COLOR)
         else:
             self.images_state.configure(text=f"Not downloaded · {gigabytes:.1f} GB",
@@ -4026,9 +4044,26 @@ class App(ctk.CTk):
             self.images_button.configure(text="Download", command=self.start_images_download)
         self.try_button.configure(
             state="normal" if imagegen.installed() and not self._making_picture else "disabled")
+        if imagegen.installed() and self.ai_backend == imagegen.CPU:
+            self.images_retry.pack(side="left", padx=(8, 0))
+        else:
+            self.images_retry.pack_forget()
         self._sync_look_bar()
         if not imagegen.installed():
             self.try_status.configure(text="Download AI images first.", text_color=TEXT_DIM)
+
+    def remember_ai_backend(self, backend):
+        """Keep what AI pictures need on this PC: "cpu" after the graphics card failed."""
+        if backend == self.ai_backend:
+            return
+        self.ai_backend = backend
+        save_settings(self._collect_settings())
+        self.append_log(
+            "🎨 The graphics card could not make an AI picture, so the processor is used from "
+            "now on. The AI images tab can switch back." if backend == imagegen.CPU
+            else "🎨 AI pictures will try the graphics card again.")
+        if hasattr(self, "images_state"):
+            self._images_row_changed()
 
     def _confirm_remove_images(self):
         """Remove deletes 4.2 GB, so it takes a second press."""
@@ -4087,14 +4122,17 @@ class App(ctk.CTk):
         self.try_status.configure(text="Making the picture. The first one takes longest.",
                                   text_color=TEXT_DIM)
         size, look = imagegen.size_for(self.var_aspect.get()), self.var_ai_look.get()
+        backend = self.ai_backend
 
         def worker():
             try:
                 os.makedirs(PREVIEW_DIR, exist_ok=True)
                 path = os.path.join(PREVIEW_DIR, "ai_try.png")
-                seconds = imagegen.make(prompt, size, path, look)
-                self._queue.put(("images", {"event": "made", "path": path, "seconds": seconds,
-                                            "size": size}))
+                made = imagegen.make(prompt, size, path, look, backend=backend,
+                                     log=self.ui.log)
+                self._queue.put(("images", {"event": "made", "path": path,
+                                            "seconds": made.seconds, "size": made.size,
+                                            "backend": made.backend}))
             except Exception as exc:  # noqa: BLE001 - shown in the tab
                 self._queue.put(("images", {"event": "not_made", "message": str(exc)}))
 
@@ -4117,8 +4155,11 @@ class App(ctk.CTk):
                 picture = opened.convert("RGB")
             self._try_image = ctk.CTkImage(light_image=picture, dark_image=picture, size=shown)
             self.try_picture_label.configure(image=self._try_image)
+            where = "the processor" if payload["backend"] == imagegen.CPU else "the graphics card"
             self.try_status.configure(
-                text=f"Made in {payload['seconds']:.0f} s on this PC.", text_color=OK_COLOR)
+                text=f"Made in {payload['seconds']:.0f} s on {where}.", text_color=OK_COLOR)
+            if payload["backend"] == imagegen.CPU:
+                self.remember_ai_backend(imagegen.CPU)
             return
         if event != "progress":
             self.images_downloading = False

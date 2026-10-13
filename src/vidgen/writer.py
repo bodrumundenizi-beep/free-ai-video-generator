@@ -130,8 +130,17 @@ def runtime_path() -> str | None:
     return bundled("llama", SERVER_EXE)
 
 
+def total_memory() -> int | None:
+    """Physical memory fitted, in bytes, or None where it cannot be asked."""
+    return _memory("total")
+
+
 def free_memory() -> int | None:
     """Physical memory not in use, in bytes, or None where it cannot be asked."""
+    return _memory("available")
+
+
+def _memory(field: str) -> int | None:
     class Status(ctypes.Structure):
         _fields_ = [("length", ctypes.c_ulong), ("load", ctypes.c_ulong),
                     ("total", ctypes.c_ulonglong), ("available", ctypes.c_ulonglong),
@@ -145,7 +154,7 @@ def free_memory() -> int | None:
         status.length = ctypes.sizeof(Status)
         if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
             return None
-        return int(status.available)
+        return int(getattr(status, field))
     except (AttributeError, OSError):
         return None
 
