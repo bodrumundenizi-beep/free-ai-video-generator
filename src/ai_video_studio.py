@@ -152,7 +152,7 @@ from vidgen.voice import generate_voiceover  # noqa: E402
 
 
 APP_NAME = "AI Video Studio"
-APP_VERSION = "4.0.0"
+APP_VERSION = "4.1.0"
 # Must match AppUserModelID in packaging/installer.iss, or a pinned taskbar
 # shortcut will not group with the running window.
 APP_MODEL_ID = "AIVideoStudio.Desktop.3"
@@ -257,6 +257,16 @@ AI_LOOK_HINTS = {
     "Illustration": "Looks like a flat drawing with bold colours. Best for explaining ideas, "
                     "money topics and videos for children.",
 }
+AI_THREAD_OPTIONS = ("Auto", "2", "4", "6", "8", "10", "12", "14", "16", "20", "24", "32")
+SLOW_AI_SCENES = 2       # AI pictures New from text makes by default on a slow PC
+SLOW_FAST_SECONDS = 40   # a Fast picture slower than this makes a PC "slow" for AI pictures
+AI_SPEED_HINTS = {
+    imagegen.FAST: "Smallest pictures, enlarged to the video's size: a little softer, but the "
+                   "quickest by far. Best for PCs without a graphics card.",
+    imagegen.BALANCED: "Middle size. Sharp enough for Shorts, about twice as fast as Best.",
+    imagegen.BEST: "The full picture size. The sharpest, and the slowest. On the processor the "
+                   "app still uses Fast: Best would take many minutes a picture.",
+}
 AI_IMAGES_WARNING = (
     "Needs a graphics card with about 8 GB of video memory. Around 20 seconds per picture "
     "on an RTX 4060. If the graphics card can't do it, the app uses the processor instead, "
@@ -285,6 +295,11 @@ def default_settings() -> dict:
         "ai_images_for": AI_IMAGES_FOR[0],
         "ai_images_look": imagegen.DEFAULT_LOOK,
         "ai_images_backend": "",   # "cpu" once the graphics card has failed on this PC
+        "ai_images_speed": "",     # Fast / Balanced / Best; "" = chosen for this PC
+        "ai_threads": "Auto",      # processor threads for AI pictures, or a number
+        "ai_threads_best": "",     # "threads:affinity" the Test speed button found fastest
+        "ai_fast_seconds": 0.0,    # a measured picture's time, scaled to the Fast setting
+        "ai_gpu": "",              # "dedicated", "integrated" or "none", once detected
         "key_tip": True,           # after a keyless video: mention that a free key exists
         "music_path": "",
         "output_path": os.path.join(default_output_dir(), "final_video.mp4"),
@@ -352,6 +367,14 @@ def load_settings() -> dict:
     if data["ai_images_backend"] != imagegen.CPU:
         data["ai_images_backend"] = ""
     data["key_tip"] = bool(data["key_tip"])
+    if data["ai_images_speed"] not in imagegen.SPEEDS:
+        data["ai_images_speed"] = ""
+    if str(data["ai_threads"]) not in AI_THREAD_OPTIONS:
+        data["ai_threads"] = "Auto"
+    try:
+        data["ai_fast_seconds"] = max(float(data["ai_fast_seconds"]), 0.0)
+    except (TypeError, ValueError):
+        data["ai_fast_seconds"] = 0.0
     if data["music_path"] and not os.path.isfile(str(data["music_path"])):
         data["music_path"] = ""
 
@@ -1266,6 +1289,57 @@ class TourDialog(ctk.CTkToplevel):
         self.destroy()
         if not app._has_footage_key() and not app.welcome_seen and not imagegen.installed():
             WelcomeDialog(app)
+
+
+class SlowPicturesDialog(ctk.CTkToplevel):
+    """Before a long render on a slow PC: how long, and quicker ways to do it."""
+
+    def __init__(self, app, count):
+        super().__init__(app)
+        self.app = app
+        self.title("This will take a while")
+        self.resizable(False, False)
+        self.configure(fg_color=MAIN_BG)
+        self.transient(app)
+        card = Card(self)
+        card.pack(fill="both", expand=True, padx=14, pady=14)
+        each = app.seconds_per_picture()
+        measured = "measured on this PC" if app.ai_fast_seconds else "a guess until the first one"
+
+        def minutes(seconds):
+            return f"about {max(1, round(seconds / 60))} min"
+
+        ctk.CTkLabel(card, text=f"{count} AI pictures: {minutes(each * count)}",
+                     font=app.font_title, text_color=TEXT).pack(anchor="w", padx=18, pady=(16, 4))
+        ctk.CTkLabel(card, text=f"This PC makes an AI picture in {minutes(each)} ({measured}). "
+                                "The rest of the video takes a few minutes more. Closing other "
+                                "busy programs (a game, many browser tabs) helps: in a test, a "
+                                "busy PC took half as long again.",
+                     font=app.font_body, text_color=TEXT_MUTED, wraplength=420, justify="left",
+                     ).pack(anchor="w", padx=18, pady=(0, 12))
+
+        def option(text, overrides):
+            ctk.CTkButton(card, text=text, height=34, corner_radius=4, font=app.font_body,
+                          fg_color=FIELD_BG, hover_color=CARD_HOVER, border_width=1,
+                          border_color=FIELD_BORDER, text_color=TEXT, anchor="w",
+                          command=lambda: self.choose(overrides)).pack(fill="x", padx=18, pady=3)
+
+        option(f"Make all {count}  ({minutes(each * count)})", {})
+        if count > SLOW_AI_SCENES:
+            option(f"Make {SLOW_AI_SCENES} pictures and use them again for the other scenes  "
+                   f"({minutes(each * SLOW_AI_SCENES)})", {"ai_reuse": SLOW_AI_SCENES})
+        if app.ai_speed_now() != imagegen.FAST:
+            fast = app.seconds_per_picture(imagegen.FAST)
+            option(f"Use the Fast size  ({minutes(fast * count)})",
+                   {"ai_images_speed": imagegen.FAST})
+        ctk.CTkButton(card, text="Cancel", height=34, corner_radius=4, font=app.font_body,
+                      fg_color=ACCENT, hover_color=ACCENT_HOVER, text_color=ACCENT_TEXT,
+                      command=self.destroy).pack(fill="x", padx=18, pady=(10, 16))
+        centre_on(self, app)
+
+    def choose(self, overrides):
+        self.destroy()
+        self.app.start_after_slow_choice(overrides)
 
 
 class ResultDialog(ctk.CTkToplevel):
@@ -2267,6 +2341,13 @@ class App(ctk.CTk):
         self.var_ai_look = tk.StringVar(value=s["ai_images_look"])
         self.ai_backend = s["ai_images_backend"]
         self.key_tip = s["key_tip"]
+        self.ai_gpu, self.ai_fast_seconds = s["ai_gpu"], s["ai_fast_seconds"]
+        self.ai_threads_best = s["ai_threads_best"]
+        self.ai_speed_chosen = bool(s["ai_images_speed"])
+        self.var_ai_speed = tk.StringVar(value=s["ai_images_speed"] or self.default_ai_speed())
+        self.var_ai_threads = tk.StringVar(value=str(s["ai_threads"]))
+        self.var_ai_speed.trace_add("write", self._ai_speed_picked)
+        self._render_overrides = {}   # one render's answer to the slow-PC question
         self.var_music_track = tk.StringVar(value="")
         self._tracks = {}
 
@@ -2301,6 +2382,11 @@ class App(ctk.CTk):
             "ai_images_look": self.var_ai_look.get(),
             "ai_images_backend": self.ai_backend,
             "key_tip": self.key_tip,
+            "ai_images_speed": self.var_ai_speed.get() if self.ai_speed_chosen else "",
+            "ai_threads": self.var_ai_threads.get(),
+            "ai_threads_best": self.ai_threads_best,
+            "ai_fast_seconds": self.ai_fast_seconds,
+            "ai_gpu": self.ai_gpu,
             "music_path": self.music_path,
             "output_path": self.var_output.get().strip(),
             "aspect": self.var_aspect.get(),
@@ -3290,6 +3376,20 @@ class App(ctk.CTk):
         self.writer_listeners.append(self._writer_row_changed)
         self._writer_row_changed()
 
+        threads_row = SettingRow(
+            page, self, self.icon("timer"), "AI picture threads",
+            "How many processor threads make an AI picture when there is no graphics card. "
+            "Auto uses the result of Test speed in the AI images tab")
+        threads_row.grid(row=next(rows), column=0, sticky="ew", pady=PAD // 2)
+        ctk.CTkOptionMenu(
+            threads_row.control, values=list(AI_THREAD_OPTIONS), variable=self.var_ai_threads,
+            width=110, height=32, corner_radius=4, font=self.font_body, fg_color=FIELD_BG,
+            button_color=FIELD_BG, button_hover_color=CARD_HOVER, text_color=TEXT,
+            dropdown_fg_color=CARD_BG, dropdown_text_color=TEXT, dropdown_hover_color=CARD_HOVER,
+            dropdown_font=self.font_body, dynamic_resizing=False,
+            command=lambda _value: save_settings(self._collect_settings()),
+        ).pack(side="left")
+
         gpu_row = SettingRow(
             page, self, self.icon("resolution"), "Use the graphics card",
             "Faster on PCs with a dedicated graphics card. Turn it off if the Smart "
@@ -3536,6 +3636,7 @@ class App(ctk.CTk):
             self.after(300, lambda: TourDialog(self))   # it leads into the key setup itself
         elif not self._has_footage_key() and not self.welcome_seen:
             self.after(300, lambda: WelcomeDialog(self))
+        self.detect_graphics()
         if self.var_check_updates.get():
             self.check_for_updates()
 
@@ -3761,6 +3862,10 @@ class App(ctk.CTk):
                     self._voice_event(payload)
                 elif kind == "images":
                     self._images_event(payload)
+                elif kind == "ai_speed":
+                    self.note_picture_time(payload["seconds"], payload["speed"])
+                elif kind == "ai_gpu":
+                    self._graphics_found(payload["found"])
                 elif kind == "ai_backend":
                     self.remember_ai_backend(payload["backend"])
                 elif kind == "crash":
@@ -3860,12 +3965,21 @@ class App(ctk.CTk):
 
     def use_draft(self, result, audience, mode=None):
         """Put a written script in the editor, with the settings it was written for."""
-        self._last_draft = result.script.strip()
+        script = result.script
+        if self.ai_slow() and self._has_footage_key():
+            # Each picture takes minutes here: keep the first few, stock for the rest.
+            capped = boards.Board(boards.limit_ai(parse_script(script), SLOW_AI_SCENES)).text()
+            if capped != script:
+                self.append_log(f"🎨 This PC makes AI pictures slowly, so only the first "
+                                f"{SLOW_AI_SCENES} scenes get one. The Storyboard can switch "
+                                "any other scene in one click.")
+            script = capped
+        self._last_draft = script.strip()
         self.writer_mode = mode or self.writer_mode
         self.audience = {"audience_content": audience.content, "audience_age": audience.age,
                          "audience_platform": audience.platform}
         self.script_box.delete("1.0", "end")
-        self.script_box.insert("1.0", result.script)
+        self.script_box.insert("1.0", script)
         self.var_voice.set(voices.persona(result.voice).label)
         self.var_aspect.set(result.aspect)
         self.var_target.set(result.target)
@@ -4236,6 +4350,7 @@ class App(ctk.CTk):
         gen, key = self.board_gen, self._picture_key(scene)
         size, look, backend = imagegen.size_for(self.var_aspect.get()), self.var_ai_look.get(), \
             self.ai_backend
+        speed, threads = self.ai_speed_now(), self.threads_pair()
         self.board_cards[index]["status"].configure(text="Making the picture...")
 
         def worker():
@@ -4246,7 +4361,8 @@ class App(ctk.CTk):
                 name = hashlib.sha1(f"{key}|{time.time()}".encode()).hexdigest()[:16]
                 path = os.path.join(PREVIEW_DIR, f"board_{name}.png")
                 made = imagegen.make(scene.ai_prompt, size, path, look, backend=backend,
-                                     log=self.ui.log)
+                                     log=self.ui.log, speed=speed, threads=threads)
+                self.ui.ai_speed(made.seconds, speed)
                 self._board_post(gen, event="made", index=index, key=key, path=path,
                                  seconds=made.seconds, backend=made.backend)
             except Exception as exc:  # noqa: BLE001 - shown on the card
@@ -4478,6 +4594,30 @@ class App(ctk.CTk):
         self._segmented(look_row.control, list(imagegen.LOOKS), self.var_ai_look, 380)
         self._choice_hint(page, next(rows), self.var_ai_look, AI_LOOK_HINTS)
 
+        speed_row = SettingRow(page, self, self.icon("timer"), "Speed",
+                               "Smaller pictures are made much faster, then enlarged")
+        speed_row.grid(row=next(rows), column=0, sticky="ew", pady=PAD // 2)
+        self._segmented(speed_row.control, list(imagegen.SPEEDS), self.var_ai_speed, 380)
+        self._choice_hint(page, next(rows), self.var_ai_speed, AI_SPEED_HINTS)
+
+        test_row = SettingRow(page, self, self.icon("timer"), "Test this PC's speed",
+                              "Makes one tiny picture a few ways (a few minutes on a laptop) "
+                              "and keeps the fastest for the processor")
+        test_row.grid(row=next(rows), column=0, sticky="ew", pady=PAD // 2)
+        self.speed_test_button = ctk.CTkButton(
+            test_row.control, text="Test speed", width=110, height=32, corner_radius=4,
+            font=self.font_body, fg_color=FIELD_BG, hover_color=CARD_HOVER, border_width=1,
+            border_color=FIELD_BORDER, text_color=TEXT, command=self.test_ai_speed)
+        self.speed_test_button.pack(side="left")
+        ctk.CTkButton(test_row.control, text="Copy results", width=110, height=32,
+                      corner_radius=4, font=self.font_body, fg_color=FIELD_BG,
+                      hover_color=CARD_HOVER, border_width=1, border_color=FIELD_BORDER,
+                      text_color=TEXT, command=self.copy_speed_results,
+                      ).pack(side="left", padx=(8, 0))
+        self.speed_results = ctk.CTkLabel(page, text="", font=self.font_tiny,
+                                          text_color=TEXT_MUTED, anchor="w", justify="left")
+        self.speed_results.grid(row=next(rows), column=0, sticky="w", padx=18, pady=(0, 6))
+
         self._caption(page, "TRY IT", next(rows))
         try_card = Card(page)
         try_card.grid(row=next(rows), column=0, sticky="ew", pady=(PAD // 2, PAD))
@@ -4510,6 +4650,67 @@ class App(ctk.CTk):
         variable.trace_add(
             "write", lambda *_args: label.configure(text=hints.get(variable.get(), "")))
 
+    def default_ai_speed(self) -> str:
+        """Fast where pictures are made without a dedicated graphics card, else Balanced."""
+        return imagegen.FAST if self.ai_slow() else imagegen.BALANCED
+
+    def ai_slow(self) -> bool:
+        """Whether AI pictures take minutes here: no usable graphics card, or measured so."""
+        if self.ai_backend == imagegen.CPU or self.ai_gpu in ("integrated", "none"):
+            return True
+        return self.ai_fast_seconds > SLOW_FAST_SECONDS
+
+    def _ai_speed_picked(self, *_args):
+        self.ai_speed_chosen = True
+
+    def ai_speed_now(self) -> str:
+        """The speed a picture is made at now: the processor never goes above Fast."""
+        speed = self.var_ai_speed.get()
+        return imagegen.FAST if self.ai_backend == imagegen.CPU else speed
+
+    def seconds_per_picture(self, speed=None) -> float:
+        """Measured where possible, else a guess from what was measured on similar PCs."""
+        fast = self.ai_fast_seconds or (270.0 if self.ai_slow() else 8.0)
+        return fast * imagegen.cost(speed or self.ai_speed_now())
+
+    def threads_pair(self) -> tuple[int, int]:
+        """(threads, affinity) for processor pictures, from Settings or the speed test."""
+        chosen = self.var_ai_threads.get()
+        if chosen != "Auto":
+            return int(chosen), 0
+        try:
+            threads, affinity = (int(part) for part in self.ai_threads_best.split(":"))
+            return threads, affinity
+        except ValueError:
+            return imagegen.auto_threads(imagegen.cpu_cores())
+
+    def note_picture_time(self, seconds, speed):
+        """A picture just finished: keep its time, as if it were Fast, for the estimates."""
+        self.ai_fast_seconds = round(seconds / imagegen.cost(speed), 1)
+        if not self.ai_speed_chosen:
+            self.var_ai_speed.set(self.default_ai_speed())
+            self.ai_speed_chosen = False
+        save_settings(self._collect_settings())
+
+    def detect_graphics(self):
+        """Once, in the background: does the picture program see a dedicated graphics card?"""
+        if self.ai_gpu or not imagegen.installed():
+            return
+
+        def worker():
+            self._queue.put(("ai_gpu", {"found": imagegen.graphics()}))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _graphics_found(self, found):
+        if not found:
+            return
+        self.ai_gpu = found
+        if not self.ai_speed_chosen:
+            self.var_ai_speed.set(self.default_ai_speed())
+            self.ai_speed_chosen = False
+        save_settings(self._collect_settings())
+
     def pictures_to_make(self) -> int:
         """How many AI pictures the script in the editor still needs made."""
         try:
@@ -4524,23 +4725,21 @@ class App(ctk.CTk):
                    if i not in ready and (scene.is_ai or (keyless and not scene.is_local)))
 
     def _slow_pictures_need_a_yes(self) -> bool:
-        """On a PC that draws on the processor, say how long it will take before starting.
-
-        The first press of Render explains; the second, for the same script, goes ahead.
-        """
+        """On a slow PC, before a long render: say how long, and offer quicker ways."""
         count = self.pictures_to_make()
         script = self.script_box.get("1.0", "end").strip()
-        if self.ai_backend != imagegen.CPU or not count or self._slow_ok == script:
+        if not count or self._slow_ok == script or not self.ai_slow():
             return False
-        self._slow_ok = script
-        message = (f"This PC makes AI pictures on its processor: {count} of them will take "
-                   f"very roughly {count * 4} to {count * 10} minutes. Press Render again to "
-                   "go ahead.")
-        self.status_label.configure(text=message)
-        self.append_log("⏳ " + message)
-        if hasattr(self, "board_status"):
-            self.board_status.configure(text=message, text_color=WARN_COLOR)
+        if self.seconds_per_picture() * count < 180:
+            return False
+        SlowPicturesDialog(self, count)
         return True
+
+    def start_after_slow_choice(self, overrides):
+        """The slow-PC window's answer: go ahead with these settings, for this video only."""
+        self._slow_ok = self.script_box.get("1.0", "end").strip()
+        self._render_overrides = dict(overrides)
+        self.start_render()
 
     def ai_mode(self) -> str:
         """Which scenes New from text gives an AI picture: none unless AI images are here."""
@@ -4550,6 +4749,53 @@ class App(ctk.CTk):
             return draft.AI_ALL   # nothing else to show a scene with
         return {AI_IMAGES_FOR[0]: draft.AI_UNFILMABLE,
                 AI_IMAGES_FOR[1]: draft.AI_ALL}.get(self.var_ai_for.get(), draft.AI_NONE)
+
+    def test_ai_speed(self):
+        """Time a tiny picture a few ways on the processor; Auto then uses the fastest."""
+        if self._making_picture or self.is_rendering or not imagegen.installed():
+            return
+        self._making_picture = True
+        self.speed_test_button.configure(state="disabled", text="Testing...")
+        self.speed_results.configure(text="Testing: each try makes one tiny picture...")
+        choices = imagegen.thread_choices(imagegen.cpu_cores())
+
+        def worker():
+            try:
+                found = imagegen.benchmark(choices, os.path.join(PREVIEW_DIR, "speed"),
+                                           log=self.ui.log)
+                self._queue.put(("images", {"event": "bench", "results": found}))
+            except Exception as exc:  # noqa: BLE001 - shown in the tab
+                self._queue.put(("images", {"event": "bench", "results": [], "error": str(exc)}))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _speed_tested(self, payload):
+        self._making_picture = False
+        self.speed_test_button.configure(state="normal", text="Test speed")
+        timed = [r for r in payload["results"] if r[3] is not None]
+        if not timed:
+            self.speed_results.configure(text=payload.get("error") or "The test failed; see the Log.",
+                                         text_color=ERR_COLOR)
+            return
+        best = min(timed, key=lambda r: r[3])
+        self.ai_threads_best = f"{best[1]}:{best[2]}"
+        cores = imagegen.cpu_cores()
+        lines = [f"{label}: {seconds:.0f} s" if seconds is not None else f"{label}: failed"
+                 for label, _t, _a, seconds in payload["results"]]
+        self.speed_report = (f"AI Video Studio {APP_VERSION} speed test · "
+                             f"{len(cores)} cores, kinds {sorted({e for e, _m, _s in cores})} · "
+                             f"{os.cpu_count()} logical\n" + "\n".join(lines)
+                             + f"\nFastest: {best[0]}")
+        self.speed_results.configure(text="\n".join(lines) + f"\nAuto now uses: {best[0]}",
+                                     text_color=TEXT_MUTED)
+        save_settings(self._collect_settings())
+
+    def copy_speed_results(self):
+        report = getattr(self, "speed_report", "")
+        if report:
+            self.clipboard_clear()
+            self.clipboard_append(report)
+            self.speed_results.configure(text=self.speed_results.cget("text") + "\nCopied.")
 
     def _images_row_changed(self, payload=None):
         """The tab's first row: what state AI images are in, and what the button does."""
@@ -4655,14 +4901,15 @@ class App(ctk.CTk):
         self.try_status.configure(text="Making the picture. The first one takes longest.",
                                   text_color=TEXT_DIM)
         size, look = imagegen.size_for(self.var_aspect.get()), self.var_ai_look.get()
-        backend = self.ai_backend
+        backend, speed, threads = self.ai_backend, self.ai_speed_now(), self.threads_pair()
 
         def worker():
             try:
                 os.makedirs(PREVIEW_DIR, exist_ok=True)
                 path = os.path.join(PREVIEW_DIR, "ai_try.png")
                 made = imagegen.make(prompt, size, path, look, backend=backend,
-                                     log=self.ui.log)
+                                     log=self.ui.log, speed=speed, threads=threads)
+                self.ui.ai_speed(made.seconds, speed)
                 self._queue.put(("images", {"event": "made", "path": path,
                                             "seconds": made.seconds, "size": made.size,
                                             "backend": made.backend}))
@@ -4674,6 +4921,9 @@ class App(ctk.CTk):
     def _images_event(self, payload):
         """UI thread: news from the AI images download or the Try it box."""
         event = payload["event"]
+        if event == "bench":
+            self._speed_tested(payload)
+            return
         if event in ("made", "not_made"):
             self._making_picture = False
             self.try_button.configure(state="normal", text="Make picture")
@@ -4855,8 +5105,12 @@ class App(ctk.CTk):
         choices, pictures = self.board_choices(settings["script"])
         cfg = dict(settings, cache_dir=SEARCH_CACHE_DIR, overwrite=overwrite,
                    cancel=self._cancel, clip_choices=choices, ai_pictures=pictures,
+                   ai_images_speed=self.ai_speed_now(), ai_threads=self.threads_pair(),
                    target_length=pacing.TARGETS.get(settings["target_length"]))
 
+        cfg.update(self._render_overrides)   # "make 2 and reuse", "Fast": this video only
+        self._render_overrides = {}
+        self._slow_ok = None
         self._set_busy(True)
         if choices:
             self.append_log("🎬 Using the clips chosen in the Storyboard.")

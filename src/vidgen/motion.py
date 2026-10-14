@@ -13,7 +13,7 @@ from __future__ import annotations
 import math
 
 import numpy as np
-from PIL import Image, ImageOps
+from PIL import Image, ImageFilter, ImageOps
 
 ZOOM_EXPLICIT = 1.10  # Zoom: in / Zoom: out
 ZOOM_STILL = 1.08  # auto, on a photo or screenshot
@@ -96,6 +96,12 @@ def load_image(path: str, target_w: int, target_h: int) -> np.ndarray:
     if cover < 0.5:
         size = (round(image.width * cover * 2), round(image.height * cover * 2))
         image = image.resize(size, Image.Resampling.LANCZOS)
+    elif cover > 1:
+        # Smaller than the frame (an AI picture is made small to save minutes): enlarge it
+        # once, carefully, so the zoom does not stretch it with its fast method every frame.
+        size = (round(image.width * cover), round(image.height * cover))
+        image = image.resize(size, Image.Resampling.LANCZOS).filter(
+            ImageFilter.UnsharpMask(radius=1.2, percent=60, threshold=2))
     return np.asarray(image)
 
 

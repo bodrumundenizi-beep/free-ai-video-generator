@@ -21,6 +21,7 @@ Pure of Tk. The download and the program can both be replaced in tests.
 
 from __future__ import annotations
 
+import ctypes
 import os
 import random
 import re
@@ -94,7 +95,13 @@ SIZE = sum(m.size for m in FILES)
 EXE = "sd-cli.exe"
 GPU, CPU = "gpu", "cpu"  # the graphics card (whichever the program picks), or the processor
 STEPS = 8  # what this model is distilled for
-CPU_STEPS = 4  # half the wait on a processor, for a picture that is a little rougher
+# Speed settings: the picture's size (portrait; turned for 16:9) and steps. The app enlarges
+# the picture to the video's size once, carefully, before the zoom (motion.load_image).
+FAST, BALANCED, BEST = "Fast", "Balanced", "Best"
+SPEEDS = {FAST: ((384, 672), 4), BALANCED: ((480, 848), 6), BEST: ((576, 1024), 8)}
+# Time per picture relative to Fast, measured 2026-10-14 on an RTX 4060 (7.8, 12.5, 24.3 s);
+# on the processor Balanced was 2.3 times Fast (288 against 127 s), but it never runs there.
+SPEED_COST = {FAST: 1.0, BALANCED: 1.6, BEST: 3.1}
 # Free memory needed, measured on 2026-10-13 with the weights kept on disk: the program's
 # peak was 3.1 GB at full size on a graphics card and 4.2 GB small on the processor. On a
 # laptop chip the "graphics memory" is ordinary RAM too, hence the room above the 3.1.
@@ -102,6 +109,7 @@ FULL_MEMORY = 5_000_000_000  # at or above this: the full size
 SMALL_MEMORY = 3_500_000_000  # down to this: a smaller picture; below it, none
 CPU_MEMORY = 4_500_000_000
 TIMEOUT = 900.0  # seconds for one picture before the PC is judged too slow
+BENCH_SIZE, BENCH_STEPS = (256, 448), 2   # "Test speed": tiny, but every part of a real run
 DETAIL_LINES = 15  # of the program's output kept when it fails
 MAX_PROMPT = 400  # characters; the model's text limit is far above what a scene needs
 SIZES = {"9:16": (576, 1024), "16:9": (1024, 576)}
@@ -219,26 +227,45 @@ def full_prompt(prompt: str, look: str = DEFAULT_LOOK) -> str:
 
 
 def smaller(size) -> tuple[int, int]:
-    """The reduced size for a PC short of memory, or for the processor: the same shape."""
+    """The reduced size for a PC short of memory: the same shape."""
     width, height = size
     return (384, 672) if height >= width else (672, 384)
 
 
-def fit(size, backend: str, free: int | None) -> tuple[tuple[int, int], int]:
-    """(size, steps) this PC can manage now on ``backend``; ImageError if it cannot."""
+def _shaped(portrait, size) -> tuple[int, int]:
+    """``portrait`` (width, height) turned to the shape of ``size``."""
+    width, height = portrait
+    return (width, height) if size[1] >= size[0] else (height, width)
+
+
+def fit(size, backend: str, free: int | None, speed: str = BEST) -> tuple[tuple[int, int], int]:
+    """(size, steps) this PC can manage now on ``backend``; ImageError if it cannot.
+
+    The speed setting and the free memory each allow a size; the smaller wins. The
+    processor never goes above Fast: anything more takes many minutes a picture.
+    """
     if backend == CPU:
         if free is not None and free < CPU_MEMORY:
             raise ImageError(_too_little(CPU_MEMORY))
-        return smaller(size), CPU_STEPS
-    if free is None or free >= FULL_MEMORY:
-        return tuple(size), STEPS
-    if free >= SMALL_MEMORY:
-        return smaller(size), STEPS
-    raise ImageError(_too_little(SMALL_MEMORY))
+        speed = FAST if SPEEDS.get(speed, SPEEDS[BEST])[0][0] > SPEEDS[FAST][0][0] else speed
+    portrait, steps = SPEEDS.get(speed, SPEEDS[BEST])
+    wanted = _shaped(portrait, size)
+    if backend == CPU or free is None or free >= FULL_MEMORY:
+        allowed = tuple(size)
+    elif free >= SMALL_MEMORY:
+        allowed = smaller(size)
+    else:
+        raise ImageError(_too_little(SMALL_MEMORY))
+    return min(wanted, allowed, key=lambda s: s[0] * s[1]), steps
+
+
+def cost(speed: str) -> float:
+    """How long a picture at ``speed`` takes, relative to Fast (measured, see SPEEDS)."""
+    return SPEED_COST.get(speed, 1.0)
 
 
 def command(exe: str, prompt: str, size, out_path: str, seed: int, backend: str = GPU,
-            steps: int = STEPS) -> list[str]:
+            steps: int = STEPS, threads: int = 0) -> list[str]:
     width, height = size
     return [exe, "--diffusion-model", writer.model_path(MODEL),
             "--vae", writer.model_path(DECODER), "--llm", writer.model_path(),
@@ -248,15 +275,130 @@ def command(exe: str, prompt: str, size, out_path: str, seed: int, backend: str 
             # a third of the memory of holding them all in RAM, at the same speed.
             "--params-backend", "disk", "--diffusion-fa", "-o", out_path,
             # With nothing said the program takes the first graphics card it finds.
-            *(["--backend", "cpu"] if backend == CPU else [])]
+            *(["--backend", "cpu"] if backend == CPU else []),
+            *(["-t", str(threads)] if threads and backend == CPU else [])]
 
 
-def _launch(args, log_path):
+# --- the processor's cores ----------------------------------------------------------
+# Laptop chips mix fast "performance" cores with slower "efficiency" ones. A picture is
+# made in parallel steps that each wait for their slowest thread, so where the threads
+# run matters. Windows says which core is which (its "efficiency class": higher is faster).
+
+def parse_cores(buffer: bytes) -> list[tuple[int, int, bool]]:
+    """(efficiency class, affinity mask, has two threads) for each core, from the bytes of
+    GetLogicalProcessorInformationEx(RelationProcessorCore). Group 0 only: a PC with more
+    than 64 logical processors keeps the program on its first 64."""
+    import struct
+
+    cores, at = [], 0
+    while at + 48 <= len(buffer):
+        relation, size = struct.unpack_from("<II", buffer, at)
+        if size <= 0:
+            break
+        if relation == 0:   # RelationProcessorCore
+            flags, efficiency = struct.unpack_from("<BB", buffer, at + 8)
+            mask, group = struct.unpack_from("<QH", buffer, at + 32)
+            if group == 0:
+                cores.append((efficiency, mask, bool(flags & 1)))
+        at += size
+    return cores
+
+
+def cpu_cores() -> list[tuple[int, int, bool]]:
+    """This PC's cores (see parse_cores), or [] where Windows can't say."""
+    try:
+        kernel = ctypes.windll.kernel32
+        length = ctypes.c_ulong(0)
+        kernel.GetLogicalProcessorInformationEx(0, None, ctypes.byref(length))
+        buffer = ctypes.create_string_buffer(length.value)
+        if not kernel.GetLogicalProcessorInformationEx(0, buffer, ctypes.byref(length)):
+            return []
+        return parse_cores(buffer.raw[:length.value])
+    except (AttributeError, OSError, ValueError):
+        return []
+
+
+def performance_mask(cores) -> int:
+    """The logical processors of the fastest kind of core; 0 if all cores are one kind."""
+    classes = {efficiency for efficiency, _mask, _smt in cores}
+    if len(classes) < 2:
+        return 0
+    best = max(classes)
+    mask = 0
+    for efficiency, core_mask, _smt in cores:
+        if efficiency == best:
+            mask |= core_mask
+    return mask
+
+
+def thread_choices(cores) -> list[tuple[str, int, int]]:
+    """(label, threads, affinity) worth timing on this PC: the program's own choice, the
+    performance cores alone (on a mixed chip), and every logical processor."""
+    logical = sum(2 if smt else 1 for _e, _m, smt in cores) or os.cpu_count() or 4
+    choices = [("program's default", 0, 0)]
+    fast = performance_mask(cores)
+    if fast:
+        choices.append(("performance cores only", bin(fast).count("1"), fast))
+    choices.append((f"all {logical} threads", logical, 0))
+    return choices
+
+
+def benchmark(choices, folder: str, launch=None, should_stop=None, log=None):
+    """Time one tiny picture on the processor for each (label, threads, affinity).
+
+    Returns [(label, threads, affinity, seconds or None)]. Tiny, so the whole test takes a
+    few minutes even on a slow laptop; the fastest choice is what "Auto" then uses.
+    """
+    say = log or (lambda _line: None)
+    os.makedirs(folder, exist_ok=True)
+    results = []
+    for label, threads, affinity in choices:
+        out = os.path.join(folder, f"speed_test_{threads}_{affinity}.png")
+        args = command(program_path() or EXE, full_prompt("a red apple on a wooden table"),
+                       BENCH_SIZE, out, 7, CPU, BENCH_STEPS, threads)
+        start = launch or (lambda a, p, m=affinity: _launch(a, p, m))
+        began = time.monotonic()
+        code = _run(args, out + ".log", should_stop, start, began)
+        took = time.monotonic() - began if code == 0 and os.path.isfile(out) else None
+        say(f"⏱️ {label}: " + (f"{took:.0f} s" if took is not None else "failed"))
+        results.append((label, threads, affinity, took))
+    return results
+
+
+def graphics(run=subprocess.run) -> str:
+    """"dedicated", "integrated" or "none": the best graphics the picture program can use.
+
+    It lists its devices and marks a chip that shares the PC's memory with "uma: 1".
+    "" when the program could not be asked.
+    """
+    exe = program_path()
+    if exe is None:
+        return ""
+    try:
+        listed = run([exe, "--list-devices"], capture_output=True, timeout=60,
+                     cwd=os.path.dirname(exe),
+                     creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    text = (listed.stdout or b"").decode("utf-8", "replace") + \
+        (listed.stderr or b"").decode("utf-8", "replace")
+    shared = re.findall(r"ggml_vulkan: \d+ = .*?\| uma: (\d)", text)
+    if not shared:
+        return "none"
+    return "dedicated" if "0" in shared else "integrated"
+
+
+def _launch(args, log_path, affinity: int = 0):
     """Start the program with no window of its own; what it says goes to ``log_path``."""
     with open(log_path, "wb") as log:
-        return subprocess.Popen(args, stdout=log, stderr=subprocess.STDOUT,
-                                stdin=subprocess.DEVNULL, cwd=os.path.dirname(args[0]),
-                                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        process = subprocess.Popen(args, stdout=log, stderr=subprocess.STDOUT,
+                                   stdin=subprocess.DEVNULL, cwd=os.path.dirname(args[0]),
+                                   creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    if affinity:
+        # Keep its threads on the chosen cores. If Windows refuses, it simply runs anywhere.
+        ctypes.windll.kernel32.SetProcessAffinityMask(int(process._handle),
+                                                      ctypes.c_size_t(affinity))
+    return process
 
 
 def _output(log_path) -> list[str]:
@@ -336,7 +478,8 @@ def _run(args, log_path, should_stop, launch, began):
 
 def make(prompt: str, size, out_path: str, look: str = DEFAULT_LOOK, seed: int | None = None,
          should_stop=None, launch=_launch, check=ready, backend: str = "", log=None,
-         memory=writer.free_memory, verify=damaged_files) -> Made:
+         memory=writer.free_memory, verify=damaged_files, speed: str = BEST,
+         threads: tuple[int, int] = (0, 0)) -> Made:
     """Make one picture at ``out_path`` (a .png) and say how it was made.
 
     The graphics card is tried first, then the processor: a card can start
@@ -349,6 +492,9 @@ def make(prompt: str, size, out_path: str, look: str = DEFAULT_LOOK, seed: int |
     once) and ImageError when no attempt produced a picture.
     """
     say = log or (lambda _line: None)
+    count, affinity = threads
+    if affinity and launch is _launch:
+        launch = lambda args, path: _launch(args, path, affinity)  # noqa: E731
     ok, why = check()
     if not ok:
         raise ImageError(why)
@@ -360,18 +506,20 @@ def make(prompt: str, size, out_path: str, look: str = DEFAULT_LOOK, seed: int |
         where = "processor" if attempt == CPU else "graphics card"
         free = memory()
         try:
-            fitted, steps = fit(size, attempt, free)
+            fitted, steps = fit(size, attempt, free, speed)
         except ImageError as exc:
             failure = failure or exc
             say(f"🎨 Not trying the {where}: {_gigabytes(free)} GB of memory free.")
             continue
         say(f"🎨 AI picture on the {where}: {fitted[0]}x{fitted[1]}, {steps} steps · memory "
-            f"{_gigabytes(free)} of {_gigabytes(writer.total_memory())} GB free · {_file_sizes()}")
+            f"{_gigabytes(free)} of {_gigabytes(writer.total_memory())} GB free · {_file_sizes()}"
+            + (f" · {count or 'all'} threads{' on the performance cores' if affinity else ''}"
+               if attempt == CPU else ""))
         began, ran = time.monotonic(), True
         if os.path.isfile(out_path):
             os.remove(out_path)   # a picture left by an earlier try must not pass for this one
-        code = _run(command(program_path() or EXE, text, fitted, out_path, seed, attempt, steps),
-                    log_path, should_stop, launch, began)
+        code = _run(command(program_path() or EXE, text, fitted, out_path, seed, attempt, steps,
+                            count), log_path, should_stop, launch, began)
         lines = _output(log_path)
         device = device_name(lines) if attempt == GPU else ""
         if device:
@@ -392,3 +540,8 @@ def make(prompt: str, size, out_path: str, look: str = DEFAULT_LOOK, seed: int |
                              f"({', '.join(bad)}). Download it again in the AI images tab.",
                              failure.detail)
     raise failure
+
+
+def auto_threads(cores) -> tuple[int, int]:
+    """(threads, affinity) before "Test speed" has run: the program's own choice."""
+    return 0, 0

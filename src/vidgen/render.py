@@ -94,6 +94,10 @@ class UiBridge:
         """What AI pictures turned out to need on this PC, for the window to remember."""
         self._post("ai_backend", backend=backend)
 
+    def ai_speed(self, seconds, speed):
+        """How long a picture just took at ``speed``: the window's estimates learn from it."""
+        self._post("ai_speed", seconds=seconds, speed=speed)
+
     def finished(self, ok, title, message, path=None, paths=None):
         """``paths`` are the saved videos (one per version), so the window can
         show them; ``path`` is the first."""
@@ -292,6 +296,10 @@ def _render(cfg, ui, work_dir, job):
             for plan in wants_ai:
                 plan.scene = _stock_instead(plan.scene)
 
+    ready = cfg.get("ai_pictures") or {}
+    cfg["_ai_total"] = sum(1 for i, p in enumerate(plans) if p.scene.is_ai and i not in ready)
+    if cfg.get("ai_reuse"):
+        cfg["_ai_total"] = min(cfg["_ai_total"], cfg["ai_reuse"])
     needs_stock = [p.scene for p in plans if not p.scene.is_local and not p.scene.is_ai]
     if needs_stock and not search.providers:
         raise Exception(
@@ -681,6 +689,10 @@ def _timeline_words(plans, starts):
     return words
 
 
+def _minutes(seconds: float) -> str:
+    return f"{seconds:.0f} s" if seconds < 90 else f"{seconds / 60:.0f} min"
+
+
 def _ai_instead(scene):
     """``scene`` asking for an AI picture in place of stock footage: its Picture: line if it
     has one, else its search words and what is said over them."""
@@ -709,13 +721,24 @@ def _ai_picture(plan, index, cfg, ratio, work_dir, ui, version, search, stop) ->
         ui.log(f"🎨 Scene {index + 1}: using the AI picture from the Storyboard")
         plan.parts, plan.sources = 1, [_Source(ready_made, "image")]
         return True
+    # On a slow PC the user may have chosen to make a few pictures and use them again.
+    made_here = cfg.setdefault("_ai_made", [])
+    reuse = cfg.get("ai_reuse") or 0
+    if reuse and len(made_here) >= reuse:
+        again = made_here[cfg.setdefault("_ai_reused", 0) % reuse]
+        cfg["_ai_reused"] += 1
+        ui.log(f"🎨 Scene {index + 1}: using an AI picture made for an earlier scene")
+        plan.parts, plan.sources = 1, [_Source(again, "image")]
+        return True
     path = os.path.join(work_dir, f"ai_{version}_{index}.png")
     ui.log(f"🎨 Scene {index + 1}: making an AI picture of '{plan.scene.ai_prompt}'...")
+    speed = cfg.get("ai_images_speed") or imagegen.BEST
     try:
         made = imagegen.make(plan.scene.ai_prompt, imagegen.size_for(ratio), path,
                              cfg.get("ai_images_look") or imagegen.DEFAULT_LOOK,
                              should_stop=stop, backend=cfg.get("ai_images_backend") or "",
-                             log=ui.log)
+                             log=ui.log, speed=speed,
+                             threads=tuple(cfg.get("ai_threads") or (0, 0)))
     except imagegen.Stopped as exc:
         raise RenderCancelled() from exc
     except imagegen.ImageError as exc:
@@ -723,7 +746,11 @@ def _ai_picture(plan, index, cfg, ratio, work_dir, ui, version, search, stop) ->
             raise Exception(f"Scene {index + 1}: {exc}") from exc
         ui.log(f"⚠️ {exc} Using stock footage for scene {index + 1}.")
         return False
-    ui.log(f"🎨 Picture made in {made.seconds:.0f} s")
+    made_here.append(path)
+    ui.ai_speed(made.seconds, speed)
+    left = max((cfg.get("_ai_total") or 0) - len(made_here), 0)
+    ui.log(f"🎨 Picture made in {made.seconds:.0f} s"
+           + (f" · {left} more to make, about {_minutes(made.seconds * left)} left" if left else ""))
     if made.backend == imagegen.CPU and cfg.get("ai_images_backend") != imagegen.CPU:
         # The card failed and the processor worked: don't pay for that failure again,
         # in this video's other scenes or the next video.

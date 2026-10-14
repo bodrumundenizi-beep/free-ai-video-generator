@@ -57,7 +57,7 @@ You can confirm you have the real file by checking its hash against
 `SHA256SUMS.txt` on the release page:
 
 ```powershell
-Get-FileHash .\AIVideoStudio-4.0.0-setup.exe -Algorithm SHA256
+Get-FileHash .\AIVideoStudio-4.1.0-setup.exe -Algorithm SHA256
 ```
 
 ## The quick way
@@ -282,6 +282,15 @@ press **Download** there.
 - If a picture can't be made (not enough free memory, for example), that scene uses stock
   footage instead and the Log says why.
 
+**Speed.** The **Speed** row in the AI images tab chooses the picture size: **Fast**
+(384 x 672), **Balanced** (480 x 848) or **Best** (576 x 1024). Smaller pictures are made much
+faster and enlarged to the video's size once, carefully, before the slow zoom. On a PC without
+a graphics card the app starts on Fast, never goes above it on the processor, gives only the
+first two scenes an AI picture by default, and before a long render says how long it will take
+and offers to make two pictures and use them again. **Test speed** times a tiny picture a few
+ways on the processor and keeps the fastest; **Copy results** puts the numbers on the clipboard.
+**Settings → AI picture threads** sets the thread count by hand.
+
 You are responsible for what you ask it to draw and for how you use the pictures.
 
 ### Your own footage and images
@@ -499,7 +508,7 @@ python -m pytest
 python packaging/make_icon.py
 python packaging/fetch_llama.py
 pyinstaller --noconfirm --clean packaging/ai_video_studio.spec
-"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion=4.0.0 packaging\installer.iss
+"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion=4.1.0 packaging\installer.iss
 ```
 
 Releases are built automatically by GitHub Actions when a `v*` tag is pushed.

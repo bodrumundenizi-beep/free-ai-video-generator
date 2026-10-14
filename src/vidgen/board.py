@@ -140,6 +140,22 @@ def apply_revision(before: list[Scene], revised: list[tuple[str, str]], cards=No
     return out.scenes
 
 
+def limit_ai(scenes: list[Scene], keep: int) -> list[Scene]:
+    """``scenes`` with only the first ``keep`` AI pictures; later ones become stock scenes.
+
+    For a slow PC, where each picture takes minutes. The first ones are kept because the
+    opening is where a viewer decides to stay. Each switched scene keeps its description,
+    so one click in the Storyboard brings its AI picture back.
+    """
+    board, kept = Board(scenes), 0
+    for index, scene in enumerate(scenes):
+        if scene.is_ai:
+            kept += 1
+            if kept > keep:
+                board.set_source(index, STOCK)
+    return board.scenes
+
+
 def _identity(scene) -> tuple:
     return (scene.visual, scene.voice, scene.card, scene.picture)
 

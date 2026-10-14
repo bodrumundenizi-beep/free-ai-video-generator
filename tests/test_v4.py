@@ -41,7 +41,8 @@ def test_a_picture_made_in_the_storyboard_is_used_and_not_made_again(monkeypatch
     ready = tmp_path / "seen.png"
     ready.write_bytes(b"png")
     monkeypatch.setattr(imagegen, "make", lambda *a, **k: pytest.fail("made it again"))
-    ui = SimpleNamespace(log=lambda _line: None, ai_backend=lambda _b: None)
+    ui = SimpleNamespace(log=lambda _line: None, ai_backend=lambda _b: None,
+                         ai_speed=lambda *_a: None)
     plan = render._ScenePlan(parse_script("Visual: ai: a cat\nVoice: Hi.")[0])
     assert render._ai_picture(plan, 0, {"ai_pictures": {0: str(ready)}}, "9:16", str(tmp_path),
                               ui, 1, SimpleNamespace(providers=[]), lambda: False)

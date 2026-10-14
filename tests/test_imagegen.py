@@ -256,6 +256,9 @@ def test_the_renderer_remembers_the_processor_and_falls_back_to_stock(monkeypatc
         def ai_backend(self, backend):
             self.backend = backend
 
+        def ai_speed(self, seconds, speed):
+            pass
+
     def plan():
         return render._ScenePlan(parse_script("Visual: ai: a cat\nVoice: Hi.")[0])
 
