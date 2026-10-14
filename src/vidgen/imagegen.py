@@ -502,7 +502,9 @@ def make(prompt: str, size, out_path: str, look: str = DEFAULT_LOOK, seed: int |
     seed = random.randrange(1, 2**31) if seed is None else seed
     log_path = out_path + ".log"
     failure, ran = None, False
-    for attempt in ([CPU] if backend == CPU else [GPU, CPU]):
+    # GPU: the graphics card only (the user chose it); CPU: the processor only; "": the
+    # card first, then the processor if the card fails.
+    for attempt in {CPU: [CPU], GPU: [GPU]}.get(backend, [GPU, CPU]):
         where = "processor" if attempt == CPU else "graphics card"
         free = memory()
         try:

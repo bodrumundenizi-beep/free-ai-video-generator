@@ -157,3 +157,14 @@ def test_reuse_makes_a_few_pictures_and_uses_them_again(monkeypatch, tmp_path):
     assert made == ["picture 0", "picture 1"] and speeds == ["Fast", "Fast"]
     assert sources[2] == sources[0] and sources[3] == sources[1] and sources[4] == sources[0]
     assert any("1 more to make" in line for line in ui.lines)
+
+
+@pytest.mark.parametrize("backend,fails,tried", [
+    ("", ("gpu",), ["gpu", "cpu"]),        # Auto: the card, then the processor
+    ("gpu", ("gpu",), ["gpu"]),            # Graphics card only: no processor fall-back
+    ("cpu", (), ["cpu"]),                  # Processor only
+])
+def test_where_pictures_are_made(monkeypatch, tmp_path, backend, fails, tried):
+    from tests_helpers_speed import attempts
+
+    assert attempts(monkeypatch, tmp_path, backend, fails) == tried

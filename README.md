@@ -290,6 +290,9 @@ first two scenes an AI picture by default, and before a long render says how lon
 and offers to make two pictures and use them again. **Test speed** times a tiny picture a few
 ways on the processor and keeps the fastest; **Copy results** puts the numbers on the clipboard.
 **Settings → AI picture threads** sets the thread count by hand.
+**Make pictures on** chooses where pictures are made: **Auto** (the graphics card, and the
+processor if the card fails), **Graphics card** only (a scene whose picture fails uses a stock
+clip), or **Processor** only.
 
 You are responsible for what you ask it to draw and for how you use the pictures.
 
