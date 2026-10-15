@@ -144,7 +144,8 @@ from vidgen.script import (  # noqa: E402
 from vidgen import voices  # noqa: E402
 from vidgen.render import TEMP_ROOT  # noqa: E402
 from vidgen import (  # noqa: E402
-    captions, diagnostics, draft, footage, pacing, paths, preview, scenes, updates, writer,
+    captions, diagnostics, draft, footage, pacing, paths, preview, projects, scenes, updates,
+    writer,
 )
 from vidgen import board as boards  # noqa: E402
 from vidgen import imagegen, localvoice  # noqa: E402
@@ -152,7 +153,7 @@ from vidgen.voice import generate_voiceover  # noqa: E402
 
 
 APP_NAME = "AI Video Studio"
-APP_VERSION = "4.1.0"
+APP_VERSION = "4.2.0"
 # Must match AppUserModelID in packaging/installer.iss, or a pinned taskbar
 # shortcut will not group with the running window.
 APP_MODEL_ID = "AIVideoStudio.Desktop.3"
@@ -305,6 +306,7 @@ def default_settings() -> dict:
         "ai_images_look": imagegen.DEFAULT_LOOK,
         "ai_images_backend": "",   # "cpu" once the graphics card has failed on this PC
         "ai_device": "Auto",       # where AI pictures are made: Auto, Graphics card, Processor
+        "project": "",             # the project the script belongs to (vidgen.projects)
         "ai_images_speed": "",     # Fast / Balanced / Best; "" = chosen for this PC
         "ai_threads": "Auto",      # processor threads for AI pictures, or a number
         "ai_threads_best": "",     # "threads:affinity" the Test speed button found fastest
@@ -378,6 +380,7 @@ def load_settings() -> dict:
         data["ai_images_backend"] = ""
     if data["ai_device"] not in AI_DEVICES:
         data["ai_device"] = "Auto"
+    data["project"] = str(data["project"])
     data["key_tip"] = bool(data["key_tip"])
     if data["ai_images_speed"] not in imagegen.SPEEDS:
         data["ai_images_speed"] = ""
@@ -618,6 +621,7 @@ GLYPHS = {
     "font_size": ("\ue8e9", "A"),
     "color": ("\ue790", "\u25cf"),
     "position": ("\ue8cb", "\u2195"),
+    "projects": ("\ue8f1", "▦"),
     "eye": ("", "◉"),
 }
 
@@ -1030,7 +1034,8 @@ class SettingRow(Card):
 class Dialog(ctk.CTkToplevel):
     """Small themed modal replacing tkinter.messagebox."""
 
-    def __init__(self, app, title, message, ok=True, on_report=None):
+    def __init__(self, app, title, message, ok=True, on_report=None, confirm=None,
+                 confirm_text="OK"):
         super().__init__(app)
         self.title(title)
         self.resizable(False, False)
@@ -1055,9 +1060,19 @@ class Dialog(ctk.CTkToplevel):
 
         buttons = ctk.CTkFrame(wrapper, fg_color="transparent")
         buttons.pack(fill="x", padx=18, pady=(0, 16))
-        ctk.CTkButton(buttons, text="OK", width=96, height=32, corner_radius=4,
-                      font=app.font_body, fg_color=ACCENT, hover_color=ACCENT_HOVER,
-                      text_color=ACCENT_TEXT, command=self.destroy).pack(side="right")
+        def confirmed():
+            self.destroy()
+            confirm()
+
+        ctk.CTkButton(buttons, text=confirm_text if confirm else "OK", width=96, height=32,
+                      corner_radius=4, font=app.font_body, fg_color=ACCENT,
+                      hover_color=ACCENT_HOVER, text_color=ACCENT_TEXT,
+                      command=confirmed if confirm else self.destroy).pack(side="right")
+        if confirm:
+            ctk.CTkButton(buttons, text="Cancel", width=96, height=32, corner_radius=4,
+                          font=app.font_body, fg_color=FIELD_BG, hover_color=CARD_HOVER,
+                          border_width=1, border_color=FIELD_BORDER, text_color=TEXT,
+                          command=self.destroy).pack(side="right", padx=(0, 8))
         if on_report:
             def report():
                 self.destroy()
@@ -1352,6 +1367,87 @@ class SlowPicturesDialog(ctk.CTkToplevel):
     def choose(self, overrides):
         self.destroy()
         self.app.start_after_slow_choice(overrides)
+
+
+class CopyDialog(ctk.CTkToplevel):
+    """Make a copy of a project in the other shape or with another voice."""
+
+    def __init__(self, app, project):
+        super().__init__(app)
+        self.app, self.project = app, project
+        self.title("Make a copy")
+        self.resizable(False, False)
+        self.configure(fg_color=MAIN_BG)
+        self.transient(app)
+        card = Card(self)
+        card.pack(fill="both", expand=True, padx=14, pady=14)
+        settings = project.get("settings") or {}
+        self.shape = settings.get("aspect") if settings.get("aspect") in RATIO_OPTIONS \
+            else RATIO_OPTIONS[0]
+        try:
+            self.pictures = sum(s.is_ai for s in parse_script(project["script"]))
+        except ScriptError:
+            self.pictures = 0
+
+        ctk.CTkLabel(card, text=f"Copy of \"{project.get('title')}\"", font=app.font_title,
+                     text_color=TEXT, wraplength=420, justify="left",
+                     ).pack(anchor="w", padx=18, pady=(16, 10))
+        row = ctk.CTkFrame(card, fg_color="transparent")
+        row.pack(fill="x", padx=18, pady=4)
+        ctk.CTkLabel(row, text="Shape", font=app.font_body, text_color=TEXT, width=60,
+                     anchor="w").pack(side="left")
+        self.var_shape = tk.StringVar(self, self.shape)
+        FluentSegmented(row, app, list(RATIO_OPTIONS), self.var_shape, 200).pack(side="left")
+        row = ctk.CTkFrame(card, fg_color="transparent")
+        row.pack(fill="x", padx=18, pady=4)
+        ctk.CTkLabel(row, text="Voice", font=app.font_body, text_color=TEXT, width=60,
+                     anchor="w").pack(side="left")
+        self.var_voice = tk.StringVar(
+            self, voices.persona(settings.get("voice") or app.var_voice.get()).label)
+        ctk.CTkOptionMenu(
+            row, values=VOICE_OPTIONS, variable=self.var_voice, width=340, height=32,
+            corner_radius=4, font=app.font_body, fg_color=FIELD_BG, button_color=FIELD_BG,
+            button_hover_color=CARD_HOVER, text_color=TEXT, dropdown_fg_color=CARD_BG,
+            dropdown_text_color=TEXT, dropdown_hover_color=CARD_HOVER,
+            dropdown_font=app.font_body, dynamic_resizing=False).pack(side="left")
+        self.note = ctk.CTkLabel(card, text="", font=app.font_tiny, text_color=TEXT_DIM,
+                                 wraplength=420, justify="left", anchor="w")
+        self.note.pack(fill="x", padx=18, pady=(8, 10))
+        self.var_shape.trace_add("write", self._note)
+        self._note()
+
+        def button(text, command, accent=False):
+            ctk.CTkButton(card, text=text, height=34, corner_radius=4, font=app.font_body,
+                          fg_color=ACCENT if accent else FIELD_BG,
+                          hover_color=ACCENT_HOVER if accent else CARD_HOVER,
+                          text_color=ACCENT_TEXT if accent else TEXT,
+                          border_width=0 if accent else 1, border_color=FIELD_BORDER,
+                          command=command).pack(fill="x", padx=18, pady=3)
+
+        button("Make the video", lambda: self.go(render=True), accent=True)
+        button("Open the copy in the Storyboard", lambda: self.go(render=False))
+        button("Cancel", self.destroy)
+        ctk.CTkFrame(card, fg_color="transparent", height=10).pack()
+        centre_on(self, app)
+
+    def _note(self, *_args):
+        if self.pictures and self.var_shape.get() != self.shape:
+            each = self.app.seconds_per_picture()
+            self.note.configure(text=f"A new shape needs new AI pictures: {self.pictures} to "
+                                     f"make, about {max(1, round(each * self.pictures / 60))} "
+                                     "min. Stock clips are searched again.")
+        else:
+            self.note.configure(text="The original is kept as it is." + (
+                " Its AI pictures are reused, so the copy is quick to make."
+                if self.pictures and self.var_shape.get() == self.shape else ""))
+
+    def go(self, render):
+        new = projects.copy(self.project["id"])
+        changes = {"aspect": self.var_shape.get(),
+                   "voice": voices.persona(self.var_voice.get()).id}
+        self.destroy()
+        if self.app.open_project(new, changes) and render:
+            self.app.start_render()
 
 
 class ResultDialog(ctk.CTkToplevel):
@@ -2353,6 +2449,7 @@ class App(ctk.CTk):
         self.var_ai_look = tk.StringVar(value=s["ai_images_look"])
         self.ai_backend = s["ai_images_backend"]
         self.var_ai_device = tk.StringVar(value=s["ai_device"])
+        self.project = s["project"] or None   # vidgen.projects id of what the script is
         self.key_tip = s["key_tip"]
         self.ai_gpu, self.ai_fast_seconds = s["ai_gpu"], s["ai_fast_seconds"]
         self.ai_threads_best = s["ai_threads_best"]
@@ -2395,6 +2492,7 @@ class App(ctk.CTk):
             "ai_images_look": self.var_ai_look.get(),
             "ai_images_backend": self.ai_backend,
             "ai_device": self.var_ai_device.get(),
+            "project": self.project or "",
             "key_tip": self.key_tip,
             "ai_images_speed": self.var_ai_speed.get() if self.ai_speed_chosen else "",
             "ai_threads": self.var_ai_threads.get(),
@@ -2442,6 +2540,7 @@ class App(ctk.CTk):
         self.nav_items = {}
         for key, glyph, label in (
             ("home", "home", "Home"),
+            ("projects", "projects", "Projects"),
             ("board", "scenes", "Storyboard"),
             ("create", "create", "Script"),
             ("images", "images", "AI images"),
@@ -2512,6 +2611,8 @@ class App(ctk.CTk):
         self.update_idletasks()
 
     def select_page(self, key: str):
+        if self.current_page == "board" and key != "board":
+            self.save_project()   # a Storyboard left without a video is kept as a draft
         if key != self.current_page:
             self._show_page(key)
 
@@ -2521,6 +2622,8 @@ class App(ctk.CTk):
             self.refresh_home()
         elif key == "board":
             self.refresh_board()
+        elif key == "projects":
+            self.refresh_projects()
         elif key == "settings":
             self._refresh_tracks()
 
@@ -2590,6 +2693,7 @@ class App(ctk.CTk):
     def _build_pages(self):
         self.pages = {
             "home": self._build_home(),
+            "projects": self._build_projects(),
             "board": self._build_board(),
             "create": self._build_create(),
             "images": self._build_images(),
@@ -3876,6 +3980,8 @@ class App(ctk.CTk):
                     self._voice_event(payload)
                 elif kind == "images":
                     self._images_event(payload)
+                elif kind == "project":
+                    self._project_thumb_done(payload)
                 elif kind == "ai_speed":
                     self.note_picture_time(payload["seconds"], payload["speed"])
                 elif kind == "ai_gpu":
@@ -3898,6 +4004,7 @@ class App(ctk.CTk):
                     self.refresh_home()
                     made = [p for p in (payload.get("paths") or [payload.get("path")])
                             if p and os.path.isfile(p)]
+                    self.save_project(videos=made)
                     if payload["ok"] and made:
                         ResultDialog(self, payload["title"], payload["message"], made)
                     else:
@@ -3980,6 +4087,8 @@ class App(ctk.CTk):
     def use_draft(self, result, audience, mode=None):
         """Put a written script in the editor, with the settings it was written for."""
         script = result.script
+        self.save_project()
+        self.project = None   # a new video: its own project from the first save
         if self.ai_slow() and self._has_footage_key():
             # Each picture takes minutes here: keep the first few, stock for the rest.
             capped = boards.Board(boards.limit_ai(parse_script(script), SLOW_AI_SCENES)).text()
@@ -4097,6 +4206,284 @@ class App(ctk.CTk):
                 text_color=ERR_COLOR)
             return
         self.repair_writer()
+
+    # ------------------------------------------------------------ PROJECTS --
+    # Every video made (and every Storyboard left unfinished), from vidgen.projects.
+    def _build_projects(self):
+        page = ctk.CTkFrame(self.content, fg_color="transparent")
+        page.grid_columnconfigure(0, weight=1)
+        page.grid_rowconfigure(2, weight=1)
+        self._caption(page, "PROJECTS", 0, pady=(0, 6))
+        top = ctk.CTkFrame(page, fg_color="transparent")
+        top.grid(row=1, column=0, sticky="ew", pady=(0, PAD // 2))
+        top.grid_columnconfigure(0, weight=1)
+        self.project_search = focus_accent(ctk.CTkEntry(
+            top, height=34, corner_radius=4, font=self.font_body, fg_color=FIELD_BG,
+            border_color=FIELD_BORDER, text_color=TEXT,
+            placeholder_text="Search titles and scripts"))
+        self.project_search.grid(row=0, column=0, sticky="ew")
+        self.project_search.bind("<KeyRelease>", lambda _event: self.refresh_projects())
+        self.projects_count = ctk.CTkLabel(top, text="", font=self.font_tiny,
+                                           text_color=TEXT_DIM)
+        self.projects_count.grid(row=0, column=1, padx=(12, 4))
+        self.projects_list = ctk.CTkScrollableFrame(
+            page, fg_color="transparent", scrollbar_fg_color=SCROLLBAR_BG,
+            scrollbar_button_color=SCROLLBAR_THUMB,
+            scrollbar_button_hover_color=SCROLLBAR_THUMB_HOVER)
+        self.projects_list.grid(row=2, column=0, sticky="nsew")
+        self.projects_list.grid_columnconfigure((0, 1, 2), weight=1, uniform="projects")
+        self.project_images = []   # kept so Tk doesn't drop the thumbnails
+        return page
+
+    def refresh_projects(self):
+        for child in self.projects_list.winfo_children():
+            child.destroy()
+        self.project_images = []
+        every = projects.all_projects()
+        shown = [p for p in every if projects.matches(p, self.project_search.get())]
+        count = f"{len(every)} project{'s' if len(every) != 1 else ''}"
+        self.projects_count.configure(
+            text=count if len(shown) == len(every) else f"{len(shown)} of {count}")
+        if not shown:
+            hint = ("Nothing matches that search." if every else
+                    "Videos you make appear here, so you can open them again in the Storyboard "
+                    "and change them. A Storyboard you leave without making the video is kept "
+                    "here too, as a draft.")
+            ctk.CTkLabel(self.projects_list, text=hint, font=self.font_body,
+                         text_color=TEXT_MUTED, justify="left", anchor="w", wraplength=640,
+                         ).grid(row=0, column=0, columnspan=3, sticky="w", padx=8, pady=20)
+        for index, project in enumerate(shown):
+            self._project_card(project, index)
+
+    def _project_card(self, project, index):
+        from PIL import Image
+
+        pid, settings = project["id"], project.get("settings") or {}
+        videos = [v for v in project.get("videos") or [] if os.path.isfile(v)]
+        card = Card(self.projects_list)
+        card.grid(row=index // 3, column=index % 3, sticky="nsew", padx=4, pady=4)
+        card.grid_columnconfigure((0, 1), weight=1)
+
+        box = (101, 180) if settings.get("aspect", "9:16") == "9:16" else (240, 135)
+        picture = ctk.CTkLabel(card, text=self.icon("projects"), font=self.font_icon_lg,
+                               text_color=TEXT_DIM, width=box[0], height=box[1],
+                               fg_color=FIELD_BG, corner_radius=4)
+        picture.grid(row=0, column=0, columnspan=2, pady=(12, 6))
+        thumb = os.path.join(projects.folder(pid), projects.THUMB)
+        if os.path.isfile(thumb):
+            try:
+                with Image.open(thumb) as image:
+                    image = image.convert("RGB")
+                image.thumbnail(box)
+                photo = ctk.CTkImage(light_image=image, dark_image=image, size=image.size)
+                self.project_images.append(photo)
+                picture.configure(image=photo, text="")
+            except OSError:
+                pass   # no picture: the icon stays
+
+        title = ctk.CTkLabel(card, text=project.get("title") or "Untitled video",
+                             font=self.font_bold, text_color=TEXT, anchor="w", justify="left",
+                             wraplength=240)
+        title.grid(row=1, column=0, columnspan=2, sticky="ew", padx=12)
+        when = time.strftime("%d %b %Y", time.localtime(project.get("updated") or 0))
+        if projects.is_draft(project):
+            info, color = f"Draft · {when}", WARN_COLOR
+        elif not videos:
+            info, color = f"{when} · video file not found", WARN_COLOR
+        else:
+            length = project.get("length") or 0
+            info = f"{when} · {int(length // 60)}:{int(length % 60):02d} · " \
+                   f"{settings.get('aspect', '9:16')}"
+            color = TEXT_DIM
+        ctk.CTkLabel(card, text=info, font=self.font_tiny, text_color=color, anchor="w",
+                     ).grid(row=2, column=0, columnspan=2, sticky="ew", padx=12, pady=(0, 6))
+
+        def rename():
+            title.grid_remove()
+            entry = focus_accent(ctk.CTkEntry(
+                card, height=30, corner_radius=4, font=self.font_body, fg_color=FIELD_BG,
+                border_color=FIELD_BORDER, text_color=TEXT))
+            entry.insert(0, project.get("title") or "")
+            entry.grid(row=1, column=0, columnspan=2, sticky="ew", padx=12)
+            entry.focus_set()
+            entry.select_range(0, "end")
+
+            def done(_event=None):
+                name, data = entry.get().strip(), projects.load(pid)
+                if name and data is not None:
+                    projects.save(pid, dict(data, title=name), touch=False)
+                self.refresh_projects()
+
+            entry.bind("<Return>", done)
+            entry.bind("<Escape>", lambda _event: self.refresh_projects())
+
+        def delete():
+            def really():
+                projects.delete(pid)
+                if self.project == pid:
+                    self.project = None
+                self.refresh_projects()
+
+            Dialog(self, "Delete this project?",
+                   f"\"{project.get('title')}\" is removed from Projects, with its saved "
+                   "AI pictures. Your video file is kept.", ok=False,
+                   confirm=really, confirm_text="Delete")
+
+        def change_it():
+            if self.open_project(pid):
+                self.board_comment.focus_set()
+                self.board_status.configure(
+                    text="Say what to change in the box below, then press Change it.",
+                    text_color=TEXT_DIM)
+
+        buttons = (("Open", lambda: self.open_project(pid), True),
+                   ("Change it", change_it, True),
+                   ("Play", lambda: os.startfile(videos[0]), bool(videos)),
+                   ("Show in folder", lambda: subprocess.Popen(
+                       ["explorer", "/select,", os.path.normpath(videos[0])]), bool(videos)),
+                   ("Make a copy", lambda: CopyDialog(self, project), True),
+                   ("Rename", rename, True),
+                   ("Delete", delete, True))
+        for at, (text, command, usable) in enumerate(buttons):
+            ctk.CTkButton(
+                card, text=text, height=28, corner_radius=4, font=self.font_tiny,
+                fg_color=ACCENT if at == 0 else FIELD_BG,
+                hover_color=ACCENT_HOVER if at == 0 else CARD_HOVER,
+                text_color=ACCENT_TEXT if at == 0 else TEXT, border_width=0 if at == 0 else 1,
+                border_color=FIELD_BORDER, state="normal" if usable else "disabled",
+                command=command,
+            ).grid(row=3 + at // 2, column=at % 2, sticky="ew",
+                   padx=(12 if at % 2 == 0 else 3, 3 if at % 2 == 0 else 12), pady=3)
+        ctk.CTkFrame(card, fg_color="transparent", height=8).grid(row=7, column=0)
+
+    def save_project(self, videos=None):
+        """Keep the script, its settings and AI pictures as a project.
+
+        ``videos``: the render just finished (an empty list when it failed). Without
+        it this saves a draft, and only when the script changed since the last save.
+        """
+        if not hasattr(self, "script_box"):
+            return
+        script = self.script_box.get("1.0", "end").strip()
+        try:
+            scenes_now = parse_script(script)
+        except ScriptError:
+            return
+        old = projects.load(self.project) if self.project else None
+        if videos is None and (script == DEFAULT_SCRIPT.strip()
+                               or (old is not None and old["script"] == script)):
+            return
+        self.project = self.project if old is not None or videos is not None \
+            else projects.new_id()
+        folder = projects.folder(self.project)
+        first = None
+        for scene in scenes_now:
+            if not scene.is_ai:
+                continue
+            key = self._picture_key(scene)
+            keep, made = projects.picture_file(folder, key), self.board_pictures.get(key)
+            try:
+                if made and os.path.isfile(made) and not os.path.isfile(keep):
+                    os.makedirs(os.path.dirname(keep), exist_ok=True)
+                    shutil.copyfile(made, keep)
+            except OSError:
+                pass   # the picture is made again when needed
+            if first is None and os.path.isfile(keep):
+                first = keep
+        s = self._collect_settings()
+        data = dict(old or {}, script=script, settings={k: s[k] for k in projects.KEYS},
+                    clip_pos=dict(self.board_pos))
+        if videos:
+            data["videos"] = list(videos)
+        projects.save(self.project, data)
+        save_settings(s)
+        if videos or first:
+            threading.Thread(target=self._project_thumb,
+                             args=(self.project, (videos or [None])[0], first),
+                             daemon=True).start()
+
+    def _project_thumb(self, pid, video, picture):
+        """Worker: the card's picture (a frame of the video, else the first AI picture)."""
+        from PIL import Image
+
+        dest, length = os.path.join(projects.folder(pid), projects.THUMB), None
+        try:
+            if video:
+                width, height, length = preview.probe(video)
+                image = preview.poster(video, preview.fit((width, height), (360, 360)),
+                                       at=min(1.0, length / 2))
+            else:
+                with Image.open(picture) as image:
+                    image = image.convert("RGB")
+                image.thumbnail((360, 360))
+            image.save(dest)
+        except Exception:  # noqa: BLE001 - no thumbnail: the card shows an icon
+            return
+        self._queue.put(("project", {"id": pid, "length": length}))
+
+    def _project_thumb_done(self, payload):
+        data = projects.load(payload["id"])
+        if data is not None and payload["length"] is not None:
+            projects.save(payload["id"], dict(data, length=payload["length"]), touch=False)
+        if self.current_page == "projects":
+            self.refresh_projects()
+
+    def open_project(self, pid, changes=None) -> bool:
+        """Put a project back in the editor and the Storyboard. ``changes``: settings to
+        use instead of the saved ones (Make a copy)."""
+        if self.is_rendering:
+            Dialog(self, "A video is being made",
+                   "Wait until it is done, or cancel it on the Log page, then open the project.",
+                   ok=False)
+            return False
+        data = projects.load(pid)
+        if data is None:
+            self.refresh_projects()
+            return False
+        self.save_project()   # what is open now is kept first
+        snap = dict(data.get("settings") or {}, **(changes or {}))
+        if snap.get("aspect") in RATIO_OPTIONS:
+            self.var_aspect.set(snap["aspect"])
+        if snap.get("resolution") in RESOLUTION_OPTIONS:
+            self.var_resolution.set(snap["resolution"])
+        if snap.get("voice"):
+            self.var_voice.set(voices.persona(snap["voice"]).label)
+        if "captions" in snap:
+            self.var_captions.set(bool(snap["captions"]))
+        for key, allowed, _default in CAPTION_SETTINGS:
+            if snap.get(key) in allowed:
+                self.caption_vars[key].set(snap[key])
+        if snap.get("ai_images_look") in imagegen.LOOKS:
+            self.var_ai_look.set(snap["ai_images_look"])
+        if snap.get("target_length") in pacing.TARGETS:
+            self.var_target.set(snap["target_length"])
+        if "music_enabled" in snap:
+            self.var_music_enabled.set(bool(snap["music_enabled"]))
+        music = snap.get("music_path") or ""
+        self.music_path = music if os.path.isfile(music) else ""
+
+        if snap.get("aspect") != (data.get("settings") or {}).get("aspect"):
+            data["clip_pos"] = {}   # clip picks belong to the other shape's search
+        self.project = pid
+        if changes:
+            projects.save(pid, dict(data, settings=snap))
+        self.script_box.delete("1.0", "end")
+        self.script_box.insert("1.0", data["script"])
+        # After the shape: a new shape clears the Storyboard's choices.
+        self.board_clips, self.board_pos = {}, dict(data.get("clip_pos") or {})
+        folder = projects.folder(pid)
+        try:
+            for scene in parse_script(data["script"]):
+                if scene.is_ai:
+                    key = self._picture_key(scene)
+                    if os.path.isfile(projects.picture_file(folder, key)):
+                        self.board_pictures[key] = projects.picture_file(folder, key)
+        except ScriptError:
+            pass
+        self.board_text = None
+        self._commit_script()
+        self.select_page("board")
+        return True
 
     # ---------------------------------------------------------- STORYBOARD --
     # The script as a card per scene. vidgen.board holds the scenes and every edit
@@ -4516,6 +4903,7 @@ class App(ctk.CTk):
             text=", ".join(parts).capitalize() + ". Look them over, then press Make video. "
                  "The Script page has the old lines if you undo there (Ctrl+Z).",
             text_color=OK_COLOR)
+        self.save_project()
 
     # -- hearing one line -----------------------------------------------------------------
     def hear_line(self, text):
@@ -5133,6 +5521,7 @@ class App(ctk.CTk):
             # Windows has already asked before replacing an existing file.
             overwrite = True
 
+        self.project = self.project or projects.new_id()
         # Snapshot every widget value here, on the UI thread.
         settings = self._collect_settings()
         self.settings = settings
@@ -5144,6 +5533,7 @@ class App(ctk.CTk):
                    cancel=self._cancel, clip_choices=choices, ai_pictures=pictures,
                    ai_images_speed=self.ai_speed_now(), ai_threads=self.threads_pair(),
                    ai_images_backend=self.ai_backend_now(),
+                   project_dir=projects.folder(self.project),
                    target_length=pacing.TARGETS.get(settings["target_length"]))
 
         cfg.update(self._render_overrides)   # "make 2 and reuse", "Fast": this video only
@@ -5160,6 +5550,7 @@ class App(ctk.CTk):
 
     # -- shutdown ------------------------------------------------------------
     def _on_close(self):
+        self.save_project()
         save_settings(self._collect_settings())
         self.destroy()
 

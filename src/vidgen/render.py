@@ -747,6 +747,17 @@ def _ai_picture(plan, index, cfg, ratio, work_dir, ui, version, search, stop) ->
         ui.log(f"⚠️ {exc} Using stock footage for scene {index + 1}.")
         return False
     made_here.append(path)
+    if cfg.get("project_dir"):
+        # The work dir is deleted after the render; the project keeps the picture.
+        from . import projects
+
+        look = cfg.get("ai_images_look") or imagegen.DEFAULT_LOOK
+        keep = projects.picture_file(cfg["project_dir"], f"{plan.scene.ai_prompt}|{look}|{ratio}")
+        try:
+            os.makedirs(os.path.dirname(keep), exist_ok=True)
+            shutil.copyfile(path, keep)
+        except OSError as exc:
+            ui.log(f"⚠️ Couldn't keep the picture in the project ({exc}).")
     ui.ai_speed(made.seconds, speed)
     left = max((cfg.get("_ai_total") or 0) - len(made_here), 0)
     ui.log(f"🎨 Picture made in {made.seconds:.0f} s"

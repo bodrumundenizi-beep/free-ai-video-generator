@@ -13,6 +13,7 @@ voiceover, and renders a 1080p or 720p MP4 in portrait or landscape.
 ## Features
 - **Paste text, get a video:** The Home page is one box and one button. Paste an article, a tip or your notes and press **Make my video**.
 - **Storyboard:** See the video as a card per scene before it is made. Change a line, swap a clip, make another AI picture, reorder scenes, and hear any line read out.
+- **Projects:** Every video you make is kept on the Projects page. Open it again in the Storyboard, change it, make a copy in the other shape or voice, rename it, search. An unfinished Storyboard is kept as a draft.
 - **Tell it what to change:** Type "make it shorter" or "more exciting start" and the built-in AI rewrites the script; you see what changed before anything is rendered.
 - **Paste any text, get a script:** Paste plain text, say who the video is for and how long it should be, and a built-in open-source AI writes the script. It runs on your PC: no account, no key, nothing sent anywhere.
 - **Automated Stock Footage:** Automatically fetches relevant video clips from Pexels or Pixabay.
@@ -57,7 +58,7 @@ You can confirm you have the real file by checking its hash against
 `SHA256SUMS.txt` on the release page:
 
 ```powershell
-Get-FileHash .\AIVideoStudio-4.1.0-setup.exe -Algorithm SHA256
+Get-FileHash .\AIVideoStudio-4.2.0-setup.exe -Algorithm SHA256
 ```
 
 ## The quick way
@@ -104,6 +105,26 @@ It changes the script only: not the voice, the captions or the music, which you 
 Script page. It needs the Smart writer download, and it is a small AI model: if it changes
 nothing, or the wrong thing, say it another way or edit the card yourself. Ctrl+Z on the
 Script page brings the old lines back.
+
+## Projects
+
+Every video you make is saved as a project: its script, its settings (shape, voice,
+captions, look, length, music) and its AI pictures. The **Projects** page shows them as
+cards, newest first, with a search box for titles and scripts.
+
+![Projects](docs/projects.png)
+
+| On each card | What it does |
+|---|---|
+| **Open** | Puts the video back in the Storyboard with its settings and AI pictures, ready to change and make again. |
+| **Change it** | Opens it and takes you to the **Say what to change** box. |
+| **Play**, **Show in folder** | The video file. |
+| **Make a copy** | The same video in the other shape (9:16 or 16:9) or with another voice. Same shape: the AI pictures are reused. Another shape: new pictures are made. |
+| **Rename** | Type a new name and press Enter. |
+| **Delete** | Removes the project and its saved pictures. Your video file is kept. |
+
+A Storyboard you leave without making the video is kept too, as a **Draft** card.
+Videos made with versions before 4.2 are not listed: their scripts were not saved.
 
 ## First run
 
@@ -411,6 +432,7 @@ Output size follows both settings: 9:16 at 1080p is 1080×1920, 16:9 at 720p is
 | | |
 |---|---|
 | Settings | `%APPDATA%\AIVideoStudio\settings.json` |
+| Projects | `%APPDATA%\AIVideoStudio\projects`: script, settings, thumbnail and AI pictures of each video (about 1 MB a picture). The videos themselves stay where you saved them |
 | Rendered video | Wherever you choose in the Save window; it opens in your Videos folder the first time. An existing video is only replaced if you confirm it |
 | Footage credits | `<video name>.credits.txt`, next to the video |
 | Subtitles | `<video name>.srt`, next to the video (when captions are on) |
@@ -511,7 +533,7 @@ python -m pytest
 python packaging/make_icon.py
 python packaging/fetch_llama.py
 pyinstaller --noconfirm --clean packaging/ai_video_studio.spec
-"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion=4.1.0 packaging\installer.iss
+"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion=4.2.0 packaging\installer.iss
 ```
 
 Releases are built automatically by GitHub Actions when a `v*` tag is pushed.
