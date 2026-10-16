@@ -239,3 +239,57 @@ def test_the_installer_is_run_quietly_into_the_same_folder_and_reopens_the_app()
     assert command[0] == r"C:\Temp\setup.exe" and r"/DIR=C:\Apps\AI Video Studio" in command
     assert {"/SILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/RELAUNCH=1"} <= set(command)
     assert "/VERYSILENT" not in command  # the user should see that something is happening
+
+
+# --- the portable version --------------------------------------------------------
+
+def test_latest_finds_the_portable_zip():
+    found = updates.latest("3.7.0", Session(Reply(200, release_data())))
+    assert found.portable_name == "AIVideoStudio-3.8.0-portable.zip"
+    assert found.portable_url == BASE + "p.zip" and found.can_unpack
+
+
+def test_the_portable_zip_is_downloaded_and_checked(tmp_path):
+    name = "AIVideoStudio-3.8.0-portable.zip"
+    release = updates.Release("v3.8.0", PAGE, sums_url=BASE + updates.SUMS_NAME,
+                              portable_url=BASE + name, portable_name=name)
+    server = Files(sums=f"{hashlib.sha256(INSTALLER).hexdigest()}  {name}\n")
+    path = updates.download_portable(release, str(tmp_path), session=server)
+    assert path.endswith(name) and open(path, "rb").read() == INSTALLER
+    with pytest.raises(updates.UpdateError):
+        updates.download_portable(RELEASE, str(tmp_path), session=server)   # no zip
+
+
+def _zip(path, names):
+    import zipfile
+    with zipfile.ZipFile(path, "w") as archive:
+        for name in names:
+            archive.writestr(name, b"x")
+
+
+def test_unpacking_finds_the_app_inside_the_zips_top_folder(tmp_path):
+    _zip(tmp_path / "p.zip", ["AIVideoStudio/AIVideoStudio.exe", "AIVideoStudio/_internal/a.dll"])
+    app = updates.unpack_portable(str(tmp_path / "p.zip"), str(tmp_path / "new"))
+    assert app == str((tmp_path / "new" / "AIVideoStudio").resolve())
+    assert (tmp_path / "new" / "AIVideoStudio" / "_internal" / "a.dll").is_file()
+
+
+@pytest.mark.parametrize("names", [["../evil.exe", "AIVideoStudio.exe"], ["readme.txt"]])
+def test_a_zip_that_escapes_or_has_no_app_is_refused(tmp_path, names):
+    _zip(tmp_path / "p.zip", names)
+    with pytest.raises(updates.UpdateError):
+        updates.unpack_portable(str(tmp_path / "p.zip"), str(tmp_path / "new"))
+    assert not (tmp_path / "evil.exe").exists()
+
+
+def test_the_swap_script_waits_copies_without_deleting_and_reopens():
+    script = updates.portable_script(r"C:\Temp\new app", r"D:\My Apps\AI Video Studio", 4321)
+    assert "Wait-Process -Id 4321" in script
+    assert r'robocopy "C:\Temp\new app" "D:\My Apps\AI Video Studio" /E' in script
+    assert "/MIR" not in script and "/PURGE" not in script
+    assert r'start "" "D:\My Apps\AI Video Studio\AIVideoStudio.exe"' in script
+    assert script.index("Wait-Process") < script.index("robocopy") < script.index("start")
+
+
+def test_a_folder_that_takes_files_can_be_updated(tmp_path):
+    assert updates.can_write(str(tmp_path)) and not updates.can_write(str(tmp_path / "missing"))

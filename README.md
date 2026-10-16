@@ -40,10 +40,11 @@ Get the latest [release](../../releases/latest):
 
 **No Python, no pip, no separate FFmpeg install** — everything is in the download.
 
-**Updating:** the app tells you when a newer version is out. If you used the
-installer, press **Update now**: the app downloads the new version, checks it,
-installs it over the old one and reopens. The portable version links to the
-download instead. Either way your settings, API keys and the Smart writer are kept.
+**Updating:** the app tells you when a newer version is out. Press **Update now**:
+the app downloads the new version, checks it, puts it over the old one and reopens.
+This works for the installed version and, from 4.2.1, the portable one (unless its
+folder is somewhere Windows won't let it write, such as Program Files). Your settings,
+API keys, projects and the Smart writer are kept.
 (Running from source still needs all three; see below.)
 
 **The AI models are a separate 2.9 GB download:** the voice (0.4 GB) and the Smart writer (2.5 GB). The installer fetches both during setup; the portable version fetches the voice the first time you make a video and the Smart writer the first time you use **New from text**. They are downloaded once and kept when you update the app. See [New from text](#new-from-text) below.
@@ -58,7 +59,7 @@ You can confirm you have the real file by checking its hash against
 `SHA256SUMS.txt` on the release page:
 
 ```powershell
-Get-FileHash .\AIVideoStudio-4.2.0-setup.exe -Algorithm SHA256
+Get-FileHash .\AIVideoStudio-4.2.1-setup.exe -Algorithm SHA256
 ```
 
 ## The quick way
@@ -533,7 +534,7 @@ python -m pytest
 python packaging/make_icon.py
 python packaging/fetch_llama.py
 pyinstaller --noconfirm --clean packaging/ai_video_studio.spec
-"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion=4.2.0 packaging\installer.iss
+"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion=4.2.1 packaging\installer.iss
 ```
 
 Releases are built automatically by GitHub Actions when a `v*` tag is pushed.

@@ -153,7 +153,7 @@ from vidgen.voice import generate_voiceover  # noqa: E402
 
 
 APP_NAME = "AI Video Studio"
-APP_VERSION = "4.2.0"
+APP_VERSION = "4.2.1"
 # Must match AppUserModelID in packaging/installer.iss, or a pinned taskbar
 # shortcut will not group with the running window.
 APP_MODEL_ID = "AIVideoStudio.Desktop.3"
@@ -3806,10 +3806,13 @@ class App(ctk.CTk):
         return os.path.dirname(os.path.abspath(sys.executable))
 
     def _can_self_update(self) -> bool:
-        """Only a built copy that the installer put there can replace itself."""
+        """A built copy: installed ones run the new installer, portable ones the new ZIP."""
         found = self.update_release
-        return bool(IS_FROZEN and found and found.can_install
-                    and updates.is_installed_copy(self._app_dir()))
+        if not (IS_FROZEN and found):
+            return False
+        if updates.is_installed_copy(self._app_dir()):
+            return found.can_install
+        return found.can_unpack and updates.can_write(self._app_dir())
 
     def _offer_update(self, message=None, allow_install=True):
         """Show the bar: Update now where the app can do it, the release page otherwise."""
@@ -3840,6 +3843,7 @@ class App(ctk.CTk):
         self.update_later.configure(text="Cancel", command=stop.set)
         self.append_log(f"⬇️ Downloading version {found.version}...")
         folder = os.path.join(TEMP_ROOT, "update")
+        installed = updates.is_installed_copy(self._app_dir())
 
         def worker():
             last = 0.0
@@ -3853,7 +3857,12 @@ class App(ctk.CTk):
                                                  "total": total}))
 
             try:
-                path = updates.download_installer(found, folder, progress, stop.is_set)
+                if installed:
+                    path = updates.download_installer(found, folder, progress, stop.is_set)
+                else:
+                    archive = updates.download_portable(found, folder, progress, stop.is_set)
+                    path = updates.unpack_portable(archive, os.path.join(folder, "portable"))
+                    os.remove(archive)   # unpacked: the 120 MB ZIP isn't needed again
                 self._queue.put(("updater", {"event": "ready", "path": path}))
             except footage.Stopped:
                 self._queue.put(("updater", {"event": "stopped"}))
@@ -3894,11 +3903,20 @@ class App(ctk.CTk):
             self._offer_update("The update is ready. Finish or cancel the render first, "
                                "then press Update now.")
             return
-        command = updates.installer_command(path, self._app_dir())
         try:
-            # Detached: the installer must outlive this process, which it is about to replace.
-            flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(
-                subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+            if updates.is_installed_copy(self._app_dir()):
+                command = updates.installer_command(path, self._app_dir())
+                # Detached: the installer must outlive this process, which it replaces.
+                flags = getattr(subprocess, "DETACHED_PROCESS", 0)
+            else:
+                # Portable: a script copies the unpacked app over this one once it has closed.
+                script = os.path.join(TEMP_ROOT, "update", "update.cmd")
+                with open(script, "w", encoding="utf-8") as fh:
+                    fh.write(updates.portable_script(path, self._app_dir(), os.getpid()))
+                command = ["cmd", "/c", script]
+                # A hidden console, shared by robocopy, instead of windows popping up.
+                flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            flags |= getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
             subprocess.Popen(command, creationflags=flags, close_fds=True)
         except OSError as exc:
             self.append_log(f"⚠️ The installer could not be started: {exc}")

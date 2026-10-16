@@ -17,6 +17,8 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import shutil
+import zipfile
 from dataclasses import dataclass
 
 import requests
@@ -47,6 +49,8 @@ class Release:
     installer_url: str | None = None
     installer_name: str | None = None
     sums_url: str | None = None
+    portable_url: str | None = None
+    portable_name: str | None = None
 
     @property
     def version(self) -> str:
@@ -56,6 +60,11 @@ class Release:
     def can_install(self) -> bool:
         """Whether the release has an installer and the checksums to verify it with."""
         return bool(self.installer_url and self.installer_name and self.sums_url)
+
+    @property
+    def can_unpack(self) -> bool:
+        """Whether the release has the portable ZIP and the checksums to verify it with."""
+        return bool(self.portable_url and self.portable_name and self.sums_url)
 
 
 def parse_version(text) -> tuple[int, ...] | None:
@@ -121,10 +130,12 @@ def latest(current: str = "", session=None) -> Release | None:
         page = RELEASES_PAGE
     assets = data.get("assets")
     assets = assets if isinstance(assets, list) else []
-    installer = f"AIVideoStudio-{'.'.join(map(str, version))}-setup.exe"
-    installer_url = _own_file(assets, installer)
+    stem = f"AIVideoStudio-{'.'.join(map(str, version))}"
+    installer, portable = f"{stem}-setup.exe", f"{stem}-portable.zip"
+    installer_url, portable_url = _own_file(assets, installer), _own_file(assets, portable)
     return Release(tag, page, installer_url, installer if installer_url else None,
-                   _own_file(assets, SUMS_NAME))
+                   _own_file(assets, SUMS_NAME), portable_url,
+                   portable if portable_url else None)
 
 
 # --- fetching the installer ------------------------------------------------------
@@ -150,19 +161,33 @@ def download_installer(release: Release, folder: str, progress=None, should_stop
     """
     if not release.can_install:
         raise UpdateError("This release has no installer the app can use.")
+    return _download_verified(release.installer_url, release.installer_name, release.sums_url,
+                              folder, progress, should_stop, session)
+
+
+def download_portable(release: Release, folder: str, progress=None, should_stop=None,
+                      session=None) -> str:
+    """Fetch the release's portable ZIP, checked like the installer."""
+    if not release.can_unpack:
+        raise UpdateError("This release has no portable version the app can use.")
+    return _download_verified(release.portable_url, release.portable_name, release.sums_url,
+                              folder, progress, should_stop, session)
+
+
+def _download_verified(url, name, sums_url, folder, progress, should_stop, session) -> str:
     http = session or requests
-    path = os.path.join(folder, release.installer_name)
+    path = os.path.join(folder, name)
     part = path + ".part"
     try:
         os.makedirs(folder, exist_ok=True)
-        sums = http.get(release.sums_url, timeout=DOWNLOAD_TIMEOUT)
+        sums = http.get(sums_url, timeout=DOWNLOAD_TIMEOUT)
         sums.raise_for_status()
-        wanted = expected_sha256(sums.text, release.installer_name)
+        wanted = expected_sha256(sums.text, name)
         if wanted is None:
             raise UpdateError("The release does not list a checksum for its installer.")
         digest, done = hashlib.sha256(), 0
         try:
-            with http.get(release.installer_url, stream=True,
+            with http.get(url, stream=True,
                           timeout=DOWNLOAD_TIMEOUT) as response:
                 response.raise_for_status()
                 total = int(response.headers.get("Content-Length") or 0)
@@ -207,3 +232,62 @@ def installer_command(path: str, app_dir: str) -> list[str]:
     """
     return [path, "/SILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS",
             "/RELAUNCH=1", f"/DIR={app_dir}"]
+
+
+# --- the portable version: unzip next to it, then copy over it once it has closed ---------
+
+APP_EXE = "AIVideoStudio.exe"
+
+
+def unpack_portable(zip_path: str, folder: str) -> str:
+    """Unzip the portable version into ``folder``; returns the folder holding the app.
+
+    Refuses a ZIP with a path that would land outside ``folder``.
+    """
+    shutil.rmtree(folder, ignore_errors=True)
+    root = os.path.realpath(folder)
+    try:
+        with zipfile.ZipFile(zip_path) as archive:
+            for member in archive.namelist():
+                target = os.path.realpath(os.path.join(root, member))
+                if os.path.commonpath([root, target]) != root:
+                    raise UpdateError("The downloaded update is not a valid app folder.")
+            archive.extractall(root)
+    except (zipfile.BadZipFile, OSError) as exc:
+        raise UpdateError(f"The update could not be unpacked: {exc}") from exc
+    for place in (root, *(os.path.join(root, d) for d in sorted(os.listdir(root)))):
+        if os.path.isfile(os.path.join(place, APP_EXE)):
+            return place
+    raise UpdateError("The downloaded update is not a valid app folder.")
+
+
+def can_write(folder: str) -> bool:
+    """Whether this copy may replace its own files (not in Program Files, say)."""
+    probe = os.path.join(folder, ".update-test")
+    try:
+        with open(probe, "w", encoding="utf-8"):
+            pass
+        os.remove(probe)
+        return True
+    except OSError:
+        return False
+
+
+def portable_script(new: str, app_dir: str, pid: int) -> str:
+    """A .cmd that waits for the app (``pid``) to close, copies ``new`` over ``app_dir``
+    and reopens it.
+
+    robocopy /E adds and replaces files but never deletes any: whatever else is in the
+    folder stays. Wait-Process rather than tasklist, whose messages are translated.
+    """
+    return "\r\n".join([
+        "@echo off",
+        f'powershell -NoProfile -Command "Wait-Process -Id {int(pid)} -Timeout 120 '
+        f'-ErrorAction SilentlyContinue"',
+        "timeout /t 1 /nobreak >nul",
+        f'robocopy "{new}" "{app_dir}" /E /R:10 /W:1 /NFL /NDL /NJH /NJS /NP >nul',
+        f'start "" "{os.path.join(app_dir, APP_EXE)}"',
+        f'rmdir /s /q "{new}"',
+        '(goto) 2>nul & del "%~f0"',
+        "",
+    ])

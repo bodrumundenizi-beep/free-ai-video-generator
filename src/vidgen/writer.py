@@ -26,6 +26,7 @@ import subprocess
 import sys
 import threading
 import time
+import zlib
 from dataclasses import dataclass
 
 import requests
@@ -364,15 +365,22 @@ _UNFILMABLE = frozenset(
 _COMPUTER_SHOTS = (
     "person typing laptop", "hands keyboard close up", "woman working computer",
     "man using laptop", "hand computer mouse", "person looking monitor",
-    "fingers pressing keys", "office desk computer",
+    "fingers pressing keys", "office desk computer", "student laptop library",
+    "woman smiling laptop", "man coffee laptop", "home office desk", "laptop kitchen table",
+    "young man computer night", "woman taking notes laptop", "colleagues looking screen",
+    "person working cafe", "hands tablet couch", "programmer desk monitors",
+    "freelancer laptop window",
 )
+# Taking the words from the "picture" sentence instead was measured (2026-10-16): it
+# describes the screen too ("settings menu with clipboard history toggle") and doubles
+# the writing time. So: many generic shots, and each video uses different ones.
 
 
 def filmable(visual: str, turn: int = 0) -> str:
     """``visual`` without the words no camera can film.
 
     When fewer than two words are left, the scene shows someone at a computer;
-    ``turn`` picks which shot, so neighbouring scenes differ.
+    ``turn`` picks which shot, so the scenes of a video differ.
     """
     words = visual.split()
     kept = [w for w in words if w.lower() not in _UNFILMABLE]
@@ -463,6 +471,9 @@ def parse_scenes(content: str) -> list[draft.DraftScene]:
     except (ValueError, KeyError, TypeError) as exc:
         raise WriterError("The Smart writer gave an answer the app could not read.") from exc
     scenes, said = [], set()
+    # Each video starts somewhere else in the generic shots, so videos don't all look alike.
+    first = next((i.get("voice") for i in items if isinstance(i, dict)), "")
+    generic = zlib.crc32(str(first).encode("utf-8"))
     for item in items:
         if not isinstance(item, dict):
             continue
@@ -472,8 +483,9 @@ def parse_scenes(content: str) -> list[draft.DraftScene]:
             continue  # small models sometimes say a line twice
         said.add(key)
         asked = str(item.get("visual") or "")
-        visual = filmable(asked, len(scenes))
         picture = " ".join(str(item.get("picture") or "").split())
+        visual = filmable(asked, generic)
+        generic += visual in _COMPUTER_SHOTS
         scenes.append(draft.DraftScene(visual, voice, len(scenes), picture, visual != asked))
     if not scenes:
         raise WriterError("The Smart writer gave an empty answer.")

@@ -418,6 +418,17 @@ def test_filmable_shows_someone_at_a_computer_when_little_is_left():
     assert writer.filmable("person scrolling phone") == "person phone"
 
 
+def test_generic_shots_are_not_repeated_within_a_video():
+    answer = json.dumps({"scenes": [{"visual": "clipboard icon", "voice": f"Line number {n}."}
+                                    for n in range(12)]})
+    visuals = [s.visual for s in writer.parse_scenes(answer)]
+    assert len(set(visuals)) == 12 and set(visuals) <= set(writer._COMPUTER_SHOTS)
+    # another video starts elsewhere in the list
+    other = json.dumps({"scenes": [{"visual": "clipboard icon", "voice": f"Other line {n}."}
+                                   for n in range(3)]})
+    assert [s.visual for s in writer.parse_scenes(other)] != visuals[:3]
+
+
 def test_parse_scenes_swaps_unfilmable_search_words():
     content = json.dumps({"scenes": [
         {"visual": "snipping tool interface", "voice": "You can draw on the image."},
