@@ -95,3 +95,21 @@ Nothing for AI images is part of this download. If the user presses Download in 
 The model reads the description with the Smart writer's Qwen3 4B file (above).
 
 *This is a description of the licences involved, not legal advice.*
+
+## Background music (CC0, public domain)
+
+The tracks in `assets/music` are dedicated to the public domain under
+[CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/): they may be used in videos,
+including monetised ones, with no credit required. They were converted to 128 kbps MP3; the
+file names start with the mood the app uses to pick them.
+
+| File | Original | Author | Source |
+|---|---|---|---|
+| `calm - Chill Lofi.mp3` | Chill lofi inspired | omfgdude | https://opengameart.org/content/chill-lofi-inspired |
+| `calm - Lofi Loop.mp3` | Lofi Hip Hop Loop | omfgdude | https://opengameart.org/content/lofi-hip-hop-loop |
+| `calm - Bossa.mp3` | Bossa Nova (8bit Bossa) | Joth | https://opengameart.org/content/bossa-nova |
+| `upbeat - Rhythm Factory.mp3` | Rhythm Factory | Zane Little Music | https://opengameart.org/content/rhythm-factory |
+| `upbeat - Summer Sunday.mp3` | Summer Sunday | celestialghost8 | https://opengameart.org/content/summer-sunday |
+| `dramatic - The Field of Dreams.mp3` | The Field Of Dreams | pauliuw | https://opengameart.org/content/the-field-of-dreams |
+| `dramatic - Next to You.mp3` | Next to You | Joth | https://opengameart.org/content/next-to-you |
+| `dramatic - Snowfall.mp3` | Snowfall (looped version) | Kistol | https://opengameart.org/content/snowfall |

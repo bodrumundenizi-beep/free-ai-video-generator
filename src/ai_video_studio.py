@@ -153,7 +153,7 @@ from vidgen.voice import generate_voiceover  # noqa: E402
 
 
 APP_NAME = "AI Video Studio"
-APP_VERSION = "4.2.1"
+APP_VERSION = "4.3.0"
 # Must match AppUserModelID in packaging/installer.iss, or a pinned taskbar
 # shortcut will not group with the running window.
 APP_MODEL_ID = "AIVideoStudio.Desktop.3"
@@ -185,6 +185,19 @@ LOG_DIR = os.path.join(SETTINGS_DIR, "logs")
 LOG_FILE = os.path.join(LOG_DIR, "app.log")
 PADDING_OPTIONS = {"0s": 0.0, "0.25s": 0.25, "0.5s": 0.5, "1s": 1.0}
 DEFAULT_PADDING = 0.25
+
+
+NO_TEMPLATE = "None"
+MAX_BATCH = 20
+AUTO_TRACK = "auto"   # music_path meaning: a bundled track that fits the video
+AUTO_LABEL = "Auto (fits the video)"
+
+
+def bundled_tracks() -> list:
+    folder = asset_path("music")
+    if not folder or not os.path.isdir(folder):
+        return []
+    return [os.path.join(folder, n) for n in os.listdir(folder) if n.lower().endswith(MUSIC_EXTS)]
 
 
 def music_tracks() -> dict:
@@ -288,7 +301,7 @@ def default_settings() -> dict:
         "api_key": "",
         "pixabay_key": "",
         "padding": DEFAULT_PADDING,
-        "music_enabled": False,
+        "music_enabled": True,     # new users: the bundled music, picked to fit
         "ask_save": True,
         "welcome_seen": False,
         "tour_seen": False,
@@ -307,13 +320,17 @@ def default_settings() -> dict:
         "ai_images_backend": "",   # "cpu" once the graphics card has failed on this PC
         "ai_device": "Auto",       # where AI pictures are made: Auto, Graphics card, Processor
         "project": "",             # the project the script belongs to (vidgen.projects)
+        "intro_on": False,         # a channel-name card before the video
+        "intro_text": "",
+        "outro_on": False,         # an end card after it
+        "outro_text": "Subscribe for more",
         "ai_images_speed": "",     # Fast / Balanced / Best; "" = chosen for this PC
         "ai_threads": "Auto",      # processor threads for AI pictures, or a number
         "ai_threads_best": "",     # "threads:affinity" the Test speed button found fastest
         "ai_fast_seconds": 0.0,    # a measured picture's time, scaled to the Fast setting
         "ai_gpu": "",              # "dedicated", "integrated" or "none", once detected
         "key_tip": True,           # after a keyless video: mention that a free key exists
-        "music_path": "",
+        "music_path": AUTO_TRACK,
         "output_path": os.path.join(default_output_dir(), "final_video.mp4"),
         "aspect": "9:16",
         "resolution": "1080p",
@@ -381,6 +398,10 @@ def load_settings() -> dict:
     if data["ai_device"] not in AI_DEVICES:
         data["ai_device"] = "Auto"
     data["project"] = str(data["project"])
+    for key in ("intro_on", "outro_on"):
+        data[key] = bool(data[key])
+    for key in ("intro_text", "outro_text"):
+        data[key] = " ".join(str(data[key]).split())[:60]
     data["key_tip"] = bool(data["key_tip"])
     if data["ai_images_speed"] not in imagegen.SPEEDS:
         data["ai_images_speed"] = ""
@@ -390,7 +411,7 @@ def load_settings() -> dict:
         data["ai_fast_seconds"] = max(float(data["ai_fast_seconds"]), 0.0)
     except (TypeError, ValueError):
         data["ai_fast_seconds"] = 0.0
-    if data["music_path"] and not os.path.isfile(str(data["music_path"])):
+    if data["music_path"] not in ("", AUTO_TRACK) and not os.path.isfile(str(data["music_path"])):
         data["music_path"] = ""
 
     if data["aspect"] not in RATIO_OPTIONS:
@@ -1369,6 +1390,66 @@ class SlowPicturesDialog(ctk.CTkToplevel):
         self.app.start_after_slow_choice(overrides)
 
 
+class BatchDialog(ctk.CTkToplevel):
+    """Make several: one text per block, each becomes its own video and project."""
+
+    def __init__(self, app):
+        super().__init__(app)
+        self.app = app
+        self.title("Make several videos")
+        self.resizable(False, False)
+        self.configure(fg_color=MAIN_BG)
+        self.transient(app)
+        card = Card(self)
+        card.pack(fill="both", expand=True, padx=14, pady=14)
+        template = app.var_template.get()
+        ctk.CTkLabel(card, text="Make several videos", font=app.font_title, text_color=TEXT,
+                     ).pack(anchor="w", padx=18, pady=(16, 2))
+        ctk.CTkLabel(card, text="Paste one text or topic for each video, with an empty line "
+                                "between them. They are made one after another, each as its "
+                                "own project, with the " + (f"{template} template."
+                                                           if template != NO_TEMPLATE else
+                                                           "answers New from text last used."),
+                     font=app.font_tiny, text_color=TEXT_DIM, wraplength=560, justify="left",
+                     ).pack(anchor="w", padx=18, pady=(0, 8))
+        self.box = ctk.CTkTextbox(card, width=560, height=260, font=app.font_body,
+                                  corner_radius=4, fg_color=FIELD_BG, text_color=TEXT,
+                                  border_width=0, wrap="word")
+        self.box.pack(padx=18)
+        self.box.bind("<KeyRelease>", self._count)
+        self.status = ctk.CTkLabel(card, text="", font=app.font_tiny, text_color=TEXT_DIM,
+                                   anchor="w")
+        self.status.pack(fill="x", padx=18, pady=(6, 8))
+        buttons = ctk.CTkFrame(card, fg_color="transparent")
+        buttons.pack(fill="x", padx=18, pady=(0, 16))
+        ctk.CTkButton(buttons, text="Start", width=110, height=34, corner_radius=4,
+                      font=app.font_bold, fg_color=ACCENT, hover_color=ACCENT_HOVER,
+                      text_color=ACCENT_TEXT, command=self.start).pack(side="right")
+        ctk.CTkButton(buttons, text="Cancel", width=96, height=34, corner_radius=4,
+                      font=app.font_body, fg_color=FIELD_BG, hover_color=CARD_HOVER,
+                      border_width=1, border_color=FIELD_BORDER, text_color=TEXT,
+                      command=self.destroy).pack(side="right", padx=(0, 8))
+        centre_on(self, app)
+        self.box.focus_set()
+
+    def texts(self):
+        return draft.batch_texts(self.box.get("1.0", "end"))
+
+    def _count(self, _event=None):
+        n = len(self.texts())
+        self.status.configure(text=f"{n} video{'s' if n != 1 else ''}" + (
+            f" (only the first {MAX_BATCH} are made)" if n > MAX_BATCH else ""),
+            text_color=TEXT_DIM)
+
+    def start(self):
+        texts = self.texts()
+        if not texts:
+            self.status.configure(text="Paste some text first.", text_color=ERR_COLOR)
+            return
+        self.destroy()
+        self.app.start_batch(texts[:MAX_BATCH])
+
+
 class CopyDialog(ctk.CTkToplevel):
     """Make a copy of a project in the other shape or with another voice."""
 
@@ -1458,7 +1539,7 @@ class ResultDialog(ctk.CTkToplevel):
     and stop only - the default player is one button away for anything more.
     """
 
-    def __init__(self, app, title, message, paths):
+    def __init__(self, app, title, message, paths, names=None):
         super().__init__(app)
         self.app = app
         self.paths = list(paths)
@@ -1502,7 +1583,8 @@ class ResultDialog(ctk.CTkToplevel):
                      text_color=TEXT).pack(side="left")
         if len(self.paths) > 1:
             # Both versions, side by side in time: switch, play, compare.
-            self.version_names = [f"Version {n}" for n in range(1, len(self.paths) + 1)]
+            self.version_names = (list(names) if names and len(names) == len(self.paths) else
+                                  [f"Version {n}" for n in range(1, len(self.paths) + 1)])
             self.var_version = tk.StringVar(value=self.version_names[0])
             FluentSegmented(info, app, self.version_names, self.var_version,
                             110 * len(self.paths)).pack(anchor="w", padx=18, pady=(6, 6))
@@ -1730,6 +1812,7 @@ class DraftDialog(ctk.CTkToplevel):
         self.app = app
         self.result = None
         self.keep = set()        # dropped sentences the user put back
+        self.style = ""          # a Home template's extra instruction for the writer
         self.confirming = False  # "Use this script" was pressed over the user's own script
         self.busy = False        # a worker is running, or the model is downloading
         self.stop = threading.Event()
@@ -2012,7 +2095,8 @@ class DraftDialog(ctk.CTkToplevel):
         self.mode_hint.pack(fill="x", padx=20, pady=(6, 0))
 
     def audience(self) -> draft.Audience:
-        return draft.Audience(self.var_content.get(), self.var_age.get(), self.var_platform.get())
+        return draft.Audience(self.var_content.get(), self.var_age.get(), self.var_platform.get(),
+                              self.style)
 
     def _on_platform(self, *_args):
         """A platform suggests a length and a shape; both can still be changed."""
@@ -2450,6 +2534,10 @@ class App(ctk.CTk):
         self.ai_backend = s["ai_images_backend"]
         self.var_ai_device = tk.StringVar(value=s["ai_device"])
         self.project = s["project"] or None   # vidgen.projects id of what the script is
+        self.var_intro_on = tk.BooleanVar(value=s["intro_on"])
+        self.var_intro_text = tk.StringVar(value=s["intro_text"])
+        self.var_outro_on = tk.BooleanVar(value=s["outro_on"])
+        self.var_outro_text = tk.StringVar(value=s["outro_text"])
         self.key_tip = s["key_tip"]
         self.ai_gpu, self.ai_fast_seconds = s["ai_gpu"], s["ai_fast_seconds"]
         self.ai_threads_best = s["ai_threads_best"]
@@ -2458,6 +2546,8 @@ class App(ctk.CTk):
         self.var_ai_threads = tk.StringVar(value=str(s["ai_threads"]))
         self.var_ai_speed.trace_add("write", self._ai_speed_picked)
         self._render_overrides = {}   # one render's answer to the slow-PC question
+        self._both = None   # "Make both shapes": {shape, other, first: the first videos}
+        self._batch = None  # "Make several": the texts, how far it is, what was made
         self.var_music_track = tk.StringVar(value="")
         self._tracks = {}
 
@@ -2467,7 +2557,8 @@ class App(ctk.CTk):
                     self.var_ask_save, self.var_check_updates, self.var_versions,
                     self.var_writer_gpu, self.var_voice_online, self.var_auto_cards,
                     self.var_ai_for, self.var_ai_look,
-                    self.var_target,
+                    self.var_target, self.var_intro_on, self.var_intro_text,
+                    self.var_outro_on, self.var_outro_text,
                     *self.caption_vars.values()):
             var.trace_add("write", self._on_setting_changed)
 
@@ -2493,6 +2584,10 @@ class App(ctk.CTk):
             "ai_images_backend": self.ai_backend,
             "ai_device": self.var_ai_device.get(),
             "project": self.project or "",
+            "intro_on": bool(self.var_intro_on.get()),
+            "intro_text": self.var_intro_text.get().strip(),
+            "outro_on": bool(self.var_outro_on.get()),
+            "outro_text": self.var_outro_text.get().strip(),
             "key_tip": self.key_tip,
             "ai_images_speed": self.var_ai_speed.get() if self.ai_speed_chosen else "",
             "ai_threads": self.var_ai_threads.get(),
@@ -2721,21 +2816,33 @@ class App(ctk.CTk):
         self.door_box = ctk.CTkTextbox(door, height=130, font=self.font_body, corner_radius=4,
                                        fg_color=FIELD_BG, text_color=TEXT, border_width=0,
                                        wrap="word")
-        self.door_box.grid(row=2, column=0, columnspan=3, sticky="ew", padx=14, pady=(8, 8))
+        template_bar = ctk.CTkFrame(door, fg_color="transparent")
+        template_bar.grid(row=2, column=0, columnspan=3, sticky="w", padx=16, pady=(10, 0))
+        ctk.CTkLabel(template_bar, text="Template", font=self.font_body, text_color=TEXT_MUTED,
+                     ).pack(side="left", padx=(0, 10))
+        self.var_template = tk.StringVar(value=NO_TEMPLATE)
+        FluentSegmented(template_bar, self, [NO_TEMPLATE, *draft.TEMPLATES], self.var_template,
+                        520).pack(side="left")
+        ctk.CTkButton(template_bar, text="Make several...", width=120, height=30,
+                      corner_radius=4, font=self.font_body, fg_color=FIELD_BG,
+                      hover_color=CARD_HOVER, border_width=1, border_color=FIELD_BORDER,
+                      text_color=TEXT, command=lambda: BatchDialog(self),
+                      ).pack(side="left", padx=(12, 0))
+        self.door_box.grid(row=3, column=0, columnspan=3, sticky="ew", padx=14, pady=(8, 8))
         self.door_status = ctk.CTkLabel(door, text="", font=self.font_tiny, text_color=TEXT_DIM,
                                         anchor="w")
-        self._look_bar(door).grid(row=3, column=0, columnspan=3, sticky="w", padx=16,
+        self._look_bar(door).grid(row=4, column=0, columnspan=3, sticky="w", padx=16,
                                   pady=(0, 10))
-        self.door_status.grid(row=4, column=0, sticky="w", padx=16, pady=(0, 14))
+        self.door_status.grid(row=5, column=0, sticky="w", padx=16, pady=(0, 14))
         self.var_straight = tk.BooleanVar(value=False)
         ctk.CTkCheckBox(door, text="Make it straight away", variable=self.var_straight,
                         font=self.font_body, text_color=TEXT_MUTED, checkbox_width=18,
                         checkbox_height=18, border_width=1,
-                        ).grid(row=4, column=1, sticky="e", padx=(0, 14), pady=(0, 14))
+                        ).grid(row=5, column=1, sticky="e", padx=(0, 14), pady=(0, 14))
         ctk.CTkButton(door, text=f"{self.icon('play')}   Make my video", width=170, height=36,
                       corner_radius=4, font=self.font_bold, fg_color=ACCENT,
                       hover_color=ACCENT_HOVER, text_color=ACCENT_TEXT,
-                      command=self.make_from_text).grid(row=4, column=2, sticky="e",
+                      command=self.make_from_text).grid(row=5, column=2, sticky="e",
                                                         padx=(0, 14), pady=(0, 14))
 
         self.row_aspect = InfoRow(page, self, self.icon("aspect"), "Aspect Ratio")
@@ -2797,7 +2904,18 @@ class App(ctk.CTk):
         self._after_draft = "render" if self.var_straight.get() else "board"
         dialog = DraftDialog(self)
         dialog.prefill(text)
-        dialog.analyse()   # straight to the questions: the text is already here
+        name = self.var_template.get()
+        template = draft.TEMPLATES.get(name)
+        if template is None:
+            dialog.analyse()   # straight to the questions: the text is already here
+            return
+        # A template answers the questions itself; they are still shown, to change.
+        self.var_auto_cards.set(template.cards)
+        self.caption_vars["caption_style"].set(template.caption_style)
+        dialog.style = template.audience.style
+        dialog.var_platform.set(template.audience.platform)   # before the length it presets
+        dialog._apply(draft.Suggestion(template.audience, template.length,
+                                       f"The {name} template. Change any answer if you like."))
 
     def refresh_home(self):
         if not hasattr(self, "row_aspect"):
@@ -3424,6 +3542,23 @@ class App(ctk.CTk):
             option_row.grid(row=next(rows), column=0, sticky="ew", pady=PAD // 2)
             self._segmented(option_row.control, list(allowed), self.caption_vars[key], width)
 
+        self._caption(page, "START AND END CARDS", next(rows))
+        for var_on, var_text, title, subtitle, hint in (
+                (self.var_intro_on, self.var_intro_text, "Channel name card",
+                 "A 2-second card before every video", "Your channel name"),
+                (self.var_outro_on, self.var_outro_text, "End card",
+                 "A 2-second card after every video", "Subscribe for more")):
+            bookend_row = SettingRow(page, self, self.icon("captions"), title, subtitle)
+            bookend_row.grid(row=next(rows), column=0, sticky="ew", pady=PAD // 2)
+            ctk.CTkSwitch(bookend_row.control, text="", width=44, variable=var_on,
+                          onvalue=True, offvalue=False, progress_color=ACCENT,
+                          ).pack(side="left", padx=(0, 10))
+            focus_accent(ctk.CTkEntry(
+                bookend_row.control, textvariable=var_text, width=240, height=32,
+                corner_radius=4, font=self.font_body, fg_color=FIELD_BG,
+                border_color=FIELD_BORDER, text_color=TEXT, placeholder_text=hint,
+            )).pack(side="left")
+
         self._caption(page, "AUDIO", next(rows))
 
         music_row = SettingRow(page, self, self.icon("music"), "Background music",
@@ -3631,7 +3766,7 @@ class App(ctk.CTk):
         """Re-read the Music folder; a browsed file outside it stays listed."""
         if not hasattr(self, "music_menu"):
             return
-        tracks = music_tracks()
+        tracks = {AUTO_LABEL: AUTO_TRACK, **music_tracks()} if bundled_tracks()             else music_tracks()
         if self.music_path and os.path.isfile(self.music_path):
             known = {os.path.normcase(p) for p in tracks.values()}
             if os.path.normcase(self.music_path) not in known:
@@ -3979,6 +4114,12 @@ class App(ctk.CTk):
                 elif kind == "preview":
                     self._preview_done(payload["path"], payload["error"])
                 elif kind == "cancelled":
+                    if self._batch:
+                        self.append_log("📚 The rest of the videos were not made.")
+                        self._batch = None
+                    if self._both:
+                        self._shape_back(self._both)
+                        self._both = None
                     self.last_render = "Cancelled"
                     self.refresh_home()
                 elif kind == "board":
@@ -4000,6 +4141,8 @@ class App(ctk.CTk):
                     self._images_event(payload)
                 elif kind == "project":
                     self._project_thumb_done(payload)
+                elif kind == "batch":
+                    self._batch_event(payload)
                 elif kind == "ai_speed":
                     self.note_picture_time(payload["seconds"], payload["speed"])
                 elif kind == "ai_gpu":
@@ -4022,9 +4165,30 @@ class App(ctk.CTk):
                     self.refresh_home()
                     made = [p for p in (payload.get("paths") or [payload.get("path")])
                             if p and os.path.isfile(p)]
+                    if self._batch:
+                        b = self._batch
+                        self.save_project(videos=made)
+                        if payload["ok"] and made:
+                            b["made"].extend(made)
+                        else:
+                            b["failed"].append((b["at"] + 1, payload["message"]))
+                        b["at"] += 1
+                        self.after(500, self._batch_next)
+                        continue
+                    both, self._both = self._both, None
+                    if both and payload["ok"] and made and not both.get("first"):
+                        # The first shape is done: the other one next, in the same project.
+                        self.save_project(videos=made)
+                        self._both = dict(both, first=made)
+                        self.after(300, self._second_shape)
+                        continue
+                    if both:
+                        made = both.get("first", []) + made
+                        self._shape_back(both)
                     self.save_project(videos=made)
                     if payload["ok"] and made:
-                        ResultDialog(self, payload["title"], payload["message"], made)
+                        ResultDialog(self, payload["title"], payload["message"], made,
+                                     names=both and [both["shape"], both["other"]])
                     else:
                         message = payload["message"]
                         Dialog(self, payload["title"], message, ok=payload["ok"],
@@ -4478,7 +4642,7 @@ class App(ctk.CTk):
         if "music_enabled" in snap:
             self.var_music_enabled.set(bool(snap["music_enabled"]))
         music = snap.get("music_path") or ""
-        self.music_path = music if os.path.isfile(music) else ""
+        self.music_path = music if music == AUTO_TRACK or os.path.isfile(music) else ""
 
         if snap.get("aspect") != (data.get("settings") or {}).get("aspect"):
             data["clip_pos"] = {}   # clip picks belong to the other shape's search
@@ -4521,7 +4685,7 @@ class App(ctk.CTk):
         bar = Card(page)
         bar.grid(row=2, column=0, sticky="ew", pady=(PAD // 2, 0))
         bar.grid_columnconfigure(0, weight=1)
-        self._look_bar(bar).grid(row=0, column=0, columnspan=3, sticky="w", padx=14,
+        self._look_bar(bar).grid(row=0, column=0, columnspan=4, sticky="w", padx=14,
                                  pady=(12, 0))
         self.board_comment = focus_accent(ctk.CTkEntry(
             bar, height=34, corner_radius=4, font=self.font_body, fg_color=FIELD_BG,
@@ -4538,13 +4702,18 @@ class App(ctk.CTk):
             command=lambda: self.revise_script(self.board_comment.get()))
         self.board_change.grid(row=1, column=1, padx=(0, 8), pady=(10, 4))
         ctk.CTkButton(
+            bar, text="Make both shapes", width=140, height=34, corner_radius=4,
+            font=self.font_body, fg_color=FIELD_BG, hover_color=CARD_HOVER, border_width=1,
+            border_color=FIELD_BORDER, text_color=TEXT, command=self.make_both_shapes,
+        ).grid(row=1, column=2, padx=(0, 8), pady=(10, 4))
+        ctk.CTkButton(
             bar, text=f"{self.icon('play')}   Make video", width=150, height=34,
             corner_radius=4, font=self.font_bold, fg_color=ACCENT, hover_color=ACCENT_HOVER,
             text_color=ACCENT_TEXT, command=self.start_render,
-        ).grid(row=1, column=2, padx=(0, 14), pady=(10, 4))
+        ).grid(row=1, column=3, padx=(0, 14), pady=(10, 4))
         self.board_status = ctk.CTkLabel(bar, text="", font=self.font_tiny, text_color=TEXT_DIM,
                                          anchor="w", justify="left", wraplength=820)
-        self.board_status.grid(row=2, column=0, columnspan=3, sticky="w", padx=16, pady=(0, 10))
+        self.board_status.grid(row=2, column=0, columnspan=4, sticky="w", padx=16, pady=(0, 10))
         return page
 
     def board_box(self):
@@ -4734,7 +4903,9 @@ class App(ctk.CTk):
             else:
                 query = scene.visual
                 if query not in self.board_clips:
-                    self.board_clips[query] = ctx["search"].find(query, 6)
+                    # Ranked as the render ranks them, so the card shows the clip it uses.
+                    self.board_clips[query] = footage.rank(ctx["search"].find(query, 6), query,
+                                                           scene.voice or "")
                 clips = self.board_clips[query]
                 if clips:
                     at = self.board_pos.get(query, 0) % len(clips)
@@ -5508,6 +5679,130 @@ class App(ctk.CTk):
             # SND_ASYNC returns at once; the sound plays on its own.
             winsound.PlaySound(path, winsound.SND_FILENAME | winsound.SND_ASYNC)
 
+    # -- make several -------------------------------------------------------
+    def start_batch(self, texts):
+        """Write and make each text in turn; the Log says how far it is."""
+        if self.is_rendering or self._batch:
+            return
+        if not self._has_footage_key() and not imagegen.installed():
+            WelcomeDialog(self)
+            return
+        template = draft.TEMPLATES.get(self.var_template.get())
+        if template:
+            self.var_auto_cards.set(template.cards)
+            self.caption_vars["caption_style"].set(template.caption_style)
+            audience, length = template.audience, template.length
+        else:
+            audience = draft.Audience(self.audience["audience_content"],
+                                      self.audience["audience_age"],
+                                      self.audience["audience_platform"])
+            length = audience.length
+        self._batch = {"texts": texts, "at": 0, "made": [], "failed": [],
+                       "audience": audience, "length": length,
+                       "folder": os.path.dirname(os.path.abspath(
+                           self.var_output.get() or default_output_dir()))}
+        self.append_log(f"📚 Making {len(texts)} videos, one after another.")
+        self.select_page("log")
+        self._batch_next()
+
+    def _batch_next(self):
+        b = self._batch
+        if b is None:
+            return
+        if self.is_rendering:   # the last render is still clearing up
+            self.after(300, self._batch_next)
+            return
+        if b["at"] >= len(b["texts"]):
+            self._batch = None
+            failed = "".join(f"\nVideo {n}: {why}" for n, why in b["failed"])
+            self.append_log(f"📚 Done: {len(b['made'])} of {len(b['texts'])} videos made.")
+            Dialog(self, "Videos made", f"{len(b['made'])} of {len(b['texts'])} videos were "
+                   f"made. They are on the Projects page and in {b['folder']}." + failed,
+                   ok=not b["failed"])
+            if self.current_page == "projects":
+                self.refresh_projects()
+            return
+        self.append_log(f"📝 Video {b['at'] + 1} of {len(b['texts'])}: writing the script...")
+        args = (b["texts"][b["at"]], b["audience"], b["length"], self.settings["padding"],
+                bool(self.var_auto_cards.get()), self.ai_mode(), bool(self.var_writer_gpu.get()))
+        threading.Thread(target=self._batch_write, args=args, daemon=True).start()
+
+    def _batch_write(self, text, audience, length, padding, cards, ai, gpu):
+        """Worker: one script, by the Smart writer if it is there, else Quick split."""
+        try:
+            if self.writer_mode == "Smart writer" and writer.ready()[0]:
+                with writer.Session(gpu=gpu) as session:
+                    result = session.write(text, audience, length, padding, cards, ai)
+            else:
+                result = draft.write(text, audience, length, padding=padding, cards=cards, ai=ai)
+            self._queue.put(("batch", {"result": result}))
+        except Exception as exc:  # noqa: BLE001 - this video is skipped, the rest go on
+            self._queue.put(("batch", {"error": str(exc) or type(exc).__name__}))
+
+    def _batch_event(self, payload):
+        b = self._batch
+        if b is None:
+            return
+        if payload.get("error"):
+            b["failed"].append((b["at"] + 1, payload["error"]))
+            b["at"] += 1
+            self._batch_next()
+            return
+        result = payload["result"]
+        self.project = None   # each video is its own project
+        audience = b["audience"]   # as use_draft keeps it: the music's mood follows it
+        self.audience = {"audience_content": audience.content, "audience_age": audience.age,
+                         "audience_platform": audience.platform}
+        self.script_box.delete("1.0", "end")
+        self.script_box.insert("1.0", result.script)
+        self.var_voice.set(voices.persona(result.voice).label)
+        self.var_aspect.set(result.aspect)
+        self.var_target.set(result.target)
+        name = re.sub(r'[<>:"/\\|?*]+', "", projects.default_title(result.script)).strip(" .")
+        self.var_output.set(os.path.join(b["folder"], (name or "video")[:60] + ".mp4"))
+        self._commit_script()
+        self._slow_ok = result.script.strip()   # nobody is there to answer the slow-PC window
+        if self.ai_slow():
+            self._render_overrides = {"ai_reuse": SLOW_AI_SCENES}
+        self.append_log(f"🎬 Video {b['at'] + 1} of {len(b['texts'])}: making it...")
+        self.start_render()
+        if not self.is_rendering:
+            b["failed"].append((b["at"] + 1, "the video could not be started (see the Log)"))
+            b["at"] += 1
+            self.after(300, self._batch_next)
+
+    # -- both shapes ---------------------------------------------------------
+    def make_both_shapes(self):
+        """This shape, then the other one, saved side by side in the same project."""
+        if self.is_rendering:
+            return
+        shape = self.var_aspect.get()
+        self._both = {"shape": shape, "other": "16:9" if shape == "9:16" else "9:16",
+                      "output": self.var_output.get()}
+        self.start_render()
+        if not self.is_rendering:   # it asked something first, or was cancelled
+            self._both = None
+        else:
+            self._both["output"] = self.var_output.get()   # where the Save window put it
+
+    def _second_shape(self):
+        if self.is_rendering:   # the first render is still clearing up its temp files
+            self.after(300, self._second_shape)
+            return
+        both = self._both
+        base, ext = os.path.splitext(both["first"][0])
+        self.var_aspect.set(both["other"])
+        self.var_output.set(f"{base} ({both['other'].replace(':', 'x')}){ext or '.mp4'}")
+        self.append_log(f"🎬 Now the {both['other']} version.")
+        self.start_render()
+        if not self.is_rendering:
+            self._shape_back(both)
+            self._both = None
+
+    def _shape_back(self, both):
+        self.var_aspect.set(both["shape"])
+        self.var_output.set(both["output"])
+
     # -- render --------------------------------------------------------------
     def start_render(self):
         if self.is_rendering:
@@ -5531,7 +5826,8 @@ class App(ctk.CTk):
 
         # Like a browser download: ask where this one goes, unless told not to.
         overwrite = False
-        if self.var_ask_save.get():
+        if self.var_ask_save.get() and not self._batch \
+                and not (self._both and self._both.get("first")):
             chosen = self._ask_save_path()
             if not chosen:
                 return   # cancelled: no render
@@ -5554,6 +5850,9 @@ class App(ctk.CTk):
                    project_dir=projects.folder(self.project),
                    target_length=pacing.TARGETS.get(settings["target_length"]))
 
+        if cfg["music_path"] == AUTO_TRACK:
+            cfg["music_path"] = draft.pick_track(bundled_tracks(), self.audience[
+                "audience_content"], settings["script"]) or ""
         cfg.update(self._render_overrides)   # "make 2 and reuse", "Fast": this video only
         self._render_overrides = {}
         self._slow_ok = None

@@ -84,12 +84,29 @@ PLATFORMS = {
 }
 DEFAULT_CONTENT, DEFAULT_AGE, DEFAULT_PLATFORM = "Tech and how-to", "Adults", "YouTube Shorts"
 
+# Background music by what the video is about. Bundled tracks are named "<mood> - <title>".
+MOODS = {"Tech and how-to": "calm", "Story and facts": "dramatic", "Motivation": "upbeat",
+         "Business and money": "calm", "Kids and family": "upbeat"}
+
+
+def pick_track(paths, content: str, seed: str = "") -> str | None:
+    """A track whose mood fits ``content``; ``seed`` (the script) picks which, so
+    videos differ but one video always gets the same track. None if there are none."""
+    import os
+    import zlib
+
+    paths = sorted(paths)
+    mood = MOODS.get(content, "calm") + " - "
+    fitting = [p for p in paths if os.path.basename(p).lower().startswith(mood)] or paths
+    return fitting[zlib.crc32(seed.encode("utf-8")) % len(fitting)] if fitting else None
+
 
 @dataclass(frozen=True)
 class Audience:
     content: str = DEFAULT_CONTENT
     age: str = DEFAULT_AGE
     platform: str = DEFAULT_PLATFORM
+    style: str = ""   # a template's extra instruction for the writer ("a top 5 list")
 
     def _content(self) -> Content:
         return CONTENT.get(self.content, CONTENT[DEFAULT_CONTENT])
@@ -119,7 +136,37 @@ class Audience:
 
     @property
     def brief(self) -> str:
-        return " ".join((self._content().brief, self._age().brief, self._platform().brief))
+        return " ".join(part for part in (self._content().brief, self._age().brief,
+                                          self._platform().brief, self.style) if part)
+
+
+def batch_texts(text: str) -> list[str]:
+    """Make several: one video per block of text; blocks are separated by an empty line."""
+    return [" ".join(block.split()) for block in re.split(r"\n\s*\n", text or "")
+            if block.strip()]
+
+
+@dataclass(frozen=True)
+class Template:
+    """A starting point on Home: the answers New from text would ask for, and the look."""
+    audience: Audience
+    length: str
+    cards: bool
+    caption_style: str
+
+
+TEMPLATES = {
+    "Tech tip": Template(Audience("Tech and how-to", "Adults", "YouTube Shorts"), "30 s", True,
+                         "Highlight"),
+    "Story": Template(Audience("Story and facts", "Adults", "YouTube Shorts"), "60 s", False,
+                      "Plain"),
+    "Top 5": Template(Audience("Story and facts", "Adults", "YouTube Shorts",
+                               "Make it a countdown of the five most interesting points: "
+                               "each scene starts with its number, from 5 down to 1."),
+                      "60 s", True, "Highlight"),
+    "Motivation": Template(Audience("Motivation", "Young adults", "TikTok"), "30 s", False,
+                           "One word"),
+}
 
 
 # --- reading the text --------------------------------------------------------------

@@ -374,3 +374,19 @@ def test_download_stops_when_asked(tmp_path):
         footage.download("https://x/clip.mp4", dest, ChunkedSession([b"a"] * 10), stop_after_two)
     assert open(dest, "rb").read() == b"aa"
 
+
+
+def test_rank_moves_a_clip_that_fits_the_scene_up_and_otherwise_keeps_the_order():
+    def clip(n, about):
+        return footage.Candidate("Pexels", str(n), "u", 1, 1, about=about)
+
+    found = [clip(1, "helicopter flying through cloudy sky"),
+             clip(2, "modern wireless mouse on green background")]
+    assert [c.id for c in footage.rank(found, "mouse hover maximize")] == ["2", "1"]
+    # "laptop" counts as "computer"
+    found = [clip(1, "a person is using a keyboard to play music"),
+             clip(2, "person working with pictures on his laptop")]
+    assert footage.rank(found, "computer restart")[0].id == "2"
+    # nothing fits better: the site's order stays
+    found = [clip(1, "a man typing"), clip(2, "a man writing")]
+    assert [c.id for c in footage.rank(found, "sunset sky")] == ["1", "2"]

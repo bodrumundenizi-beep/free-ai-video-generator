@@ -16,7 +16,9 @@ voiceover, and renders a 1080p or 720p MP4 in portrait or landscape.
 - **Projects:** Every video you make is kept on the Projects page. Open it again in the Storyboard, change it, make a copy in the other shape or voice, rename it, search. An unfinished Storyboard is kept as a draft.
 - **Tell it what to change:** Type "make it shorter" or "more exciting start" and the built-in AI rewrites the script; you see what changed before anything is rendered.
 - **Paste any text, get a script:** Paste plain text, say who the video is for and how long it should be, and a built-in open-source AI writes the script. It runs on your PC: no account, no key, nothing sent anywhere.
-- **Automated Stock Footage:** Automatically fetches relevant video clips from Pexels or Pixabay.
+- **Automated Stock Footage:** Automatically fetches relevant video clips from Pexels or Pixabay, and picks the one whose description fits the scene best.
+- **Templates and batches:** Start from Tech tip, Story, Top 5 or Motivation, or make several videos in one go.
+- **Music included:** Eight public-domain tracks, picked by the video's mood.
 - **Two versions in one go:** Optionally render the same script twice with different clips, and keep the better one.
 - **Pick a length:** Fit the video to 15, 30 or 60 seconds, with a live estimate as you type.
 - **Neural AI Voices, on your PC:** 20 natural-sounding male and female voices from an open-source speech model that runs offline. No account, no key, no service that can be switched off.
@@ -59,7 +61,7 @@ You can confirm you have the real file by checking its hash against
 `SHA256SUMS.txt` on the release page:
 
 ```powershell
-Get-FileHash .\AIVideoStudio-4.2.1-setup.exe -Algorithm SHA256
+Get-FileHash .\AIVideoStudio-4.3.0-setup.exe -Algorithm SHA256
 ```
 
 ## The quick way
@@ -71,6 +73,14 @@ Get-FileHash .\AIVideoStudio-4.2.1-setup.exe -Algorithm SHA256
    you don't like, then press **Make video**.
 
 Tick **Make it straight away** on Home to skip step 3.
+
+**Templates:** above the box, pick **Tech tip**, **Story**, **Top 5** or **Motivation**
+and the questions in step 2 come already answered (who it is for, how long, captions,
+cards, the music's mood). **Top 5** also writes the video as a countdown.
+
+**Make several:** paste one text or topic per block, with an empty line between them, and
+press **Start**. Each becomes its own script and video, one after another, and its own card
+on the Projects page. Up to 20 at a time.
 
 ![Home](docs/home.png)
 
@@ -335,11 +345,28 @@ downloaded, so a typo fails straight away.
 
 ### Background music
 
+The app comes with eight public-domain tracks (CC0: free to use in any video, including
+monetised ones, no credit needed). With the track set to **Auto (fits the video)**, the app
+picks one by what the video is about: calm for tech and money, upbeat for motivation and
+kids, dramatic for stories. Music is on by default for new installs.
+
 Turn on **Settings → Background music** and pick a track. It plays at about 25%
 volume in the pauses and dips to about 9% whenever the voice is speaking, easing
 down just before each line and back up after. Drop tracks into
 `Documents\AI Video Studio\Music` (**Open folder**), or **Browse** for any audio
 file.
+
+### Start and end cards
+
+**Settings → Start and end cards**: a 2-second card with your channel name before every
+video, and one after it (default "Subscribe for more"). Both are off until you turn them on.
+They are added when the video is made, not written into your script.
+
+### Both shapes at once
+
+**Make both shapes** on the Storyboard makes the video in its shape, then in the other one
+(9:16 and 16:9), saved side by side as `name.mp4` and `name (16x9).mp4` and kept in the same
+project. AI pictures are made again for the second shape.
 
 ### Voices
 
@@ -534,7 +561,7 @@ python -m pytest
 python packaging/make_icon.py
 python packaging/fetch_llama.py
 pyinstaller --noconfirm --clean packaging/ai_video_studio.spec
-"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion=4.2.1 packaging\installer.iss
+"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion=4.3.0 packaging\installer.iss
 ```
 
 Releases are built automatically by GitHub Actions when a `v*` tag is pushed.

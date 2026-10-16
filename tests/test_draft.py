@@ -218,3 +218,32 @@ def test_unknown_audience_names_fall_back_to_the_defaults():
     audience = Audience("Nope", "Nope", "Nope")
     assert audience.voice == Audience().voice and audience.aspect == Audience().aspect
     assert draft.write(TEXT, audience, "not a length").length == Audience().length
+
+
+def test_music_is_picked_by_mood_and_the_same_script_gets_the_same_track():
+    tracks = ["m/calm - Lofi.mp3", "m/calm - Bossa.mp3", "m/upbeat - Funk.mp3",
+              "m/dramatic - Field.mp3"]
+    assert draft.pick_track(tracks, "Motivation") == "m/upbeat - Funk.mp3"
+    assert draft.pick_track(tracks, "Story and facts") == "m/dramatic - Field.mp3"
+    calm = draft.pick_track(tracks, "Tech and how-to", "script one")
+    assert "calm - " in calm and calm == draft.pick_track(tracks, "Tech and how-to", "script one")
+    assert draft.pick_track(["m/other.mp3"], "Motivation") == "m/other.mp3"   # no mood: any
+    assert draft.pick_track([], "Motivation") is None
+
+
+def test_every_template_holds_answers_the_app_knows():
+    from vidgen import captions
+
+    for name, t in draft.TEMPLATES.items():
+        a = t.audience
+        assert a.content in draft.CONTENT and a.age in draft.AGES, name
+        assert a.platform in draft.PLATFORMS and t.length in draft.LENGTHS, name
+        assert t.caption_style in captions.STYLES, name
+    assert "countdown" in draft.TEMPLATES["Top 5"].audience.brief
+    assert "countdown" not in draft.Audience().brief
+
+
+def test_make_several_splits_on_empty_lines():
+    text = "First topic\nstill first.\n\n  \nSecond topic.\n\n\nThird."
+    assert draft.batch_texts(text) == ["First topic still first.", "Second topic.", "Third."]
+    assert draft.batch_texts("   \n\n") == []

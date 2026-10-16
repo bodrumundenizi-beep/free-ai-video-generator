@@ -92,6 +92,43 @@ def query_variants(query: str) -> list[str]:
     return unique
 
 
+# Words the sites use for the same thing ("a man using a laptop" fits "computer").
+_SAME = {w: group[0] for group in (
+    ("computer", "laptop", "pc", "desktop", "monitor", "macbook", "imac", "notebook"),
+    ("phone", "smartphone", "cellphone", "mobile", "iphone"),
+    ("typing", "type", "keyboard", "keys", "key", "typist"),
+    ("screen", "display"),
+    ("photo", "picture", "pictures", "photograph", "photos", "camera"),
+    ("text", "texting", "message", "chat"),
+    ("woman", "businesswoman", "girl", "female", "lady"),
+    ("man", "businessman", "guy", "male"),
+    ("person", "people", "someone", "user"),
+    ("office", "work", "working", "workspace", "desk"),
+) for w in group}
+
+
+def _things(text: str) -> set[str]:
+    words = re.findall(r"[a-z]+", (text or "").lower())
+    return {_SAME.get(w, _SAME.get(w.rstrip("s"), w.rstrip("s") if len(w) > 3 else w))
+            for w in words if w not in STOPWORDS and len(w) > 1}
+
+
+def rank(candidates: list[Candidate], visual: str, line: str = "") -> list[Candidate]:
+    """``candidates`` with the ones whose description fits the scene first.
+
+    What the site says a clip shows (``about``) is matched against the search words
+    (counting double) and the spoken line. Ties keep the site's own order, which is
+    usually good: this only moves a clearly better match up.
+    """
+    wanted, said = _things(visual), _things(line)
+
+    def score(candidate):
+        shown = _things(candidate.about)
+        return 2 * len(shown & wanted) + len(shown & said - wanted)
+
+    return sorted(candidates, key=score, reverse=True)  # sorted() is stable
+
+
 def choose_file(files, target_w: int, target_h: int):
     """The smallest rendition that still fills the frame, else the largest.
 

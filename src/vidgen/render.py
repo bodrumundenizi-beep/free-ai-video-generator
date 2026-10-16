@@ -30,7 +30,7 @@ from dataclasses import dataclass, field
 from . import footage, paths
 from .formats import resolve_target
 from .paths import next_free_path  # noqa: F401 - re-exported for the window and tests
-from .script import parse_script
+from .script import Scene, parse_script
 from .timeline import boundaries, shot_spans
 from .voice import generate_voiceover_timed
 
@@ -38,6 +38,7 @@ LONG_SCENE = 6.0  # a voice longer than this gets two clips, cut at the middle
 MIN_SCENE = 0.5
 DEFAULT_PADDING = 0.25
 SPARE_CANDIDATES = 2  # extra search results to fall back on if a download fails
+RANKED = 6  # search results compared by description (measured 2026-10-16: 6 of 7 bad fixed)
 
 # Scratch space for a render.  Never the working directory: once installed, that
 # is the (possibly read-only) install folder, not somewhere we may write.
@@ -220,6 +221,36 @@ def render_worker(cfg: dict, ui: UiBridge):
         ui.busy(False)
 
 
+BOOKEND = 2.0  # seconds of the channel-name card before the video, and the end card after
+
+
+def with_bookends(scenes, cfg, work_dir, size):
+    """The scenes with the intro and end cards from Settings added, if they are on.
+
+    They are scenes of their own, on a plain dark background, so they need no search
+    and no AI picture, and the script is left as the user wrote it. Choices made in the
+    Storyboard are by scene number, so they move up one when an intro comes first.
+    """
+    intro = (cfg.get("intro_text") or "").strip() if cfg.get("intro_on") else ""
+    outro = (cfg.get("outro_text") or "").strip() if cfg.get("outro_on") else ""
+    if not (intro or outro):
+        return scenes, cfg
+    from PIL import Image
+
+    background = os.path.join(work_dir, "bookend.png")
+    shade = Image.linear_gradient("L").resize(size).point(lambda v: 14 + v * 30 // 255)
+    Image.merge("RGB", (shade, shade, shade.point(lambda v: v + 12))).save(background)
+
+    def card(text):
+        return Scene(visual=f'local: "{background}"', duration=BOOKEND, card=text)
+
+    scenes = ([card(intro)] if intro else []) + list(scenes) + ([card(outro)] if outro else [])
+    if intro:
+        cfg = dict(cfg, **{key: {i + 1: v for i, v in (cfg.get(key) or {}).items()}
+                           for key in ("ai_pictures", "clip_choices")})
+    return scenes, cfg
+
+
 def _render(cfg, ui, work_dir, job):
     save_path = (cfg.get("output_path") or "").strip()
     script_text = (cfg.get("script") or "").strip()
@@ -240,6 +271,7 @@ def _render(cfg, ui, work_dir, job):
     scenes = parse_script(script_text, warnings)
     for warning in warnings:
         ui.log(f"⚠️ {warning}")
+    scenes, cfg = with_bookends(scenes, cfg, work_dir, resolve_target(ratio, quality)[:2])
 
     save_path = os.path.abspath(save_path)
     # Relative local: files are looked up beside where the user asked to save,
@@ -783,8 +815,10 @@ def _acquire_stock(plan, index, search, work_dir, ui, credits, providers_used,
     wanted = plan.parts
     picked = [c for c in (preferred or []) if c.key not in search.used]
     seen = {c.key for c in picked}
-    candidates = picked + [c for c in search.find(query, wanted + SPARE_CANDIDATES)
-                           if c.key not in seen]
+    # The top results, the one whose description fits the scene best first.
+    found = footage.rank(search.find(query, max(RANKED, wanted + SPARE_CANDIDATES)), query,
+                         plan.scene.voice or "")
+    candidates = picked + [c for c in found if c.key not in seen]
     for candidate in candidates:
         if len(plan.sources) == wanted:
             break

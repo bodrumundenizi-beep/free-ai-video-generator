@@ -113,3 +113,20 @@ def test_temp_folder_is_removed_after_success_and_after_cancel(job, monkeypatch,
     cancel.set()
     run(dict(job, cancel=cancel))
     assert os.listdir(root) == []
+
+
+def test_intro_and_end_cards_are_scenes_of_their_own_and_storyboard_choices_move_up(tmp_path):
+    from vidgen.script import parse_script
+
+    scenes = parse_script("Visual: city\nVoice: One.\n\nVisual: ai: a cat\nVoice: Two.")
+    cfg = {"intro_on": True, "intro_text": "My Channel", "outro_on": True,
+           "outro_text": "Subscribe for more", "ai_pictures": {1: "cat.png"},
+           "clip_choices": {0: ["clip"]}}
+    out, new = render.with_bookends(scenes, cfg, str(tmp_path), (108, 192))
+    assert [s.card for s in out] == ["My Channel", None, None, "Subscribe for more"]
+    assert out[0].is_local and out[0].duration == render.BOOKEND and out[0].voice is None
+    assert new["ai_pictures"] == {2: "cat.png"} and new["clip_choices"] == {1: ["clip"]}
+    assert (tmp_path / "bookend.png").is_file()
+    # off: nothing changes
+    same, cfg2 = render.with_bookends(scenes, {"intro_text": "x"}, str(tmp_path), (108, 192))
+    assert same is scenes and cfg2 == {"intro_text": "x"}
