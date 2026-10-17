@@ -117,10 +117,35 @@ def fit_length(clip, length: float):
     return clip.subclipped(0, length)
 
 
-def framed_shot(source, length: float, size, zoom=(1.0, 1.0)):
+FOCUS_PULL = 0.8   # how far the frame moves from the middle toward the busy part
+
+
+def busiest_point(frames) -> tuple[float, float]:
+    """Where the detail is in these frames, as fractions of width and height (0.5 = middle).
+
+    Edges (a face, hands, a screen) weigh more than flat sky or wall; no face model needed.
+    """
+    from PIL import Image
+
+    weight = None
+    for frame in frames:
+        small = Image.fromarray(np.asarray(frame)).convert("L").resize((64, 64))
+        grey = np.asarray(small, dtype=np.float32)
+        edges = np.abs(np.diff(grey, axis=0))[:, :-1] + np.abs(np.diff(grey, axis=1))[:-1, :]
+        weight = edges if weight is None else weight + edges
+    if weight is None or weight.sum() <= 0:
+        return 0.5, 0.5
+    weight = weight ** 2
+    ys, xs = np.mgrid[0:weight.shape[0], 0:weight.shape[1]]
+    return (float((xs * weight).sum() / weight.sum() + 0.5) / weight.shape[1],
+            float((ys * weight).sum() / weight.sum() + 0.5) / weight.shape[0])
+
+
+def framed_shot(source, length: float, size, zoom=(1.0, 1.0), focus=None):
     """``source`` looped or trimmed to ``length``, filling ``size``, zooming.
 
-    The centre crop and the Ken Burns zoom are one PIL resample per frame.
+    The crop and the Ken Burns zoom are one PIL resample per frame. ``focus`` (fractions,
+    from busiest_point) moves the crop toward the busy part; None keeps it in the middle.
     """
     from moviepy import VideoClip
 
@@ -137,6 +162,9 @@ def framed_shot(source, length: float, size, zoom=(1.0, 1.0)):
         box_w = float(source_w)
         box_h = box_w / aspect
     centre_x, centre_y = source_w / 2, source_h / 2
+    if focus is not None:
+        centre_x += (focus[0] * source_w - centre_x) * FOCUS_PULL
+        centre_y += (focus[1] * source_h - centre_y) * FOCUS_PULL
     z_start, z_end = zoom
     passthrough = z_start == z_end == 1.0 and (source_w, source_h) == (target_w, target_h)
 
@@ -146,7 +174,9 @@ def framed_shot(source, length: float, size, zoom=(1.0, 1.0)):
             return frame
         scale = z_start + (z_end - z_start) * smoothstep(t / length if length else 0.0)
         half_w, half_h = box_w / scale / 2, box_h / scale / 2
-        crop = (centre_x - half_w, centre_y - half_h, centre_x + half_w, centre_y + half_h)
+        x = min(max(centre_x, half_w), source_w - half_w)   # the crop stays on the picture
+        y = min(max(centre_y, half_h), source_h - half_h)
+        crop = (x - half_w, y - half_h, x + half_w, y + half_h)
         return np.asarray(_to_image(frame).resize((target_w, target_h), _RESAMPLE, box=crop))
 
     return VideoClip(frame_at, duration=length)

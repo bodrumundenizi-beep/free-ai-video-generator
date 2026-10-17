@@ -18,6 +18,7 @@ voiceover, and renders a 1080p or 720p MP4 in portrait or landscape.
 - **Paste any text, get a script:** Paste plain text, say who the video is for and how long it should be, and a built-in open-source AI writes the script. It runs on your PC: no account, no key, nothing sent anywhere.
 - **Automated Stock Footage:** Automatically fetches relevant video clips from Pexels or Pixabay, and picks the one whose description fits the scene best.
 - **Templates and batches:** Start from Tech tip, Story, Top 5 or Motivation, or make several videos in one go.
+- **Moving AI pictures (beta):** With a graphics card, an AI picture can become a short moving clip.
 - **Music included:** Eight public-domain tracks, picked by the video's mood.
 - **Two versions in one go:** Optionally render the same script twice with different clips, and keep the better one.
 - **Pick a length:** Fit the video to 15, 30 or 60 seconds, with a live estimate as you type.
@@ -28,6 +29,9 @@ voiceover, and renders a 1080p or 720p MP4 in portrait or landscape.
 - **Windows 11 Fluent interface:** Settings-app style segmented controls, smooth page transitions, dark and light themes with Mica, and live render progress.
 - **Auto-captions:** The spoken words are burned into the video, a few at a time, with the word being said highlighted. An `.srt` subtitle file is saved too.
 - **Watch it straight away:** When a render finishes, the video plays inside the app, with sound.
+- **Ready to post:** Every video gets a thumbnail and a suggested title, description and tags, with Copy buttons. Nothing is posted for you.
+- **Other languages:** Make the same video in Spanish, French, Italian, Portuguese or Hindi.
+- **Sound effects:** A soft whoosh on each cut and a pop when a card appears, made by the app itself.
 - **Portrait or landscape:** 9:16 for Shorts and TikTok, 16:9 for YouTube, at 1080p or 720p.
 - **End-to-End Automation:** Fetches, generates, matches duration, and stitches everything into a final `.mp4`.
 
@@ -61,7 +65,7 @@ You can confirm you have the real file by checking its hash against
 `SHA256SUMS.txt` on the release page:
 
 ```powershell
-Get-FileHash .\AIVideoStudio-4.3.0-setup.exe -Algorithm SHA256
+Get-FileHash .\AIVideoStudio-4.4.0-setup.exe -Algorithm SHA256
 ```
 
 ## The quick way
@@ -98,6 +102,14 @@ there is written into the script, and the other way round.
 | The search words or picture description | Edit in place; the picture reloads. |
 | The card | Add, change or remove a `Win + V` style card. |
 | Up, Down, Add, Delete | Change the order, add a scene, remove one. |
+
+**Undo** and **Redo** (or Ctrl+Z and Ctrl+Y) step back and forward through up to 50
+changes made in the Storyboard, including a "Change it" rewrite.
+
+**Timeline:** under the cards, one block per scene, as wide as the scene is long. Drag a
+block's right edge to set how long that scene lasts (half-second steps, 1 to 30 s; it turns
+yellow if the line no longer fits), double-click it to go back to automatic, click it to
+jump to its card.
 
 ### Tell it what to change
 
@@ -167,6 +179,11 @@ Keys are stored in plain text in `%APPDATA%\AIVideoStudio\settings.json`.
 
 You don't have to write the script format by hand. Paste your text on **Home**, or press
 **New from text** on the Script page:
+
+**An idea works too.** Type a short request instead of a text, such as "write a scary story
+about being followed at night" or "make a video about black holes", and the Smart writer
+writes it from scratch: for a story, something happens in every scene (a start, rising
+tension, a turn, an ending). A pasted text is rewritten as before.
 
 1. **Paste your text** and press **Analyse**. Any plain text works: notes, an
    article, a list.
@@ -328,6 +345,18 @@ clip), or **Processor** only.
 
 You are responsible for what you ask it to draw and for how you use the pictures.
 
+### Moving pictures (beta, graphics card only)
+
+In the **AI images** tab, **Make AI pictures move** downloads Wan 2.2 TI2V 5B (8.5 GB, Apache
+2.0), and **Which pictures move** turns an AI picture into a short moving clip instead of a
+still with a slow zoom: the first AI scene of each video, or every AI scene. The picture is the
+clip's first frame, so the scene still shows what you saw in the Storyboard; the clip plays
+forward and then backward, so it fills a longer scene without a jump.
+
+Measured on an RTX 4060 (8 GB): **about 1.5 minutes per clip**, 6.9 GB of graphics memory.
+It needs a graphics card: on the processor it stays off, and the scene keeps its still
+picture. If a clip can't be made, the still picture is used and the video is made anyway.
+
 ### Your own footage and images
 
 Start a `Visual:` with `local:` to use a file instead of stock footage — a screen
@@ -355,6 +384,43 @@ volume in the pauses and dips to about 9% whenever the voice is speaking, easing
 down just before each line and back up after. Drop tracks into
 `Documents\AI Video Studio\Music` (**Open folder**), or **Browse** for any audio
 file.
+
+### Thumbnail, title, description and tags
+
+After every render the app saves `name.thumbnail.jpg` beside the video: the sharpest
+frame from a pause between lines (so no caption is in the way) with the title across it,
+in the video's shape (720x1280 or 1280x720). The Render complete window has **Open
+thumbnail**, and the project card shows it.
+
+The same window shows a title, a short description and tags for posting, written by the
+Smart writer from what the video says, each with a **Copy** button. They are also saved as
+`name.upload.txt`. Without the Smart writer the first line is the title and the search
+words are the tags. Nothing is uploaded or posted anywhere.
+
+### Other languages
+
+**Make it in another language** (on a project card, and in the window that opens when a video
+is finished) makes a copy of the video in **Spanish, French, Italian, Portuguese (Brazil)** or
+**Hindi**. The Smart writer translates the lines; the pictures, clips and cards stay; the voice
+and the captions change to that language. The copy opens in the Storyboard first, because the
+Smart writer is a small AI: its translations are understandable but have mistakes, so read the
+lines (or have someone who speaks the language read them) before making the video. Each
+language has its own voices in the voice list (Spanish, Italian, Portuguese and Hindi a female
+and a male one, French a female one).
+
+### Cuts on the beat and smart framing
+
+**Settings → Cuts on the beat, smart framing** (on by default). With music on, each change
+of scene moves to the nearest beat of the track (at most a quarter of a second, and never
+before the line has been said). And when a wide clip is cut down for a Short, or the slow
+zoom moves in, the frame heads toward the part of the picture with the most detail (a
+person, hands, a screen) instead of always the middle.
+
+### Sound effects
+
+**Settings → Sound effects** (on by default): a soft whoosh just before each cut and a short
+pop when a card appears, quiet under the voice. The app makes these sounds itself, so there
+is nothing to download and no licence to worry about.
 
 ### Start and end cards
 
@@ -464,6 +530,8 @@ Output size follows both settings: 9:16 at 1080p is 1080×1920, 16:9 at 720p is
 | Rendered video | Wherever you choose in the Save window; it opens in your Videos folder the first time. An existing video is only replaced if you confirm it |
 | Footage credits | `<video name>.credits.txt`, next to the video |
 | Subtitles | `<video name>.srt`, next to the video (when captions are on) |
+| Thumbnail | `<video name>.thumbnail.jpg`, next to the video |
+| Title, description, tags | `<video name>.upload.txt`, next to the video |
 | Your music | `Documents\AI Video Studio\Music` |
 | Log file | `%APPDATA%\AIVideoStudio\logs\app.log`. It stays on your PC |
 | Search cache | `%APPDATA%\AIVideoStudio\cache`, kept for 24 hours (Pixabay's terms require it) |
@@ -561,7 +629,7 @@ python -m pytest
 python packaging/make_icon.py
 python packaging/fetch_llama.py
 pyinstaller --noconfirm --clean packaging/ai_video_studio.spec
-"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion=4.3.0 packaging\installer.iss
+"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion=4.4.0 packaging\installer.iss
 ```
 
 Releases are built automatically by GitHub Actions when a `v*` tag is pushed.

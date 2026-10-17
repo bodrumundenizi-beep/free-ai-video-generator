@@ -113,3 +113,17 @@ file names start with the mood the app uses to pick them.
 | `dramatic - The Field of Dreams.mp3` | The Field Of Dreams | pauliuw | https://opengameart.org/content/the-field-of-dreams |
 | `dramatic - Next to You.mp3` | Next to You | Joth | https://opengameart.org/content/next-to-you |
 | `dramatic - Snowfall.mp3` | Snowfall (looped version) | Kistol | https://opengameart.org/content/snowfall |
+
+## Moving pictures (optional, beta): Wan 2.2 TI2V 5B and umt5-xxl (Apache 2.0)
+
+"Moving pictures" in the AI images tab downloads three files, each pinned to a commit and
+checked by SHA-256, and runs them with the same stable-diffusion.cpp program (MIT):
+
+| File | What | Licence | Source |
+|---|---|---|---|
+| `wan2.2-ti2v-5b-Q4_K_M.gguf` | Wan 2.2 TI2V 5B by Wan-AI (Alibaba), GGUF by QuantStack | Apache 2.0 | https://huggingface.co/QuantStack/Wan2.2-TI2V-5B-GGUF |
+| `wan2.2-vae.safetensors` | Wan 2.2 video decoder | Apache 2.0 | same |
+| `taew2_2.safetensors` | Wan 2.2 tiny decoder (TAEHV) by Ollin Boer Bohan | MIT | https://github.com/madebyollin/taehv |
+| `umt5-xxl-encoder-Q4_K_M.gguf` | umt5-xxl text encoder by Google, GGUF by city96 | Apache 2.0 | https://huggingface.co/city96/umt5-xxl-encoder-gguf |
+
+Nothing of these is bundled in the installer.

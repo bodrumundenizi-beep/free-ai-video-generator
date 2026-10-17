@@ -436,3 +436,62 @@ def test_parse_scenes_swaps_unfilmable_search_words():
     scenes = writer.parse_scenes(content)
     assert scenes[0].visual in writer._COMPUTER_SHOTS
     assert scenes[1].visual == "river bank"
+
+
+def test_upload_text_is_cleaned_up():
+    out = writer.tidy_upload('  "The hidden   clipboard"  ', "Line one.\n Line two.",
+                             ["#Windows", "windows", "Clipboard Tips", ""])
+    assert out == {"title": "The hidden clipboard", "description": "Line one. Line two.",
+                   "tags": ["windows", "clipboard tips"]}
+    long = writer.tidy_upload("word " * 30, "", "not a list")
+    assert len(long["title"]) <= 70 and long["tags"] == []
+
+
+def test_upload_text_without_the_smart_writer():
+    script = "Visual: keyboard\nVoice: Press Windows and V.\n\nVisual: ai: a clipboard\nVoice: It is all there."
+    out = writer.upload_fallback(script)
+    assert out["title"] == "Press Windows and V." and out["tags"] == ["keyboard"]
+    assert "Tags:\nkeyboard" in writer.upload_file_text(out)
+
+
+def test_upload_text_from_the_model():
+    answer = json.dumps({"title": "Your clipboard remembers", "description": "How to see it.",
+                         "tags": ["windows", "clipboard"]})
+    with session(FakeModel([answer])) as s:
+        out = s.upload_text("Visual: keyboard\nVoice: Press Windows and V.")
+    assert out["title"] == "Your clipboard remembers" and out["tags"] == ["windows", "clipboard"]
+
+
+def test_an_all_lower_case_answer_gets_its_capitals_back():
+    out = writer.tidy_upload("use windows v to see it", "press it. then pin things.", [])
+    assert out["title"] == "Use windows v to see it"
+    assert out["description"] == "Press it. Then pin things."
+    assert writer.tidy_upload("The iPhone trick", "Keep iOS.", [])["description"] == "Keep iOS."
+
+
+def test_a_translation_comes_back_line_for_line():
+    answer = json.dumps({"lines": ["Presiona Windows y V.", "Fíjalo."]})
+    with session(FakeModel([answer])) as s:
+        assert s.translate(["Press Windows and V.", "Pin it."], "Spanish") == [
+            "Presiona Windows y V.", "Fíjalo."]
+    with session(FakeModel([json.dumps({"lines": ["Uno.", ""]})])) as s:
+        with pytest.raises(WriterError):
+            s.translate(["One.", "Two."], "Spanish")
+
+
+def test_closing_the_app_stops_every_running_model():
+    model = FakeModel([json.dumps({"lines": ["Uno."]})])
+    s = session(model)
+    s.start()
+    assert model.killed == 0
+    writer.close_all()
+    assert model.killed == 1 and not writer._LIVE
+
+
+def test_a_short_request_is_an_idea_and_a_story_idea_asks_for_events():
+    assert writer.is_idea("write a story being followed at night")
+    assert writer.is_idea("Make a video about black holes")
+    assert not writer.is_idea(TEXT)
+    story = writer.build_prompt(draft.Audience(), 80, idea="write a story being followed at night")
+    assert "Something happens in every scene" in story and "Use only facts" not in story
+    assert "Use only facts" in writer.build_prompt(draft.Audience(), 80)

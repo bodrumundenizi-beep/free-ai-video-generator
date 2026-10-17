@@ -5,7 +5,7 @@ Run:  python packaging/fetch_espeak.py
 espeak-ng's own Windows installer is downloaded from its GitHub releases and
 is only unpacked if its SHA-256 matches the one pinned below. It is unpacked
 with Windows' msiexec (an "administrative install", which only copies files
-and needs no rights), and the English data is kept: the app speaks English.
+and needs no rights), and only the data of the languages the app speaks is kept.
 
 espeak-ng is GPL-3.0 software. The app runs it as a separate program and ships
 its licence beside it; see THIRD-PARTY-LICENSES.md.
@@ -34,13 +34,15 @@ DEST = os.path.join(ROOT, "vendor", "espeak")
 STAMP = os.path.join(DEST, ".version")
 EXE = "espeak-ng.exe"
 DATA = "espeak-ng-data"
+# English, and the languages a video can be translated into (vidgen.voices.LANGUAGES).
+LANGS = ("en", "es", "fr", "it", "pt", "hi")
 
 
 def needed(relative: str) -> bool:
     """Whether the app needs this file of espeak-ng (path relative to its install folder).
 
-    The program, its library, the shared sound tables and the English dictionary
-    and voices. The dictionaries of the other hundred languages are left out.
+    The program, its library, the shared sound tables, and the dictionaries and voices of
+    LANGS. The dictionaries of the other ninety-odd languages are left out.
     """
     parts = relative.replace("\\", "/").split("/")
     if len(parts) == 1:
@@ -48,9 +50,9 @@ def needed(relative: str) -> bool:
     if parts[0] != DATA:
         return False
     if len(parts) == 2:
-        return not parts[1].endswith("_dict") or parts[1] == "en_dict"
+        return not parts[1].endswith("_dict") or parts[1][:-5] in LANGS
     if parts[1] == "lang":
-        return parts[2:3] == ["gmw"] and parts[-1].startswith("en")
+        return parts[-1].lower().split("-")[0] in LANGS
     return parts[1] == "voices"
 
 

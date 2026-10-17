@@ -8,22 +8,42 @@ from vidgen.voice import (
 
 # --- catalog -------------------------------------------------------------------
 
-def test_twenty_voices_sixteen_studio_four_classic():
-    assert len(voices.CATALOG) == 20
-    assert sum(p.enhanced for p in voices.CATALOG) == 16
+def test_thirty_voices_sixteen_english_nine_other_languages_my_voice_four_classic():
+    assert len(voices.CATALOG) == 30
+    assert sum(p.enhanced for p in voices.CATALOG) == 26
+    assert sum(p.language != "English" for p in voices.CATALOG) == 9
     classic = [p for p in voices.CATALOG if not p.enhanced]
     assert all("(low quality)" in p.label for p in classic)
 
 
 def test_ids_and_labels_are_unique():
-    assert len({p.id for p in voices.CATALOG}) == 20
-    assert len(set(voices.labels())) == 20
+    assert len({p.id for p in voices.CATALOG}) == 30
+    assert len({p.label for p in voices.CATALOG}) == 30
+
+
+def test_my_voice_is_only_listed_once_it_is_made(monkeypatch):
+    from vidgen import myvoice
+
+    monkeypatch.setattr(myvoice, "ready", lambda: False)
+    assert voices.persona(voices.MY_VOICE).label not in voices.labels()
+    monkeypatch.setattr(myvoice, "ready", lambda: True)
+    assert voices.persona(voices.MY_VOICE).label in voices.labels()
 
 
 def test_every_voice_has_an_offline_speaker_and_an_online_one():
     for p in voices.CATALOG:
         assert p.voice.endswith("Neural")
-        assert all(name[:3] in ("am_", "af_", "bm_", "bf_") for name in p.local.split("+")), p.id
+        assert all(name[2:3] == "_" and name[:1] in "abefhip" and name[1:2] in "fm"
+                   for name in p.local.split("+")), p.id
+
+
+def test_a_translated_video_keeps_the_kind_of_voice_it_had():
+    assert voices.LANGUAGES == ("Spanish", "French", "Italian", "Portuguese (Brazil)", "Hindi")
+    male = voices.persona("en-US-ChristopherNeural")
+    assert voices.for_language("Spanish", male).id == "es-alejandro"
+    assert voices.for_language("Spanish", voices.persona("en-US-AriaNeural")).id == "es-lucia"
+    assert voices.for_language("French", male).id == "fr-camille"   # the only French voice
+    assert voices.for_language("Hindi").language == "Hindi"
 
 
 def test_classic_voices_listed_last():

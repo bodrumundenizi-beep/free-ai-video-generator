@@ -514,11 +514,15 @@ def _make_version(cfg, ui, work_dir, job, plans, search, choices, version, save_
     #    version gets different clips without being asked to.
     began = time.perf_counter()
     credits, providers_used = [], set()
+    ai_seen = 0
     for i, plan in enumerate(plans):
         _check(stop)
         if plan.scene.is_ai and not _ai_picture(plan, i, cfg, ratio, work_dir, ui, version,
                                                 search, stop):
             plan.scene = _stock_instead(plan.scene)
+        if plan.scene.is_ai:
+            _moving_picture(plan, i, cfg, ratio, work_dir, ui, version, ai_seen, stop)
+            ai_seen += 1
         if plan.scene.is_local:
             ui.log(f"📁 Scene {i + 1}: {os.path.basename(plan.sources[0].path)}")
         elif plan.scene.is_ai:
@@ -531,7 +535,19 @@ def _make_version(cfg, ui, work_dir, job, plans, search, choices, version, save_
         ui.progress(base_progress + span * 0.35 * (i + 1) / total_scenes)
     spent["footage"] += time.perf_counter() - began
 
-    # 4. Timeline.
+    # 4. Timeline. With music, the cuts between scenes move onto its beats.
+    music_file = (cfg.get("music_path") or "").strip()
+    if cfg.get("smart_motion") and cfg.get("music_enabled") and os.path.isfile(music_file):
+        try:
+            hits = audio.beats(music_file, sum(p.duration for p in plans))
+            snapped = audio.snap_cuts([p.duration for p in plans],
+                                      [p.voice_len + 0.05 for p in plans], hits)
+            moved = sum(abs(a - p.duration) > 0.01 for a, p in zip(snapped, plans))
+            for plan, length in zip(plans, snapped):
+                plan.duration = length
+            ui.log(f"🥁 Cuts on the beat: {moved} of {max(len(plans) - 1, 0)}")
+        except Exception as exc:  # noqa: BLE001 - the cuts just stay where they were
+            ui.log(f"⚠️ Couldn't find the music's beats ({exc}).")
     durations = [p.duration for p in plans]
     starts = boundaries(durations)
     total = starts[-1]
@@ -552,7 +568,16 @@ def _make_version(cfg, ui, work_dir, job, plans, search, choices, version, save_
             movement = motion.measure_motion(base)
         zoom = motion.zoom_range(plan.scene.zoom, source.kind, movement, flip)
         flip = not flip
-        clip = motion.framed_shot(base, shot.length, (target_w, target_h), zoom)
+        focus = None
+        if cfg.get("smart_motion"):
+            try:   # a few frames of the clip say where its detail is
+                length = base.duration or 0.0
+                focus = motion.busiest_point(
+                    [base.get_frame(length * k) for k in (0.2, 0.5, 0.8)] if length
+                    else [base.get_frame(0)])
+            except Exception:  # noqa: BLE001 - the middle, as before
+                focus = None
+        clip = motion.framed_shot(base, shot.length, (target_w, target_h), zoom, focus)
         if shot.fade_in > 0:
             clip = clip.with_effects([vfx.CrossFadeIn(shot.fade_in)])
         layers.append(clip.with_start(shot.start))
@@ -620,6 +645,17 @@ def _make_version(cfg, ui, work_dir, job, plans, search, choices, version, save_
     elif cfg.get("music_enabled"):
         ui.log("⚠️ Background music is on but no track is chosen; rendering without music.")
 
+    if cfg.get("sound_effects"):
+        from . import cards
+
+        try:
+            effects = audio.sound_effects(
+                starts[1:], [starts[i] + cards.MARGIN for i, p in enumerate(plans)
+                             if p.scene.card], total)
+            voices += effects
+            ui.log(f"🔊 Sound effects: {len(effects)}")
+        except Exception as exc:  # noqa: BLE001 - like music, never sinks a render
+            ui.log(f"⚠️ Couldn't add the sound effects ({exc}).")
     soundtrack = audio.mix_audio(voices, music, total)
     if soundtrack is not None:
         video = video.with_audio(job.keep(soundtrack))
@@ -660,6 +696,19 @@ def _make_version(cfg, ui, work_dir, job, plans, search, choices, version, save_
             ui.log(f"💬 Subtitles saved to {os.path.basename(srt_path)}")
         except OSError as exc:
             ui.log(f"⚠️ Couldn't save the subtitle file ({exc}).")
+
+    try:
+        from . import projects, thumbnail
+
+        thumb = os.path.splitext(save_path)[0] + ".thumbnail.jpg"
+        # Between two spoken lines no caption is on screen: the cleanest frames.
+        pauses = [(a_end + b_start) / 2 for (_a, a_end), (b_start, _b) in zip(speech, speech[1:])
+                  if b_start - a_end > 0.12]
+        thumbnail.make(save_path, projects.default_title(cfg.get("script") or "", 60), thumb,
+                       pauses)
+        ui.log(f"🖼️ Thumbnail saved to {os.path.basename(thumb)}")
+    except Exception as exc:  # noqa: BLE001 - the video is saved either way
+        ui.log(f"⚠️ Couldn't make the thumbnail ({exc}).")
     return save_path
 
 
@@ -737,6 +786,36 @@ def _stock_instead(scene):
     words = [w for w in re.findall(r"[a-z]+", scene.ai_prompt.lower())
              if len(w) > 2 and w not in footage.STOPWORDS]
     return dataclasses.replace(scene, visual=" ".join(words[:3]) or "abstract background")
+
+
+def _moving_picture(plan, index, cfg, ratio, work_dir, ui, version, ai_before, stop) -> None:
+    """Turn the scene's AI picture into a short moving clip, if Moving pictures asks for it.
+
+    Like the picture itself, never sinks a render: on any failure the still stays.
+    """
+    from . import animate
+
+    choice = cfg.get("animate") or ""
+    if not animate.wanted(choice, index, ai_before) or plan.sources[0].kind != "image":
+        return
+    if not animate.installed():
+        ui.log("🎞️ Moving pictures are on but not downloaded; the scene keeps its still picture.")
+        return
+    if cfg.get("ai_images_backend") == "cpu":   # minutes per picture there: hours per clip
+        ui.log("🎞️ Moving pictures need the graphics card; the scene keeps its still picture.")
+        return
+    clip = os.path.join(work_dir, f"moving_{version}_{index}.avi")
+    try:
+        seconds = animate.make(plan.sources[0].path, plan.scene.ai_prompt or "", ratio, clip,
+                               should_stop=stop, log=ui.log)
+        looped = animate.ping_pong(clip, os.path.join(work_dir, f"moving_{version}_{index}.mp4"))
+    except animate.Stopped as exc:
+        raise RenderCancelled() from exc
+    except Exception as exc:  # noqa: BLE001 - the still picture is a fine scene too
+        ui.log(f"⚠️ Scene {index + 1}: {exc}")
+        return
+    ui.log(f"🎞️ Scene {index + 1}: the picture moves (made in {seconds:.0f} s)")
+    plan.parts, plan.sources = 1, [_Source(looped, "video")]
 
 
 def _ai_picture(plan, index, cfg, ratio, work_dir, ui, version, search, stop) -> bool:

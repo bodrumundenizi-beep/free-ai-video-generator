@@ -91,3 +91,15 @@ def test_measure_motion_tells_static_from_moving():
     moving = VideoClip(moving_frame, duration=2)
     assert measure_motion(still) < SLOW_MOTION
     assert measure_motion(moving) > SLOW_MOTION
+
+
+def test_the_busiest_point_is_where_the_detail_is():
+    import numpy as np
+
+    from vidgen import motion
+
+    frame = np.zeros((90, 160, 3), dtype=np.uint8)
+    frame[10:40, 110:150] = np.random.default_rng(1).integers(0, 255, (30, 40, 3))
+    x, y = motion.busiest_point([frame])
+    assert x > 0.65 and y < 0.45
+    assert motion.busiest_point([np.zeros((90, 160, 3), dtype=np.uint8)]) == (0.5, 0.5)

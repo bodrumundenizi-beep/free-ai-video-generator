@@ -351,6 +351,9 @@ def suggest_length(text: str, audience: Audience) -> str:
     return length
 
 
+_STORY_WORDS = {"story", "stories", "tale", "horror", "thriller", "scary", "creepy", "mystery"}
+
+
 def suggest(text: str, last: Audience | None = None, padding: float = 0.3) -> Suggestion:
     """Answers to the window's questions, picked from the text.
 
@@ -366,6 +369,8 @@ def suggest(text: str, last: Audience | None = None, padding: float = 0.3) -> Su
     runner_up = max((count for name, count in hits.items() if name != best), default=0)
     clear = hits[best] >= CLEAR_MATCH and hits[best] > runner_up
     content = best if clear else last.content
+    if seen & _STORY_WORDS:   # "write a scary story about...": one word says what it is
+        content = "Story and facts"
 
     if seen & _CHILD_WORDS or content == "Kids and family" and clear:
         age = "Kids"

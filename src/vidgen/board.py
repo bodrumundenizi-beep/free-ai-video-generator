@@ -16,6 +16,7 @@ from .script import AI_PREFIX, Scene, parse_script, to_text
 STOCK, AI, LOCAL = "stock", "ai", "local"
 FIELDS = ("voice", "visual", "card", "picture")
 NEW_VISUAL, NEW_VOICE = "abstract background", "Write this line."
+MIN_LENGTH, MAX_LENGTH = 1.0, 30.0   # what a scene's length can be set to
 
 
 def stock_words(description: str) -> str:
@@ -27,6 +28,14 @@ def stock_words(description: str) -> str:
 
 def _one_line(value) -> str:
     return " ".join(str(value or "").split())
+
+
+def with_lines(script: str, lines: list[str]) -> str:
+    """``script`` with its spoken lines replaced, in order (a translation): every other part
+    of each scene stays."""
+    scenes, new = parse_script(script), iter(lines)
+    return to_text([dataclasses.replace(s, voice=next(new, s.voice)) if s.voice else s
+                    for s in scenes])
 
 
 class Board:
@@ -75,6 +84,31 @@ class Board:
         else:
             value = value or None
         self.scenes[index] = dataclasses.replace(scene, **{field: value})
+
+    def set_length(self, index: int, seconds) -> None:
+        """A set length for one scene (to the half second, 1 to 30 s), or None for "as long
+        as its line"."""
+        scene = self.scenes[index]
+        if seconds is None:
+            if not scene.voice:
+                return   # a scene with nothing to say needs a length
+            self.scenes[index] = dataclasses.replace(scene, duration=None)
+            return
+        seconds = min(max(round(float(seconds) * 2) / 2, MIN_LENGTH), MAX_LENGTH)
+        self.scenes[index] = dataclasses.replace(scene, duration=seconds)
+
+    def lengths(self, persona, padding: float) -> list[float]:
+        """About how long each scene lasts: its set length, or its line read out plus padding."""
+        from . import pacing
+
+        out = []
+        for scene in self.scenes:
+            spoken = pacing.estimate_voice(scene.voice or "", persona.rate, persona.pause_scale,
+                                           persona.enhanced)
+            out.append(scene.duration if scene.duration is not None else
+                       max(spoken + (scene.padding if scene.padding is not None else padding),
+                           MIN_LENGTH))
+        return out
 
     def set_source(self, index: int, kind: str) -> None:
         """Switch a scene between stock footage and an AI picture, keeping what each needs."""

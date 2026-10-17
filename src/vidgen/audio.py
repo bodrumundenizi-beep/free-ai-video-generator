@@ -145,3 +145,109 @@ def mix_audio(voices, music, total: float):
     if not layers:
         return None
     return CompositeAudioClip(layers).with_duration(total)
+
+
+# --- sound effects: made here, so there is nothing to download or license ----------------
+
+SFX_RATE = 44100
+WHOOSH_LENGTH, WHOOSH_GAIN, WHOOSH_LEAD = 0.45, 0.10, 0.32  # it peaks just before the cut
+POP_LENGTH, POP_GAIN = 0.09, 0.22
+
+
+def whoosh() -> np.ndarray:
+    """Soft filtered noise that swells and fades: stereo samples at SFX_RATE."""
+    n = int(WHOOSH_LENGTH * SFX_RATE)
+    rng = np.random.default_rng(7)   # the same whoosh every time
+    noise = rng.standard_normal(n)
+    smooth = np.convolve(noise, np.ones(24) / 24, mode="same")   # a dull, airy hiss
+    t = np.linspace(0, 1, n)
+    envelope = np.sin(np.pi * np.clip(t / 0.7, 0, 1) / 2) ** 2 * np.clip((1 - t) / 0.3, 0, 1)
+    wave = smooth * envelope
+    wave *= WHOOSH_GAIN / max(np.abs(wave).max(), 1e-9)
+    pan = np.linspace(-0.4, 0.4, n)   # it moves across, left to right
+    return np.stack([wave * (1 - pan), wave * (1 + pan)], axis=1) / 1.4
+
+
+def pop() -> np.ndarray:
+    """A short soft blip, falling in pitch: stereo samples at SFX_RATE."""
+    n = int(POP_LENGTH * SFX_RATE)
+    t = np.arange(n) / SFX_RATE
+    pitch = np.linspace(900, 320, n)
+    wave = np.sin(2 * np.pi * np.cumsum(pitch) / SFX_RATE) * np.exp(-t * 45)
+    wave *= POP_GAIN / max(np.abs(wave).max(), 1e-9)
+    return np.stack([wave, wave], axis=1)
+
+
+def effect_times(cuts, card_starts, total: float):
+    """[(kind, start)]: a whoosh at each cut between scenes, a pop as each card appears."""
+    times = [("whoosh", cut - WHOOSH_LEAD) for cut in cuts if cut > WHOOSH_LEAD]
+    times += [("pop", start) for start in card_starts]
+    return [(kind, start) for kind, start in times if 0 <= start < total - 0.05]
+
+
+def sound_effects(cuts, card_starts, total: float):
+    """The effects as (clip, start) pairs, ready for mix_audio."""
+    from moviepy import AudioArrayClip
+
+    made = {"whoosh": whoosh(), "pop": pop()}
+    return [(AudioArrayClip(made[kind], fps=SFX_RATE), start)
+            for kind, start in effect_times(cuts, card_starts, total)]
+
+
+# --- beats: so scene changes can land on the music -----------------------------------------
+
+BEAT_REACH = 0.25   # a cut moves at most this far to meet a beat
+BEAT_GAP = 0.3      # beats closer together than this count as one
+
+
+def onsets(samples: np.ndarray, rate: int) -> list[float]:
+    """Where the music hits (a drum, a chord): sudden rises in loudness, in seconds."""
+    hop = max(rate // 100, 1)
+    frames = len(samples) // hop
+    if frames < 3:
+        return []
+    energy = np.sqrt((samples[:frames * hop].reshape(frames, hop) ** 2).mean(axis=1))
+    rise = np.maximum(np.diff(energy, prepend=energy[0]), 0)
+    level = rise.mean() + 1.5 * rise.std()
+    found, last = [], -1.0
+    for i in range(1, frames - 1):
+        t = i * hop / rate
+        if rise[i] > level and rise[i] >= rise[i - 1] and rise[i] >= rise[i + 1] \
+                and t - last >= BEAT_GAP:
+            found.append(t)
+            last = t
+    return found
+
+
+def beats(path: str, total: float) -> list[float]:
+    """The music's beats over ``total`` seconds; a short track loops, as music_track does."""
+    from . import mastering
+
+    rate = 11025
+    out = mastering.run_ffmpeg(["-i", path, "-t", f"{total + 1:.1f}", "-ac", "1", "-ar",
+                                str(rate), "-f", "f32le", "-"]).stdout
+    samples = np.frombuffer(out, dtype=np.float32)
+    found, length = onsets(samples, rate), len(samples) / rate
+    if not found or length <= 0:
+        return []
+    times, loop = [], 0.0
+    while loop < total:
+        times += [t + loop for t in found if t + loop < total]
+        loop += length
+    return times
+
+
+def snap_cuts(durations, shortest, beat_times, reach: float = BEAT_REACH):
+    """Scene lengths with each cut moved to the nearest beat within ``reach``.
+
+    A scene never gets shorter than ``shortest`` (its words); the last scene keeps its
+    length, so only the cuts between scenes move.
+    """
+    out, at = list(durations), 0.0
+    for i in range(len(out) - 1):
+        cut = at + out[i]
+        near = [b for b in beat_times if abs(b - cut) <= reach and b - at >= shortest[i]]
+        if near:
+            out[i] = min(near, key=lambda b: abs(b - cut)) - at
+        at += out[i]
+    return out

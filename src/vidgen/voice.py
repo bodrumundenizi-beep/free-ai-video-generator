@@ -138,13 +138,25 @@ def generate_voiceover(text, filename, log_func, voice_choice, online=False):
     return generate_voiceover_timed(text, filename, log_func, voice_choice, online)[0]
 
 
+def myvoice_ready() -> bool:
+    from . import myvoice
+
+    return myvoice.ready()
+
+
 def _local(text, persona, base, log_func):
     """The offline voice: (path written, word timings), through the same studio chain."""
     from . import localvoice, mastering
     from .pacing import rate_factor
 
+    mine = persona.id == voices.MY_VOICE and myvoice_ready()
     try:
-        samples, words = localvoice.say(text, persona.local, rate_factor(persona.rate))
+        from . import myvoice
+
+        speaker = myvoice.base_speaker() if mine else persona.local
+        samples, words = localvoice.say(text, speaker, rate_factor(persona.rate))
+        if mine:   # the same words and timings, in the user's own voice
+            samples = myvoice.convert(samples)
     except localvoice.VoiceError as exc:
         raise Exception(f"Voice generation failed! {exc}") from exc
     wav_path = base + ".wav"

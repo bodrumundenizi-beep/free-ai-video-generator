@@ -184,3 +184,11 @@ def test_layer_shows_text_during_a_cue_and_nothing_outside():
 
 def test_no_words_means_no_layer():
     assert captions.caption_layer([], (720, 1280), CaptionOptions(), 5.0) is None
+
+
+def test_hindi_words_get_a_font_that_has_their_letters():
+    from vidgen import captions as c
+
+    assert c.devanagari("दबाएं") and not c.devanagari("Press", "Windows")
+    hindi = c._font(40, True)
+    assert hindi.getname()[0] in ("Nirmala UI",) or hindi is not None

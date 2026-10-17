@@ -247,3 +247,8 @@ def test_make_several_splits_on_empty_lines():
     text = "First topic\nstill first.\n\n  \nSecond topic.\n\n\nThird."
     assert draft.batch_texts(text) == ["First topic still first.", "Second topic.", "Third."]
     assert draft.batch_texts("   \n\n") == []
+
+
+def test_a_story_idea_is_guessed_as_a_story():
+    assert draft.suggest("write a story being followed at night").audience.content == \
+        "Story and facts"

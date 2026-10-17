@@ -148,12 +148,12 @@ from vidgen import (  # noqa: E402
     writer,
 )
 from vidgen import board as boards  # noqa: E402
-from vidgen import imagegen, localvoice  # noqa: E402
+from vidgen import animate, imagegen, localvoice, myvoice  # noqa: E402
 from vidgen.voice import generate_voiceover  # noqa: E402
 
 
 APP_NAME = "AI Video Studio"
-APP_VERSION = "4.3.0"
+APP_VERSION = "4.4.0"
 # Must match AppUserModelID in packaging/installer.iss, or a pinned taskbar
 # shortcut will not group with the running window.
 APP_MODEL_ID = "AIVideoStudio.Desktop.3"
@@ -189,6 +189,7 @@ DEFAULT_PADDING = 0.25
 
 NO_TEMPLATE = "None"
 MAX_BATCH = 20
+UNDO_STEPS = 50
 AUTO_TRACK = "auto"   # music_path meaning: a bundled track that fits the video
 AUTO_LABEL = "Auto (fits the video)"
 
@@ -280,6 +281,12 @@ AI_DEVICE_HINTS = {
     "Processor": "Only the processor. Slow (minutes a picture on a laptop) but works on any PC. "
                  "Pictures are made at the Fast size.",
 }
+MOVING_HINTS = {
+    "Off": "Every AI picture is a still, with a slow zoom.",
+    "First AI scene": "The first AI picture of each video moves: the hook, where it matters "
+                      "most. About 1.5 min more per video on an RTX 4060 (measured).",
+    "Every AI scene": "Every AI picture moves. About 1.5 min more for each one on an RTX 4060.",
+}
 AI_THREAD_OPTIONS = ("Auto", "2", "4", "6", "8", "10", "12", "14", "16", "20", "24", "32")
 SLOW_AI_SCENES = 2       # AI pictures New from text makes by default on a slow PC
 SLOW_FAST_SECONDS = 40   # a Fast picture slower than this makes a PC "slow" for AI pictures
@@ -324,6 +331,9 @@ def default_settings() -> dict:
         "intro_text": "",
         "outro_on": False,         # an end card after it
         "outro_text": "Subscribe for more",
+        "sound_effects": True,     # a whoosh on each cut, a pop as a card appears
+        "smart_motion": True,      # cuts on the music's beats, framing toward the detail
+        "animate": "Off",          # which AI pictures become moving clips (vidgen.animate)
         "ai_images_speed": "",     # Fast / Balanced / Best; "" = chosen for this PC
         "ai_threads": "Auto",      # processor threads for AI pictures, or a number
         "ai_threads_best": "",     # "threads:affinity" the Test speed button found fastest
@@ -398,7 +408,9 @@ def load_settings() -> dict:
     if data["ai_device"] not in AI_DEVICES:
         data["ai_device"] = "Auto"
     data["project"] = str(data["project"])
-    for key in ("intro_on", "outro_on"):
+    if data["animate"] not in animate.CHOICES:
+        data["animate"] = animate.CHOICES[0]
+    for key in ("intro_on", "outro_on", "sound_effects", "smart_motion"):
         data[key] = bool(data[key])
     for key in ("intro_text", "outro_text"):
         data[key] = " ".join(str(data[key]).split())[:60]
@@ -420,6 +432,8 @@ def load_settings() -> dict:
         data["resolution"] = "1080p"
     # An ID or an old label; the four original labels are the Classic voices' IDs.
     data["voice"] = voices.persona(data["voice"]).id
+    if data["voice"] == voices.MY_VOICE and not myvoice.ready():
+        data["voice"] = voices.DEFAULT_ID   # My voice is hidden (or not made): the usual voice
     data["captions"] = bool(data["captions"])
     for key, allowed, default in CAPTION_SETTINGS:
         if data[key] not in allowed:
@@ -1450,6 +1464,258 @@ class BatchDialog(ctk.CTkToplevel):
         self.app.start_batch(texts[:MAX_BATCH])
 
 
+def mci(command: str) -> str:
+    """Windows' own sound recorder (winmm): no library needed. Raises with its message."""
+    buffer = ctypes.create_unicode_buffer(256)
+    error = ctypes.windll.winmm.mciSendStringW(command, buffer, 256, None)
+    if error:
+        text = ctypes.create_unicode_buffer(256)
+        ctypes.windll.winmm.mciGetErrorStringW(error, text, 256)
+        raise OSError(text.value or f"recording error {error}")
+    return buffer.value
+
+
+def short_path(folder: str) -> str:
+    """The folder's old 8.3 name: the recorder refuses long or unusual paths when saving."""
+    buffer = ctypes.create_unicode_buffer(512)
+    return buffer.value if ctypes.windll.kernel32.GetShortPathNameW(folder, buffer, 512)         else folder
+
+
+class MyVoiceDialog(ctk.CTkToplevel):
+    """Make my voice (beta): record six sentences, and the offline voice learns to sound
+    like you (vidgen.myvoice)."""
+
+    def __init__(self, app):
+        super().__init__(app)
+        self.app = app
+        self.title("Make my voice (beta)")
+        self.resizable(False, False)
+        self.configure(fg_color=MAIN_BG)
+        self.transient(app)
+        self.protocol("WM_DELETE_WINDOW", self.close)
+        self.recording = False
+        self.path = os.path.join(myvoice.MY_FOLDER, myvoice.RECORDING)
+        card = Card(self)
+        card.pack(fill="both", expand=True, padx=14, pady=14)
+        ctk.CTkLabel(card, text="Make my voice (beta)", font=app.font_title, text_color=TEXT,
+                     ).pack(anchor="w", padx=18, pady=(16, 2))
+        ctk.CTkLabel(card, text="Press Start, read these six sentences out loud at your normal "
+                                "speed, then press Stop. A quiet room and a headset microphone "
+                                "work best. The recording and the voice made from it stay on "
+                                "this PC.", font=app.font_tiny, text_color=TEXT_DIM,
+                     wraplength=520, justify="left").pack(anchor="w", padx=18, pady=(0, 8))
+        for n, line in enumerate(myvoice.SENTENCES, 1):
+            ctk.CTkLabel(card, text=f"{n}.  {line}", font=app.font_body, text_color=TEXT,
+                         wraplength=520, justify="left", anchor="w").pack(fill="x", padx=24,
+                                                                         pady=1)
+        self.status = ctk.CTkLabel(card, text="" if myvoice.installed() else
+                                   f"The first time, the voice models are downloaded "
+                                   f"({myvoice.SIZE / 1e6:.0f} MB).", font=app.font_tiny,
+                                   text_color=TEXT_DIM, wraplength=520, justify="left",
+                                   anchor="w")
+        self.status.pack(fill="x", padx=18, pady=(10, 6))
+        row = ctk.CTkFrame(card, fg_color="transparent")
+        row.pack(fill="x", padx=18, pady=(0, 16))
+
+        def button(text, command, accent=False):
+            widget = ctk.CTkButton(row, text=text, height=34, corner_radius=4, font=app.font_body,
+                                   fg_color=ACCENT if accent else FIELD_BG,
+                                   hover_color=ACCENT_HOVER if accent else CARD_HOVER,
+                                   text_color=ACCENT_TEXT if accent else TEXT,
+                                   text_color_disabled=ACCENT_TEXT if accent else TEXT_DIM,
+                                   border_width=0 if accent else 1, border_color=FIELD_BORDER,
+                                   command=command)
+            widget.pack(side="left", padx=(0, 6))
+            return widget
+
+        self.record_button = button("Start recording", self.toggle)
+        self.play_button = button("Play it back", self.play)
+        self.make_button = button("Make my voice", self.make, accent=True)
+        if not os.path.isfile(self.path):
+            self.play_button.configure(state="disabled")
+            self.make_button.configure(state="disabled")
+        centre_on(self, app)
+
+    def toggle(self):
+        try:
+            if not self.recording:
+                os.makedirs(myvoice.MY_FOLDER, exist_ok=True)
+                mci("open new type waveaudio alias myvoice")
+                mci("set myvoice bitspersample 16 channels 1 samplespersec 22050 "
+                    "bytespersec 44100 alignment 2")
+                mci("record myvoice")
+                self.recording = True
+                self.record_button.configure(text="Stop recording")
+                for b in (self.play_button, self.make_button):
+                    b.configure(state="disabled")
+                self.status.configure(text="Recording... read the six sentences.",
+                                      text_color=ERR_COLOR)
+            else:
+                mci("stop myvoice")
+                saved = os.path.join(short_path(myvoice.MY_FOLDER), "rec.wav")
+                mci(f'save myvoice "{saved}"')
+                mci("close myvoice")
+                os.replace(saved, self.path)
+                self.recording = False
+                self.record_button.configure(text="Record again")
+                for b in (self.play_button, self.make_button):
+                    b.configure(state="normal")
+                self.status.configure(text="Recorded. Play it back if you like, then press "
+                                           "Make my voice.", text_color=TEXT_DIM)
+        except OSError as exc:
+            self.recording = False
+            try:
+                mci("close myvoice")
+            except OSError:
+                pass
+            self.status.configure(text=f"The microphone could not be used: {exc}",
+                                  text_color=ERR_COLOR)
+
+    def play(self):
+        import winsound
+
+        winsound.PlaySound(self.path, winsound.SND_FILENAME | winsound.SND_ASYNC)
+
+    def make(self):
+        self.make_button.configure(state="disabled", text="Making it...")
+        self.record_button.configure(state="disabled")
+        app = self.app
+
+        def worker():
+            try:
+                if not myvoice.installed():
+                    def progress(done, total):
+                        app._queue.put(("myvoice", {"dialog": self, "progress": (done, total)}))
+                    myvoice.download(progress)
+                myvoice.make(self.path, localvoice.say)
+                app._queue.put(("myvoice", {"dialog": self, "done": True}))
+            except Exception as exc:  # noqa: BLE001 - shown in the window
+                app._queue.put(("myvoice", {"dialog": self, "error": str(exc)}))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def on_event(self, payload):
+        if not self.winfo_exists():
+            return
+        if "progress" in payload:
+            done, total = payload["progress"]
+            self.status.configure(text=f"Downloading the voice models: {done / 1e6:.0f} of "
+                                       f"{total / 1e6:.0f} MB", text_color=TEXT_DIM)
+            return
+        self.make_button.configure(state="normal", text="Make my voice")
+        self.record_button.configure(state="normal")
+        if payload.get("error"):
+            self.status.configure(text=payload["error"], text_color=ERR_COLOR)
+            return
+        self.app.my_voice_made()
+        self.status.configure(text="Done. \"My voice (beta)\" is now in the voice list and "
+                                   "chosen. Press Preview Voice on the Script page to hear it.",
+                              text_color=OK_COLOR)
+
+    def close(self):
+        if self.recording:
+            try:
+                mci("close myvoice")
+            except OSError:
+                pass
+        self.destroy()
+
+
+class TranslateDialog(ctk.CTkToplevel):
+    """The same video in another language: the Smart writer translates the lines into a copy."""
+
+    def __init__(self, app, project):
+        super().__init__(app)
+        self.app, self.project = app, project
+        self.title("Make it in another language")
+        self.resizable(False, False)
+        self.configure(fg_color=MAIN_BG)
+        self.transient(app)
+        card = Card(self)
+        card.pack(fill="both", expand=True, padx=14, pady=14)
+        ctk.CTkLabel(card, text=f"\"{project.get('title')}\" in another language",
+                     font=app.font_title, text_color=TEXT, wraplength=420, justify="left",
+                     ).pack(anchor="w", padx=18, pady=(16, 8))
+        self.var_language = tk.StringVar(self, voices.LANGUAGES[0])
+        ctk.CTkOptionMenu(
+            card, values=list(voices.LANGUAGES), variable=self.var_language, width=260,
+            height=32, corner_radius=4, font=app.font_body, fg_color=FIELD_BG,
+            button_color=FIELD_BG, button_hover_color=CARD_HOVER, text_color=TEXT,
+            dropdown_fg_color=CARD_BG, dropdown_text_color=TEXT,
+            dropdown_hover_color=CARD_HOVER, dropdown_font=app.font_body,
+            dynamic_resizing=False).pack(anchor="w", padx=18)
+        ctk.CTkLabel(card, text="The lines are translated by the Smart writer, a small AI on "
+                                "this PC. Its translations are understandable but have "
+                                "mistakes, so the copy opens in the Storyboard first: check the "
+                                "lines there (or have someone who speaks the language read "
+                                "them) before you make the video. Pictures, clips and cards "
+                                "stay the same; the voice and captions change.",
+                     font=app.font_tiny, text_color=TEXT_DIM, wraplength=420, justify="left",
+                     ).pack(anchor="w", padx=18, pady=(10, 8))
+        self.status = ctk.CTkLabel(card, text="", font=app.font_tiny, text_color=TEXT_DIM,
+                                   wraplength=420, justify="left", anchor="w")
+        self.status.pack(fill="x", padx=18)
+        self.go_button = ctk.CTkButton(
+            card, text="Translate and open in the Storyboard", height=34, corner_radius=4,
+            font=app.font_body, fg_color=ACCENT, hover_color=ACCENT_HOVER,
+            text_color=ACCENT_TEXT, command=self.go)
+        self.go_button.pack(fill="x", padx=18, pady=(8, 3))
+        ctk.CTkButton(card, text="Cancel", height=34, corner_radius=4, font=app.font_body,
+                      fg_color=FIELD_BG, hover_color=CARD_HOVER, border_width=1,
+                      border_color=FIELD_BORDER, text_color=TEXT,
+                      command=self.destroy).pack(fill="x", padx=18, pady=(3, 16))
+        centre_on(self, app)
+
+    def go(self):
+        ok, why = writer.ready()
+        if not ok:
+            self.status.configure(text=f"Translating needs the Smart writer. {why}",
+                                  text_color=ERR_COLOR)
+            return
+        try:
+            lines = [scene.voice for scene in parse_script(self.project["script"]) if scene.voice]
+        except ScriptError as exc:
+            self.status.configure(text=str(exc), text_color=ERR_COLOR)
+            return
+        language, gpu = self.var_language.get(), bool(self.app.var_writer_gpu.get())
+        self.go_button.configure(state="disabled", text="Translating...")
+        self.status.configure(text=f"The Smart writer is translating {len(lines)} lines into "
+                                   f"{language}...", text_color=TEXT_DIM)
+
+        def worker():
+            try:
+                with writer.Session(gpu=gpu) as session:
+                    found = session.translate(lines, language)
+                self.app._queue.put(("translated", {"dialog": self, "lines": found,
+                                                    "language": language}))
+            except Exception as exc:  # noqa: BLE001 - shown in the window
+                self.app._queue.put(("translated", {"dialog": self, "error": str(exc),
+                                                    "language": language}))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def done(self, payload):
+        """UI thread: the translation came back."""
+        if not self.winfo_exists():
+            return
+        if payload.get("error"):
+            self.go_button.configure(state="normal", text="Translate and open in the Storyboard")
+            self.status.configure(text=payload["error"], text_color=ERR_COLOR)
+            return
+        language, app, project = payload["language"], self.app, self.project
+        script = boards.with_lines(project["script"], payload["lines"])
+        new = projects.copy(project["id"])
+        data = projects.load(new)
+        projects.save(new, dict(data, script=script, language=language,
+                                title=f"{project.get('title') or 'Untitled video'} ({language})"))
+        was = voices.persona((project.get("settings") or {}).get("voice") or app.var_voice.get())
+        self.destroy()
+        if app.open_project(new, {"voice": voices.for_language(language, was).id}):
+            app.board_status.configure(
+                text=f"Translated into {language} by the Smart writer. Read the lines and fix "
+                     "any mistakes, then press Make video.", text_color=WARN_COLOR)
+
+
 class CopyDialog(ctk.CTkToplevel):
     """Make a copy of a project in the other shape or with another voice."""
 
@@ -1609,6 +1875,33 @@ class ResultDialog(ctk.CTkToplevel):
             self.play_button = button(self._play_label(), self.toggle, accent=True)
         button("Open in player", self.open_in_player)
         button("Show in folder", self.show_in_folder)
+        if os.path.isfile(self._thumb()):
+            button("Open thumbnail", lambda: os.startfile(self._thumb()))
+        if app.project and projects.load(app.project):
+            button("Make it in another language",
+                   lambda: (self.close(), TranslateDialog(app, projects.load(app.project))))
+
+        self.upload_box = ctk.CTkFrame(info, fg_color="transparent")
+        self.upload_box.pack(fill="x", padx=18, pady=(4, 2))
+        ctk.CTkLabel(self.upload_box, text="Title, description and tags for posting it",
+                     font=app.font_tiny, text_color=TEXT_MUTED, anchor="w").pack(fill="x")
+        self.upload_note = ctk.CTkLabel(self.upload_box, text="Writing them...",
+                                        font=app.font_tiny, text_color=TEXT_DIM, anchor="w")
+        self.upload_note.pack(fill="x")
+        self.upload_fields = {}
+        for key, height in (("title", 1), ("description", 3), ("tags", 2)):
+            row = ctk.CTkFrame(self.upload_box, fg_color="transparent")
+            box = ctk.CTkTextbox(row, height=24 + 18 * (height - 1), font=app.font_tiny,
+                                 corner_radius=4, fg_color=FIELD_BG, text_color=TEXT,
+                                 border_width=0, wrap="word")
+            box.pack(side="left", fill="x", expand=True)
+            ctk.CTkButton(row, text="Copy", width=54, height=24, corner_radius=4,
+                          font=app.font_tiny, fg_color=FIELD_BG, hover_color=CARD_HOVER,
+                          border_width=1, border_color=FIELD_BORDER, text_color=TEXT,
+                          command=lambda b=box: self._copy(b)).pack(side="left", padx=(6, 0))
+            self.upload_fields[key] = (row, box)
+        if app.last_upload:
+            self.set_upload(app.last_upload)
 
         ctk.CTkLabel(info, text="Want something different? Say what to change.",
                      font=app.font_tiny, text_color=TEXT_MUTED, anchor="w",
@@ -1645,6 +1938,24 @@ class ResultDialog(ctk.CTkToplevel):
         button("Close", self.close).pack_configure(pady=(0, 16))
 
         centre_on(self, app)
+
+    def set_upload(self, upload):
+        """Show the title, description and tags (written after the render)."""
+        if not self.winfo_exists():
+            return
+        self.upload_note.pack_forget()
+        for key, (row, box) in self.upload_fields.items():
+            value = upload[key] if key != "tags" else ", ".join(upload[key])
+            box.delete("1.0", "end")
+            box.insert("1.0", value)
+            row.pack(fill="x", pady=2)
+
+    def _copy(self, box):
+        self.clipboard_clear()
+        self.clipboard_append(box.get("1.0", "end").strip())
+
+    def _thumb(self):
+        return os.path.splitext(self.path)[0] + ".thumbnail.jpg"
 
     def change_it(self):
         """Hand the comment to the Storyboard, which shows what changed before any render."""
@@ -2448,6 +2759,7 @@ class App(ctk.CTk):
         self.board_pos = {}        # search words -> which of those clips is chosen
         self.board_pictures = {}   # AI picture key -> the file made for it
         self.board_marked = set()  # scenes the last "Change it" rewrote
+        self.board_history, self.board_future = [], []   # Storyboard Undo / Redo
         self.board_cards, self.board_images = [], {}
         self.board_gen = 0         # goes up on every rebuild; late worker news is dropped
         self._revising = False
@@ -2538,6 +2850,9 @@ class App(ctk.CTk):
         self.var_intro_text = tk.StringVar(value=s["intro_text"])
         self.var_outro_on = tk.BooleanVar(value=s["outro_on"])
         self.var_outro_text = tk.StringVar(value=s["outro_text"])
+        self.var_sfx = tk.BooleanVar(value=s["sound_effects"])
+        self.var_smart_motion = tk.BooleanVar(value=s["smart_motion"])
+        self.var_animate = tk.StringVar(value=s["animate"])
         self.key_tip = s["key_tip"]
         self.ai_gpu, self.ai_fast_seconds = s["ai_gpu"], s["ai_fast_seconds"]
         self.ai_threads_best = s["ai_threads_best"]
@@ -2548,6 +2863,8 @@ class App(ctk.CTk):
         self._render_overrides = {}   # one render's answer to the slow-PC question
         self._both = None   # "Make both shapes": {shape, other, first: the first videos}
         self._batch = None  # "Make several": the texts, how far it is, what was made
+        self.last_upload = None   # title, description, tags of the last video made
+        self.voice_menus = []     # the voice dropdowns, to add My voice to once it is made
         self.var_music_track = tk.StringVar(value="")
         self._tracks = {}
 
@@ -2558,7 +2875,8 @@ class App(ctk.CTk):
                     self.var_writer_gpu, self.var_voice_online, self.var_auto_cards,
                     self.var_ai_for, self.var_ai_look,
                     self.var_target, self.var_intro_on, self.var_intro_text,
-                    self.var_outro_on, self.var_outro_text,
+                    self.var_outro_on, self.var_outro_text, self.var_sfx,
+                    self.var_smart_motion, self.var_animate,
                     *self.caption_vars.values()):
             var.trace_add("write", self._on_setting_changed)
 
@@ -2588,6 +2906,9 @@ class App(ctk.CTk):
             "intro_text": self.var_intro_text.get().strip(),
             "outro_on": bool(self.var_outro_on.get()),
             "outro_text": self.var_outro_text.get().strip(),
+            "sound_effects": bool(self.var_sfx.get()),
+            "smart_motion": bool(self.var_smart_motion.get()),
+            "animate": self.var_animate.get(),
             "key_tip": self.key_tip,
             "ai_images_speed": self.var_ai_speed.get() if self.ai_speed_chosen else "",
             "ai_threads": self.var_ai_threads.get(),
@@ -3018,14 +3339,15 @@ class App(ctk.CTk):
                      text_color=TEXT_MUTED).pack(side="left", padx=(0, 10))
         ctk.CTkLabel(voice_bar, text="Voice", font=self.font_body,
                      text_color=TEXT).pack(side="left", padx=(0, 12))
-        ctk.CTkOptionMenu(
+        self.voice_menus.append(ctk.CTkOptionMenu(
             voice_bar, values=VOICE_OPTIONS, variable=self.var_voice,
             width=360, height=32, corner_radius=4, font=self.font_body,
             fg_color=FIELD_BG, button_color=FIELD_BG, button_hover_color=CARD_HOVER,
             text_color=TEXT, dropdown_fg_color=CARD_BG, dropdown_text_color=TEXT,
             dropdown_hover_color=CARD_HOVER, dropdown_font=self.font_body,
             dynamic_resizing=False,
-        ).pack(side="left")
+        ))
+        self.voice_menus[-1].pack(side="left")
         self.preview_button = ctk.CTkButton(
             voice_bar, text=f"{self.icon('play')}  Preview Voice", width=150,
             height=32, corner_radius=4, font=self.font_body, fg_color=FIELD_BG,
@@ -3510,13 +3832,23 @@ class App(ctk.CTk):
         voice_row = SettingRow(page, self, self.icon("voice"), "Voice engine",
                                "Microsoft Edge neural text-to-speech")
         voice_row.grid(row=next(rows), column=0, sticky="ew", pady=PAD // 2)
-        ctk.CTkOptionMenu(
+        self.voice_menus.append(ctk.CTkOptionMenu(
             voice_row.control, values=VOICE_OPTIONS, variable=self.var_voice,
             width=360, dynamic_resizing=False, height=32, corner_radius=4, font=self.font_body,
             fg_color=FIELD_BG, button_color=FIELD_BG, button_hover_color=CARD_HOVER,
             text_color=TEXT, dropdown_fg_color=CARD_BG, dropdown_text_color=TEXT,
             dropdown_hover_color=CARD_HOVER, dropdown_font=self.font_body,
-        ).pack(side="left")
+        ))
+        self.voice_menus[-1].pack(side="left")
+        if myvoice.ENABLED:
+            mine_row = SettingRow(page, self, self.icon("voice"), "My voice (beta)",
+                                  "Record six sentences, and the voice reads scripts in a "
+                                  "voice like yours. On this PC only")
+            mine_row.grid(row=next(rows), column=0, sticky="ew", pady=PAD // 2)
+            ctk.CTkButton(mine_row.control, text="Make my voice", width=130, height=32,
+                          corner_radius=4, font=self.font_body, fg_color=FIELD_BG,
+                          hover_color=CARD_HOVER, border_width=1, border_color=FIELD_BORDER,
+                          text_color=TEXT, command=lambda: MyVoiceDialog(self)).pack(side="left")
 
         self._caption(page, "CAPTIONS", next(rows))
 
@@ -3590,6 +3922,18 @@ class App(ctk.CTk):
                 text_color=TEXT, command=command,
             ).pack(side="left", padx=(6, 0))
         self._refresh_tracks()
+
+        sfx_row = SettingRow(page, self, self.icon("music"), "Sound effects",
+                             "A soft whoosh on each cut and a pop as a card appears")
+        sfx_row.grid(row=next(rows), column=0, sticky="ew", pady=PAD // 2)
+        ctk.CTkSwitch(sfx_row.control, text="", width=44, variable=self.var_sfx, onvalue=True,
+                      offvalue=False, progress_color=ACCENT).pack(side="left")
+        motion_row = SettingRow(page, self, self.icon("scenes"), "Cuts on the beat, smart framing",
+                                "Scene changes land on the music's beats; the picture moves "
+                                "toward where the detail is")
+        motion_row.grid(row=next(rows), column=0, sticky="ew", pady=PAD // 2)
+        ctk.CTkSwitch(motion_row.control, text="", width=44, variable=self.var_smart_motion,
+                      onvalue=True, offvalue=False, progress_color=ACCENT).pack(side="left")
 
         self._caption(page, "APPEARANCE", next(rows))
 
@@ -4143,6 +4487,14 @@ class App(ctk.CTk):
                     self._project_thumb_done(payload)
                 elif kind == "batch":
                     self._batch_event(payload)
+                elif kind == "moving":
+                    self._moving_row_changed(payload)
+                elif kind == "myvoice":
+                    payload["dialog"].on_event(payload)
+                elif kind == "translated":
+                    payload["dialog"].done(payload)
+                elif kind == "upload":
+                    self._upload_done(payload)
                 elif kind == "ai_speed":
                     self.note_picture_time(payload["seconds"], payload["speed"])
                 elif kind == "ai_gpu":
@@ -4170,6 +4522,9 @@ class App(ctk.CTk):
                         self.save_project(videos=made)
                         if payload["ok"] and made:
                             b["made"].extend(made)
+                            if b.get("upload"):
+                                self._upload_done({"upload": b.pop("upload"), "videos": made,
+                                                   "project": self.project})
                         else:
                             b["failed"].append((b["at"] + 1, payload["message"]))
                         b["at"] += 1
@@ -4186,7 +4541,9 @@ class App(ctk.CTk):
                         made = both.get("first", []) + made
                         self._shape_back(both)
                     self.save_project(videos=made)
+                    self.last_upload = None
                     if payload["ok"] and made:
+                        self.make_upload_text(made)
                         ResultDialog(self, payload["title"], payload["message"], made,
                                      names=both and [both["shape"], both["other"]])
                     else:
@@ -4271,6 +4628,7 @@ class App(ctk.CTk):
         script = result.script
         self.save_project()
         self.project = None   # a new video: its own project from the first save
+        self.board_history, self.board_future = [], []
         if self.ai_slow() and self._has_footage_key():
             # Each picture takes minutes here: keep the first few, stock for the rest.
             capped = boards.Board(boards.limit_ai(parse_script(script), SLOW_AI_SCENES)).text()
@@ -4524,6 +4882,7 @@ class App(ctk.CTk):
                    ("Show in folder", lambda: subprocess.Popen(
                        ["explorer", "/select,", os.path.normpath(videos[0])]), bool(videos)),
                    ("Make a copy", lambda: CopyDialog(self, project), True),
+                   ("Translate", lambda: TranslateDialog(self, project), True),
                    ("Rename", rename, True),
                    ("Delete", delete, True))
         for at, (text, command, usable) in enumerate(buttons):
@@ -4536,7 +4895,7 @@ class App(ctk.CTk):
                 command=command,
             ).grid(row=3 + at // 2, column=at % 2, sticky="ew",
                    padx=(12 if at % 2 == 0 else 3, 3 if at % 2 == 0 else 12), pady=3)
-        ctk.CTkFrame(card, fg_color="transparent", height=8).grid(row=7, column=0)
+        ctk.CTkFrame(card, fg_color="transparent", height=8).grid(row=8, column=0)
 
     def save_project(self, videos=None):
         """Keep the script, its settings and AI pictures as a project.
@@ -4590,10 +4949,16 @@ class App(ctk.CTk):
 
         dest, length = os.path.join(projects.folder(pid), projects.THUMB), None
         try:
+            made = os.path.splitext(video or "")[0] + ".thumbnail.jpg"
             if video:
                 width, height, length = preview.probe(video)
-                image = preview.poster(video, preview.fit((width, height), (360, 360)),
-                                       at=min(1.0, length / 2))
+                if os.path.isfile(made):   # the thumbnail the render made, with its title
+                    with Image.open(made) as image:
+                        image = image.convert("RGB")
+                    image.thumbnail((360, 360))
+                else:
+                    image = preview.poster(video, preview.fit((width, height), (360, 360)),
+                                           at=min(1.0, length / 2))
             else:
                 with Image.open(picture) as image:
                     image = image.convert("RGB")
@@ -4663,6 +5028,7 @@ class App(ctk.CTk):
         except ScriptError:
             pass
         self.board_text = None
+        self.board_history, self.board_future = [], []
         self._commit_script()
         self.select_page("board")
         return True
@@ -4682,9 +5048,35 @@ class App(ctk.CTk):
         self.board_list.grid(row=1, column=0, sticky="nsew")
         self.board_list.grid_columnconfigure(0, weight=1)
 
+        strip = ctk.CTkFrame(page, fg_color="transparent")
+        strip.grid(row=2, column=0, sticky="ew", pady=(PAD // 2, 0))
+        strip.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(strip, text="Timeline: drag the right edge of a scene to change how long it "
+                                 "lasts, double-click it to go back to automatic, click it to "
+                                 "find its card.", font=self.font_tiny, text_color=TEXT_DIM,
+                     anchor="w").grid(row=0, column=0, sticky="w", padx=4)
+        self.timeline = tk.Canvas(strip, height=46, highlightthickness=0, bd=0,
+                                  bg=theme_color(MAIN_BG))
+        self.timeline.grid(row=1, column=0, sticky="ew")
+        self.timeline.bind("<Configure>", lambda _e: self._draw_timeline())
+        self.timeline.bind("<ButtonPress-1>", self._timeline_press)
+        self.timeline.bind("<B1-Motion>", self._timeline_drag)
+        self.timeline.bind("<ButtonRelease-1>", self._timeline_release)
+        self.timeline.bind("<Double-Button-1>", self._timeline_auto)
+        self._timeline_hold = None
+
         bar = Card(page)
-        bar.grid(row=2, column=0, sticky="ew", pady=(PAD // 2, 0))
+        bar.grid(row=3, column=0, sticky="ew", pady=(PAD // 2, 0))
         bar.grid_columnconfigure(0, weight=1)
+        steps = ctk.CTkFrame(bar, fg_color="transparent")
+        steps.grid(row=2, column=3, sticky="e", padx=14, pady=(0, 10))
+        for text, redo in (("Undo", False), ("Redo", True)):
+            ctk.CTkButton(steps, text=text, width=64, height=28, corner_radius=4,
+                          font=self.font_tiny, fg_color=FIELD_BG, hover_color=CARD_HOVER,
+                          border_width=1, border_color=FIELD_BORDER, text_color=TEXT,
+                          command=lambda r=redo: self.board_undo(r)).pack(side="left", padx=(4, 0))
+        self.bind_all("<Control-z>", lambda _e: self._undo_key(False), add="+")
+        self.bind_all("<Control-y>", lambda _e: self._undo_key(True), add="+")
         self._look_bar(bar).grid(row=0, column=0, columnspan=4, sticky="w", padx=14,
                                  pady=(12, 0))
         self.board_comment = focus_accent(ctk.CTkEntry(
@@ -4713,7 +5105,7 @@ class App(ctk.CTk):
         ).grid(row=1, column=3, padx=(0, 14), pady=(10, 4))
         self.board_status = ctk.CTkLabel(bar, text="", font=self.font_tiny, text_color=TEXT_DIM,
                                          anchor="w", justify="left", wraplength=820)
-        self.board_status.grid(row=2, column=0, columnspan=4, sticky="w", padx=16, pady=(0, 10))
+        self.board_status.grid(row=2, column=0, columnspan=3, sticky="w", padx=16, pady=(0, 10))
         return page
 
     def board_box(self):
@@ -4740,8 +5132,10 @@ class App(ctk.CTk):
             ctk.CTkLabel(self.board_list, text=hint, font=self.font_body, text_color=TEXT_MUTED,
                          justify="left", anchor="w").grid(row=0, column=0, sticky="w",
                                                           padx=8, pady=20)
+            self._draw_timeline()
             return
         self.board_text = text
+        self._draw_timeline()
         for index in range(len(self.board)):
             self._board_card(index)
         if not self._revising:
@@ -4825,13 +5219,89 @@ class App(ctk.CTk):
         self.board_cards.append({"picture": picture, "status": status, "action": action})
 
     # -- edits: every one is written back to the script -------------------------------
+    # -- the timeline under the cards ---------------------------------------------------
+    def _draw_timeline(self, lengths=None):
+        canvas = self.timeline
+        canvas.delete("all")
+        canvas.configure(bg=theme_color(MAIN_BG))
+        if self.board is None or not len(self.board):
+            self._timeline_edges = []
+            return
+        persona = voices.persona(self.var_voice.get())
+        padding = PADDING_OPTIONS.get(self.var_padding.get(), DEFAULT_PADDING)
+        lengths = lengths or self.board.lengths(persona, padding)
+        width = max(canvas.winfo_width(), 200) - 8
+        self._timeline_scale = width / max(sum(lengths), 0.1)
+        x, self._timeline_edges = 4.0, []
+        for i, (scene, length) in enumerate(zip(self.board.scenes, lengths)):
+            w = length * self._timeline_scale
+            spoken = pacing.estimate_voice(scene.voice or "", persona.rate, persona.pause_scale,
+                                           persona.enhanced)
+            fixed = scene.duration is not None
+            cut = fixed and spoken > scene.duration + 0.05   # the line won't fit: shown
+            canvas.create_rectangle(x, 4, x + w - 3, 42, outline="", fill=theme_color(
+                WARN_COLOR if cut else CARD_HOVER if fixed else CARD_BG))
+            canvas.create_rectangle(x + w - 8, 4, x + w - 3, 42, outline="",
+                                    fill=theme_color(ACCENT if fixed else FIELD_BORDER))
+            if w > 34:
+                label = f"{i + 1}  {length:.1f} s" if w > 70 else str(i + 1)
+                canvas.create_text(x + 7, 23, anchor="w", text=label, font=self.font_tiny,
+                                   fill=theme_color(TEXT))
+            x += w
+            self._timeline_edges.append(x)
+
+    def _timeline_at(self, x):
+        """(scene index, whether x is on its right edge) for a point on the strip."""
+        start = 4.0
+        for i, edge in enumerate(self._timeline_edges):
+            if x <= edge:
+                return i, edge - x <= 9
+            start = edge
+        return None, False
+
+    def _timeline_press(self, event):
+        if self.board is None or self.is_rendering:
+            return
+        index, on_edge = self._timeline_at(event.x)
+        if index is None:
+            return
+        start = self._timeline_edges[index - 1] if index else 4.0
+        self._timeline_hold = {"index": index, "start": start, "drag": on_edge, "moved": False}
+
+    def _timeline_drag(self, event):
+        hold = self._timeline_hold
+        if not hold or not hold["drag"]:
+            return
+        hold["moved"] = True
+        self.board.set_length(hold["index"], (event.x - hold["start"]) / self._timeline_scale)
+        self._draw_timeline()
+
+    def _timeline_release(self, _event):
+        hold, self._timeline_hold = self._timeline_hold, None
+        if not hold:
+            return
+        if hold["moved"]:
+            self._board_write()
+        elif self.board_cards:   # a click: bring its card into view
+            self.board_list._parent_canvas.yview_moveto(hold["index"] / len(self.board_cards))
+
+    def _timeline_auto(self, event):
+        index, _edge = self._timeline_at(event.x)
+        if index is not None and self.board is not None and not self.is_rendering:
+            self.board.set_length(index, None)
+            self._board_write()
+
     def _board_write(self):
         text = self.board.text()
+        if self.board_text and self.board_text != text:   # the step Undo goes back to
+            self.board_history = (self.board_history + [self.board_text])[-UNDO_STEPS:]
+            self.board_future = []
         self.board_text = text
         self.script_box.delete("1.0", "end")
         self.script_box.insert("1.0", text)
         self._commit_script()
         self.refresh_estimate()
+        self._draw_timeline()
 
     def _board_edit(self, index, name, value):
         if self.board is None or index >= len(self.board):
@@ -4845,6 +5315,28 @@ class App(ctk.CTk):
             scene = self.board.scenes[index]
             threading.Thread(target=self._board_load_one, daemon=True,
                              args=(self.board_gen, index, scene, self._board_ctx())).start()
+
+    def board_undo(self, redo=False):
+        """Back (or forward again) one change made in the Storyboard."""
+        steps, other = ((self.board_future, self.board_history) if redo else
+                        (self.board_history, self.board_future))
+        if not steps or self.is_rendering or self._revising:
+            return
+        other.append(self.script_box.get("1.0", "end").strip())
+        text = steps.pop()
+        self.script_box.delete("1.0", "end")
+        self.script_box.insert("1.0", text)
+        self.board_marked = set()
+        self._commit_script()
+        self.refresh_board(force=True)
+        self.refresh_estimate()
+
+    def _undo_key(self, redo):
+        """Ctrl+Z / Ctrl+Y on the Storyboard; a text box keeps its own undo."""
+        if self.current_page == "board" and not isinstance(self.focus_get(), (tk.Entry, tk.Text)):
+            self.board_undo(redo)
+            return "break"
+        return None
 
     def _board_do(self, change):
         """A change to the order or the kind of a scene: every card is built again."""
@@ -5216,6 +5708,27 @@ class App(ctk.CTk):
                                           text_color=TEXT_MUTED, anchor="w", justify="left")
         self.speed_results.grid(row=next(rows), column=0, sticky="w", padx=18, pady=(0, 6))
 
+        self._caption(page, "MOVING PICTURES (BETA, GRAPHICS CARD ONLY)", next(rows))
+        moving_row = SettingRow(
+            page, self, self.icon("play"), "Make AI pictures move",
+            f"{animate.VIDEO_MODEL.name} turns a picture into a short moving clip. A separate "
+            f"download ({animate.SIZE / 1e9:.1f} GB)")
+        moving_row.grid(row=next(rows), column=0, sticky="ew", pady=PAD // 2)
+        self.moving_state = ctk.CTkLabel(moving_row.control, text="", font=self.font_body,
+                                         text_color=TEXT_MUTED)
+        self.moving_state.pack(side="left", padx=(0, 12))
+        self.moving_button = ctk.CTkButton(
+            moving_row.control, text="", width=96, height=32, corner_radius=4,
+            font=self.font_body, fg_color=FIELD_BG, hover_color=CARD_HOVER,
+            border_width=1, border_color=FIELD_BORDER, text_color=TEXT)
+        self.moving_button.pack(side="left")
+        which_row = SettingRow(page, self, self.icon("scenes"), "Which pictures move",
+                               "Each clip takes minutes, even on a good graphics card")
+        which_row.grid(row=next(rows), column=0, sticky="ew", pady=PAD // 2)
+        self._segmented(which_row.control, list(animate.CHOICES), self.var_animate, 380)
+        self._choice_hint(page, next(rows), self.var_animate, MOVING_HINTS)
+        self._moving_row_changed()
+
         self._caption(page, "TRY IT", next(rows))
         try_card = Card(page)
         try_card.grid(row=next(rows), column=0, sticky="ew", pady=(PAD // 2, PAD))
@@ -5239,6 +5752,45 @@ class App(ctk.CTk):
 
         self._images_row_changed()
         return page
+
+    # -- moving pictures -------------------------------------------------------
+    def _moving_row_changed(self, payload=None):
+        if payload and payload.get("event") == "progress":
+            self.moving_state.configure(text=f"Downloading: {payload['done'] / 1e9:.1f} of "
+                                             f"{payload['total'] / 1e9:.1f} GB")
+            self.moving_button.configure(text="Cancel", command=self._moving_stop.set)
+            return
+        if payload and payload.get("event") == "failed":
+            self.append_log(f"⚠️ {payload['message']}")
+        if animate.installed():
+            self.moving_state.configure(text="Downloaded", text_color=OK_COLOR)
+            self.moving_button.configure(text="Remove", command=self.remove_moving)
+        else:
+            self.moving_state.configure(
+                text="Needs AI images first" if not imagegen.installed() else
+                f"Not downloaded ({animate.SIZE / 1e9:.1f} GB)", text_color=TEXT_MUTED)
+            self.moving_button.configure(text="Download", command=self.download_moving,
+                                         state="normal" if imagegen.installed() else "disabled")
+
+    def download_moving(self):
+        self._moving_stop = stop = threading.Event()
+
+        def worker():
+            def progress(done, total):
+                self._queue.put(("moving", {"event": "progress", "done": done, "total": total}))
+            try:
+                animate.download(progress, stop.is_set)
+                self._queue.put(("moving", {"event": "done"}))
+            except Exception as exc:  # noqa: BLE001 - shown in the Log
+                self._queue.put(("moving", {"event": "failed", "message": str(exc)}))
+
+        self._moving_row_changed({"event": "progress", "done": 0, "total": animate.SIZE})
+        threading.Thread(target=worker, daemon=True).start()
+
+    def remove_moving(self):
+        animate.remove()
+        self.var_animate.set(animate.CHOICES[0])
+        self._moving_row_changed()
 
     def _choice_hint(self, page, row, variable, hints):
         """A line under a row of choices that explains the one that is picked."""
@@ -5679,6 +6231,53 @@ class App(ctk.CTk):
             # SND_ASYNC returns at once; the sound plays on its own.
             winsound.PlaySound(path, winsound.SND_FILENAME | winsound.SND_ASYNC)
 
+    def my_voice_made(self):
+        """My voice was just made: list it in every voice menu and choose it."""
+        values = voices.labels()
+        for menu in self.voice_menus:
+            menu.configure(values=values)
+        self.var_voice.set(voices.persona(voices.MY_VOICE).label)
+
+    # -- title, description and tags for posting ----------------------------
+    def make_upload_text(self, videos):
+        """After a render: the Smart writer writes them (or the first line does)."""
+        script, pid = self.script_box.get("1.0", "end").strip(), self.project
+        smart = self.writer_mode == "Smart writer" and writer.ready()[0]
+        gpu = bool(self.var_writer_gpu.get())
+
+        def worker():
+            upload = None
+            if smart:
+                try:
+                    with writer.Session(gpu=gpu) as session:
+                        upload = session.upload_text(script)
+                except Exception:  # noqa: BLE001 - the plain version is still useful
+                    upload = None
+            try:
+                upload = upload or writer.upload_fallback(script)
+            except ScriptError:
+                return
+            self._queue.put(("upload", {"upload": upload, "videos": videos, "project": pid}))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _upload_done(self, payload):
+        upload = payload["upload"]
+        self.last_upload = upload
+        for video in payload["videos"]:
+            try:
+                with open(os.path.splitext(video)[0] + ".upload.txt", "w",
+                          encoding="utf-8") as fh:
+                    fh.write(writer.upload_file_text(upload))
+            except OSError:
+                pass
+        data = projects.load(payload["project"]) if payload["project"] else None
+        if data is not None:
+            projects.save(payload["project"], dict(data, upload=upload), touch=False)
+        for window in self.winfo_children():
+            if isinstance(window, ResultDialog):
+                window.set_upload(upload)
+
     # -- make several -------------------------------------------------------
     def start_batch(self, texts):
         """Write and make each text in turn; the Log says how far it is."""
@@ -5733,9 +6332,14 @@ class App(ctk.CTk):
             if self.writer_mode == "Smart writer" and writer.ready()[0]:
                 with writer.Session(gpu=gpu) as session:
                     result = session.write(text, audience, length, padding, cards, ai)
+                    try:   # while the model is loaded anyway
+                        upload = session.upload_text(result.script)
+                    except writer.WriterError:
+                        upload = writer.upload_fallback(result.script)
             else:
                 result = draft.write(text, audience, length, padding=padding, cards=cards, ai=ai)
-            self._queue.put(("batch", {"result": result}))
+                upload = writer.upload_fallback(result.script)
+            self._queue.put(("batch", {"result": result, "upload": upload}))
         except Exception as exc:  # noqa: BLE001 - this video is skipped, the rest go on
             self._queue.put(("batch", {"error": str(exc) or type(exc).__name__}))
 
@@ -5749,6 +6353,7 @@ class App(ctk.CTk):
             self._batch_next()
             return
         result = payload["result"]
+        b["upload"] = payload.get("upload")
         self.project = None   # each video is its own project
         audience = b["audience"]   # as use_draft keeps it: the music's mood follows it
         self.audience = {"audience_content": audience.content, "audience_age": audience.age,
@@ -5869,6 +6474,7 @@ class App(ctk.CTk):
     def _on_close(self):
         self.save_project()
         save_settings(self._collect_settings())
+        writer.close_all()   # a title or translation still being written: its model stops too
         self.destroy()
 
 

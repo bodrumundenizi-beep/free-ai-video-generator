@@ -147,7 +147,16 @@ class _Piece:
 _SHAPE = re.compile(r"""^["“”'‘(\[]*(.*?)["“”'’)\]]*([.,;:!?…]*)["“”'’)\]]*$""", re.S)
 
 
-def _pieces(text: str) -> list[_Piece]:
+# Kokoro's speaker names start with their language; espeak-ng needs its own name for it.
+ESPEAK_LANGUAGE = {"a": "en-us", "b": "en-gb", "e": "es", "f": "fr-fr", "h": "hi", "i": "it",
+                   "p": "pt-br"}
+
+
+def language_of(speaker: str) -> str:
+    return ESPEAK_LANGUAGE.get(speaker[:1], "en-us")
+
+
+def _pieces(text: str, english: bool = True) -> list[_Piece]:
     out = []
     for raw in text.split():
         if re.fullmatch(r"[-–—]+", raw):
@@ -160,7 +169,8 @@ def _pieces(text: str) -> list[_Piece]:
             if out and mark and not out[-1].mark:
                 out[-1].mark = mark
             continue
-        out.append(_Piece(core, speakable(core), mark))
+        # Years and dollars are spelled out in English; other languages read numbers themselves.
+        out.append(_Piece(core, speakable(core) if english else core, mark))
     return out
 
 
@@ -177,14 +187,14 @@ def _chunks(pieces: list[_Piece]) -> list[list[_Piece]]:
     return chunks
 
 
-def _espeak(text: str, british: bool = False) -> str:
+def _espeak(text: str, language: str = "en-us") -> str:
     """The sounds of ``text`` in IPA, words separated by spaces."""
     exe = espeak_path()
     if exe is None:
         raise VoiceError("The voice's pronunciation program is missing from this copy of the app.")
     try:
         result = subprocess.run(
-            [exe, "-q", "--ipa", "-v", "en-gb" if british else "en-us",
+            [exe, "-q", "--ipa", "-v", language,
              "--path", os.path.dirname(exe), "--stdin"],
             # Without the newline espeak-ng drops the end of the last word.
             input=(text + "\n").encode("utf-8"), capture_output=True, timeout=30,
@@ -284,10 +294,10 @@ class Engine:
         """(samples at 24 kHz, [(start, duration, word)]) for one line."""
         import numpy as np
 
-        british = speaker.startswith("b")
+        language = language_of(speaker)
         batches, batch, size = [], [], 0
-        for chunk in _chunks(_pieces(text)):
-            sounds = self.phonemes(" ".join(p.spoken for p in chunk), british)
+        for chunk in _chunks(_pieces(text, language.startswith("en"))):
+            sounds = self.phonemes(" ".join(p.spoken for p in chunk), language)
             words = [[self.vocab[c] for c in word if c in self.vocab] for word in sounds.split()]
             words = [w for w in words if w]
             if not words:

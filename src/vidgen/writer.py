@@ -33,6 +33,7 @@ import requests
 
 from . import draft, pacing, voices
 from .footage import Stopped
+from .script import parse_script
 
 __all__ = ["MODEL", "Session", "Stopped", "WriterError", "download", "installed", "ready",
            "remove", "runtime_path", "suggest", "write"]
@@ -281,14 +282,40 @@ _EXAMPLE_OUT_PICTURES = json.dumps({"scenes": [
 PICTURE_TOKENS = 45  # room in the answer for one scene's picture description
 
 
-def build_prompt(audience: draft.Audience, words: int, pictures: bool = False) -> str:
+_IDEA_START = re.compile(r"^\s*(please\s+)?(write|make|create|tell|give|generate|do)\b", re.I)
+_STORY = re.compile(r"\b(story|tale|horror|adventure|thriller|mystery)\b", re.I)
+
+
+def is_idea(text: str) -> bool:
+    """A request for a video ("write a story about being followed at night"), not a text to
+    turn into one: short, and asks for something."""
+    words = len(text.split())
+    return words <= 40 and (bool(_IDEA_START.search(text)) or words <= 12)
+
+
+def build_prompt(audience: draft.Audience, words: int, pictures: bool = False,
+                 idea: str = "") -> str:
     """The instructions for writing a script of about ``words`` spoken words.
 
-    With ``pictures`` every scene also gets a description an image model can draw.
+    With ``pictures`` every scene also gets a description an image model can draw. With
+    ``idea`` (the user asked for a video rather than giving a text) the script is invented:
+    for a story, events that happen one after another, not a mood described.
     """
+    if idea and _STORY.search(idea):
+        task = ("The user gives an idea for a story. Write an original short story from it, "
+                "told as narration. Something happens in every scene: a character does "
+                "something, hears or sees something, decides something. It builds: a calm "
+                "start, rising tension, a turn, and an ending that pays off. Use concrete "
+                "details (a sound, a place, an object), not feelings described in general.\n")
+    elif idea:
+        task = ("The user gives an idea for a video, not a text. Write an original script "
+                "about it with concrete facts, steps or examples, one new point per scene.\n")
+    else:
+        task = ("Rewrite the user's text as a script, in your own words. Do not copy its "
+                "sentences.\n")
     return (
         "You are a scriptwriter for short narrated videos made from stock footage. "
-        "Rewrite the user's text as a script, in your own words. Do not copy its sentences.\n"
+        + task +
         f"Audience and style: {audience.brief}\n"
         f"Length: all the spoken lines together must be about {words} words "
         f"({round(words * 0.85)} to {round(words * 1.1)}). Keep the most important points "
@@ -304,8 +331,9 @@ def build_prompt(audience: draft.Audience, words: int, pictures: bool = False) -
         + ("- \"picture\" is one sentence describing a photo for this scene: who or what is "
            "in it, what they are doing and where. Things you can see, not ideas. No writing, "
            "logos or brand names in the picture.\n" if pictures else "")
-        + "- Use only facts from the text. No greetings, hashtags or emojis.\n"
-        "Answer with JSON only."
+        + ("- No greetings, hashtags or emojis.\n" if idea else
+           "- Use only facts from the text. No greetings, hashtags or emojis.\n")
+        + "Answer with JSON only."
     )
 
 
@@ -492,6 +520,67 @@ def parse_scenes(content: str) -> list[draft.DraftScene]:
     return scenes
 
 
+# --- text for posting the video ---------------------------------------------------
+
+_UPLOAD_TOKENS = 300
+_UPLOAD_PROMPT = (
+    "You write the text for posting a short video online. The user gives what the video "
+    "says.\n"
+    "- \"title\": under 70 characters, written like a headline with normal capital letters, "
+    "makes people curious, no clickbait lies, no emojis.\n"
+    "- \"description\": 2 or 3 plain sentences about what the viewer learns, with normal "
+    "capital letters.\n"
+    "- \"tags\": 5 to 10 search words or short phrases, only these in lower case, no # "
+    "signs.\n"
+    "Use only what the video says. Answer with JSON only."
+)
+_UPLOAD_SCHEMA = {
+    "type": "object",
+    "properties": {"title": {"type": "string"}, "description": {"type": "string"},
+                   "tags": {"type": "array", "items": {"type": "string"},
+                            "minItems": 1, "maxItems": 10}},
+    "required": ["title", "description", "tags"],
+}
+
+
+def _translate_tokens(lines) -> int:
+    # Other languages take more tokens per word than English; Hindi about three times.
+    return min(200 + sum(len(line) for line in lines) * 2, CONTEXT // 2)
+
+
+def tidy_upload(title, description, tags) -> dict:
+    """The upload text cleaned up: one-line title of at most 70 characters, unique tags."""
+    title = " ".join(str(title).split()).strip("\"' ")
+    if len(title) > 70:
+        title = title[:70].rsplit(" ", 1)[0].rstrip(",.;:-")
+    seen, clean = set(), []
+    for tag in tags if isinstance(tags, list) else []:
+        tag = " ".join(str(tag).lower().lstrip("#").split())
+        if tag and tag not in seen:
+            seen.add(tag)
+            clean.append(tag)
+    description = " ".join(str(description).split())
+    if title == title.lower():   # the small model sometimes writes it all in lower case
+        title = title[:1].upper() + title[1:]
+    if description == description.lower():
+        description = re.sub(r"(^|[.!?]\s+)([a-z])", lambda m: m[1] + m[2].upper(), description)
+    return {"title": title, "description": description, "tags": clean[:10]}
+
+
+def upload_fallback(script: str) -> dict:
+    """Without the Smart writer: the first line as the title, the search words as tags."""
+    scenes = parse_script(script)
+    lines = [s.voice for s in scenes if s.voice]
+    title = lines[0] if lines else "My video"
+    tags = [s.visual for s in scenes if not s.is_ai and not s.is_local]
+    return tidy_upload(title, " ".join(lines[:2]), tags)
+
+
+def upload_file_text(upload: dict) -> str:
+    return (f"Title:\n{upload['title']}\n\nDescription:\n{upload['description']}\n\n"
+            f"Tags:\n{', '.join(upload['tags'])}\n")
+
+
 # --- running the model -------------------------------------------------------------
 
 def _free_port() -> int:
@@ -510,6 +599,19 @@ def _launch(exe: str, model_file: str, port: int, gpu: bool = False):
          "-ngl", GPU_LAYERS if gpu else "0"],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
         creationflags=flags)
+
+
+# Every Session with a running model, so the app can stop them all as it closes: a worker
+# thread dies with the app, and its model would otherwise keep 2.5 GB of memory.
+_LIVE: set = set()
+_LIVE_LOCK = threading.Lock()
+
+
+def close_all() -> None:
+    with _LIVE_LOCK:
+        live = list(_LIVE)
+    for session in live:
+        session.close()
 
 
 class Session:
@@ -555,6 +657,8 @@ class Session:
             self._proc = self._launch(runtime_path(), model_path(), port, self.gpu)
         except OSError as exc:
             raise WriterError(f"The Smart writer could not be started: {exc}") from exc
+        with _LIVE_LOCK:
+            _LIVE.add(self)
         deadline = time.monotonic() + START_TIMEOUT
         while time.monotonic() < deadline:
             self._stopping()
@@ -579,6 +683,8 @@ class Session:
         """Stop the model and give its memory back. Safe to call twice, from any thread."""
         with self._lock:
             proc, self._proc = self._proc, None
+        with _LIVE_LOCK:
+            _LIVE.discard(self)
         if proc is not None:
             try:
                 proc.kill()
@@ -587,13 +693,13 @@ class Session:
                 pass
 
     def _ask(self, system: str, turns: list[tuple[str, str]], schema: dict,
-             max_tokens: int) -> str:
+             max_tokens: int, temperature: float = 0.6) -> str:
         """One answer from the model, as text that fits ``schema``."""
         self.start()
         messages = [{"role": "system", "content": system}]
         messages += [{"role": role, "content": content} for role, content in turns]
         body = {
-            "messages": messages, "temperature": 0.6, "max_tokens": max_tokens,
+            "messages": messages, "temperature": temperature, "max_tokens": max_tokens,
             "seed": random.randrange(1, 2 ** 31),
             # Qwen3 would otherwise think out loud first, which costs time and fits no schema.
             "chat_template_kwargs": {"enable_thinking": False},
@@ -633,6 +739,43 @@ class Session:
             watcher.join(timeout=2)
 
     # -- what it is used for ---------------------------------------------------------
+    def translate(self, lines: list[str], language: str) -> list[str]:
+        """``lines`` in ``language``, one for one: the scenes keep their pictures."""
+        if not lines:
+            return []
+        asked = json.dumps({"lines": lines}, ensure_ascii=False)
+        _check_fits(asked, _translate_tokens(lines))
+        prompt = (f"You are a professional translator and a native {language} speaker. "
+                  f"Translate each line of a short narrated video into {language}, the way a "
+                  f"native speaker would say it: correct grammar and spelling, everyday "
+                  f"words, the usual {language} names for computer things. Translate every "
+                  "word; leave no English words except names and key combinations such as "
+                  "Win + V. Keep the meaning and the order, one translated line for each line. "
+                  "Answer with JSON only.")
+        schema = {"type": "object", "required": ["lines"], "properties": {"lines": {
+            "type": "array", "items": {"type": "string"},
+            "minItems": len(lines), "maxItems": len(lines)}}}
+        # Low temperature: a translation should be the likeliest wording, not a creative one.
+        content = self._ask(prompt, [("user", asked)], schema, _translate_tokens(lines), 0.2)
+        try:
+            found = [" ".join(str(line).split()) for line in json.loads(content)["lines"]]
+        except (ValueError, KeyError, TypeError) as exc:
+            raise WriterError("The Smart writer gave an answer the app could not read.") from exc
+        if len(found) != len(lines) or not all(found):
+            raise WriterError("The Smart writer left out a line. Try again.")
+        return found
+
+    def upload_text(self, script: str) -> dict:
+        """A title, description and tags for posting the video. Nothing is posted."""
+        spoken = " ".join(s.voice for s in parse_script(script) if s.voice)
+        _check_fits(spoken, _UPLOAD_TOKENS)
+        content = self._ask(_UPLOAD_PROMPT, [("user", spoken)], _UPLOAD_SCHEMA, _UPLOAD_TOKENS)
+        try:
+            answer = json.loads(content)
+            return tidy_upload(answer["title"], answer["description"], answer["tags"])
+        except (ValueError, KeyError, TypeError) as exc:
+            raise WriterError("The Smart writer gave an answer the app could not read.") from exc
+
     def suggest(self, text: str, last: draft.Audience | None = None,
                 padding: float = 0.3) -> draft.Suggestion:
         """Who the text is for, judged by the model. The length rule stays draft's."""
@@ -744,7 +887,7 @@ class Session:
         _check_fits(text, room)
         example = _EXAMPLE_OUT_PICTURES if pictures else _EXAMPLE_OUT
         content = self._ask(
-            build_prompt(audience, words, pictures),
+            build_prompt(audience, words, pictures, text if is_idea(text) else ""),
             [("user", _EXAMPLE_IN), ("assistant", example), ("user", text)],
             script_schema(scene_count(words), pictures), room)
         return parse_scenes(content)

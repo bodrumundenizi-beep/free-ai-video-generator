@@ -33,7 +33,8 @@ def fake_phonemes(text, british=False):
 def engine(phonemes=fake_phonemes, session=None):
     speakers = {"am_one": np.full((510, 1, 256), 1.0, np.float32),
                 "am_two": np.full((510, 1, 256), 3.0, np.float32),
-                "bm_brit": np.zeros((510, 1, 256), np.float32)}
+                "bm_brit": np.zeros((510, 1, 256), np.float32),
+                "ef_dora": np.zeros((510, 1, 256), np.float32)}
     return Engine(session or FakeSession(), speakers, VOCAB, phonemes)
 
 
@@ -115,7 +116,9 @@ def test_two_speakers_blend_evenly_and_british_ones_use_british_sounds():
     assert session.inputs[0]["style"].mean() == pytest.approx(2.0)
     assert session.inputs[0]["speed"][0] == pytest.approx(1.15)
     voice_engine.say("hi", "bm_brit")
-    assert asked == [False, True]
+    assert asked == ["en-us", "en-gb"]
+    voice_engine.say("hola", "ef_dora")
+    assert asked[-1] == "es"
 
 
 def test_a_long_line_is_read_in_batches_and_the_times_carry_on():

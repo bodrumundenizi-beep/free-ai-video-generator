@@ -77,15 +77,17 @@ def test_the_pinned_espeak_build_is_a_full_checksum_of_a_tagged_release():
         f"https://github.com/espeak-ng/espeak-ng/releases/download/{pins.TAG}/")
 
 
-def test_only_the_english_part_of_espeak_goes_into_the_app():
+def test_only_the_languages_the_app_speaks_go_into_the_app():
     from vidgen import localvoice
 
     needed = fetch_espeak().needed
     for name in ("espeak-ng.exe", "libespeak-ng.dll", "espeak-ng-data/phondata",
                  "espeak-ng-data/en_dict", "espeak-ng-data\\lang\\gmw\\en-US",
-                 "espeak-ng-data/voices/!v/f1"):
+                 "espeak-ng-data/voices/!v/f1", "espeak-ng-data/es_dict",
+                 "espeak-ng-data/lang/roa/fr", "espeak-ng-data/lang/roa/pt-BR",
+                 "espeak-ng-data/lang/inc/hi"):
         assert needed(name), name
-    for name in ("espeak-ng-data/de_dict", "espeak-ng-data/lang/roa/fr", "README.md",
-                 "espeak-ng-data/lang/gmw/de"):
+    for name in ("espeak-ng-data/de_dict", "README.md", "espeak-ng-data/lang/gmw/de",
+                 "espeak-ng-data/lang/zle/ru"):
         assert not needed(name), name
     assert fetch_espeak().EXE == localvoice.ESPEAK_EXE

@@ -63,7 +63,7 @@ def _fit(texts, pixels: int, limit: float):
     """The largest font up to ``pixels`` at which the widest of ``texts`` fits ``limit``."""
     size = pixels
     while True:
-        font = captions._font(size)
+        font = captions._font(size, captions.devanagari(*texts))
         widest = max(font.getlength(t) for t in texts)
         if widest <= limit or size <= 12:
             return font, size
@@ -89,7 +89,7 @@ def draw(text: str, frame_size, accent: str = "#FFE14D", shown: int | None = Non
     if which == "keys":
         gap = round(pixels * 0.3)
         while True:  # shrink until the whole row fits
-            font = captions._font(pixels)
+            font = captions._font(pixels, captions.devanagari(*pieces))
             height = round(pixels * 1.7)
             widths = [max(height, round(font.getlength(p) + pixels * 0.9)) for p in pieces]
             plus = round(font.getlength("+"))

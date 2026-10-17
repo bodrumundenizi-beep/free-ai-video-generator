@@ -196,11 +196,21 @@ def write_srt(video_path: str, cues) -> str:
 
 # --- drawing -------------------------------------------------------------------
 
+def devanagari(*texts) -> bool:
+    """Whether any of ``texts`` is written in Hindi letters, which the usual fonts lack."""
+    return any(0x0900 <= ord(ch) <= 0x097F for text in texts for ch in text)
+
+
 @lru_cache(maxsize=32)
-def _font(pixels: int):
+def _font(pixels: int, hindi: bool = False):
     from PIL import ImageFont
 
     folder = os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Fonts")
+    if hindi:   # Windows' own Hindi font, bold
+        try:
+            return ImageFont.truetype(os.path.join(folder, "Nirmala.ttc"), pixels, index=1)
+        except OSError:
+            pass
     for name in FONT_FILES:
         try:
             return ImageFont.truetype(os.path.join(folder, name), pixels)
@@ -244,7 +254,7 @@ def render_state(texts, active, frame_w: int, pixels: int, highlight: Highlight 
 
     size = pixels
     while True:
-        font = _font(size)
+        font = _font(size, devanagari(*words))
         stroke = _stroke(size)
         space = font.getlength(" ")
         widths = [font.getlength(word) for word in words]

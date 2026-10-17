@@ -1,5 +1,6 @@
 import numpy as np
 import pytest
+from vidgen import audio
 
 from vidgen.audio import (
     ATTACK, BASE_GAIN, DUCK_GAIN, RELEASE, gain_curve, merge_intervals, speech_bounds,
@@ -68,3 +69,34 @@ def test_no_speech_means_constant_music():
     times, gains = gain_curve([], 3.0)
     assert np.allclose(gains, BASE_GAIN)
     assert times[-1] >= 3.0
+
+
+def test_sound_effects_sit_before_each_cut_and_on_each_card():
+    times = audio.effect_times([3.0, 6.0], [0.1, 6.1], 9.0)
+    assert ("whoosh", 3.0 - audio.WHOOSH_LEAD) in times and ("pop", 6.1) in times
+    assert len(times) == 4
+    assert audio.effect_times([0.2], [], 9.0) == []          # too close to the start
+    assert audio.effect_times([], [8.99], 9.0) == []         # past the end
+
+
+def test_the_effects_are_quiet_stereo_sounds():
+    for wave, gain in ((audio.whoosh(), audio.WHOOSH_GAIN), (audio.pop(), audio.POP_GAIN)):
+        assert wave.ndim == 2 and wave.shape[1] == 2
+        assert 0 < abs(wave).max() <= gain + 1e-6
+
+
+def test_onsets_find_where_the_music_hits():
+    rate = 1000
+    samples = np.zeros(4 * rate, dtype=np.float32)
+    for hit in (0.5, 1.5, 2.5):
+        samples[int(hit * rate):int(hit * rate) + 100] = 1.0
+    found = audio.onsets(samples, rate)
+    assert len(found) == 3 and all(abs(f - h) < 0.03 for f, h in zip(found, (0.5, 1.5, 2.5)))
+
+
+def test_cuts_move_onto_nearby_beats_but_never_cut_a_word():
+    beats = [3.1, 6.4, 9.0]
+    # cut 1 at 3.0 -> 3.1; cut 2 at 3.1 + 3.0 = 6.1 -> 6.4 is 0.3 away: stays
+    assert audio.snap_cuts([3.0, 3.0, 3.0], [1, 1, 1], beats) == pytest.approx([3.1, 3.0, 3.0])
+    # a beat earlier than the scene's words end is not used
+    assert audio.snap_cuts([3.0, 3.0], [2.95, 1], [2.8]) == [3.0, 3.0]

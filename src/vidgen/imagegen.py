@@ -456,7 +456,7 @@ def damaged_files(should_stop=None) -> list[str]:
     return bad
 
 
-def _run(args, log_path, should_stop, launch, began):
+def _run(args, log_path, should_stop, launch, began, timeout: float | None = None):
     """Run the program to its end. Returns its exit code; Stopped or ImageError otherwise."""
     try:
         process = launch(args, log_path)
@@ -466,7 +466,7 @@ def _run(args, log_path, should_stop, launch, began):
         while process.poll() is None:
             if should_stop is not None and should_stop():
                 raise Stopped()
-            if time.monotonic() - began > TIMEOUT:
+            if time.monotonic() - began > (timeout or TIMEOUT):
                 raise ImageError("The AI picture took too long on this PC.")
             time.sleep(0.2)
     finally:

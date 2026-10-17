@@ -32,6 +32,7 @@ class Persona:
     pause_scale: float = 1.0  # multiplies the breath-pause lengths
     enhanced: bool = True  # breath pauses + broadcast mastering
     local: str = ""  # the offline speaker; "a+b" is an even blend of two
+    language: str = "English"  # what it speaks; a translated video uses one of LANGUAGES
 
 
 _VIRAL = dict(category="Viral / Shorts", rate="+15%", pitch="+0Hz", pause_scale=0.7)
@@ -40,6 +41,7 @@ _DEEP = dict(category="Deep / Storyteller", rate="-2%", pitch="-2Hz", pause_scal
 _PRO = dict(category="Professional / Tutorial", rate="+3%", pitch="+0Hz", pause_scale=1.0)
 _ACCENT = dict(category="Accents & Regional", rate="+2%", pitch="+0Hz", pause_scale=1.0)
 _CLASSIC = dict(category="Classic (low quality)", rate="+10%", pitch="+5Hz", enhanced=False)
+_OTHER = dict(category="Other languages", rate="+0%", pitch="+0Hz", pause_scale=1.0)
 
 CATALOG: tuple[Persona, ...] = (
     Persona("viral-max", "en-US-GuyNeural",
@@ -91,6 +93,28 @@ CATALOG: tuple[Persona, ...] = (
     Persona("en-AU-WilliamMultilingualNeural", "en-AU-WilliamMultilingualNeural",
             "Accent · William - UK male, warm storyteller", "William · UK",
             local="bm_fable", **_ACCENT),
+    Persona("es-lucia", "es-ES-ElviraNeural", "Spanish · Lucía - female", "Lucía · Spanish",
+            local="ef_dora", language="Spanish", **_OTHER),
+    Persona("es-alejandro", "es-ES-AlvaroNeural", "Spanish · Alejandro - male",
+            "Alejandro · Spanish", local="em_alex", language="Spanish", **_OTHER),
+    Persona("fr-camille", "fr-FR-DeniseNeural", "French · Camille - female", "Camille · French",
+            local="ff_siwis", language="French", **_OTHER),
+    Persona("it-sara", "it-IT-ElsaNeural", "Italian · Sara - female", "Sara · Italian",
+            local="if_sara", language="Italian", **_OTHER),
+    Persona("it-nicola", "it-IT-DiegoNeural", "Italian · Nicola - male", "Nicola · Italian",
+            local="im_nicola", language="Italian", **_OTHER),
+    Persona("pt-ana", "pt-BR-FranciscaNeural", "Portuguese (Brazil) · Ana - female",
+            "Ana · Portuguese", local="pf_dora", language="Portuguese (Brazil)", **_OTHER),
+    Persona("pt-rafael", "pt-BR-AntonioNeural", "Portuguese (Brazil) · Rafael - male",
+            "Rafael · Portuguese", local="pm_alex", language="Portuguese (Brazil)", **_OTHER),
+    Persona("hi-priya", "hi-IN-SwaraNeural", "Hindi · Priya - female", "Priya · Hindi",
+            local="hf_alpha", language="Hindi", **_OTHER),
+    Persona("hi-arjun", "hi-IN-MadhurNeural", "Hindi · Arjun - male", "Arjun · Hindi",
+            local="hm_omega", language="Hindi", **_OTHER),
+    # Only listed once a voice has been made from the user's recording (vidgen.myvoice).
+    Persona("my-voice", "en-US-GuyNeural", "Beta · My voice - made from your recording",
+            "My voice (beta)", category="My voice (beta)", rate="+0%", pitch="+0Hz",
+            local="am_michael"),
     Persona("Neural Male", "en-US-GuyNeural",
             "Classic · Neural Male (low quality)", "Neural Male (classic)",
             local="am_michael", **_CLASSIC),
@@ -106,6 +130,7 @@ CATALOG: tuple[Persona, ...] = (
 )
 
 DEFAULT_ID = "en-US-GuyNeural"
+MY_VOICE = "my-voice"
 _BY_KEY = {p.id: p for p in CATALOG} | {p.label: p for p in CATALOG}
 
 
@@ -119,6 +144,22 @@ def persona(value) -> Persona:
     return find(value) or _BY_KEY[DEFAULT_ID]
 
 
+LANGUAGES = tuple(dict.fromkeys(p.language for p in CATALOG if p.language != "English"))
+
+
+def for_language(language: str, like: Persona | None = None) -> Persona:
+    """A voice that speaks ``language``: the same kind (male or female) as ``like`` if there
+    is one."""
+    choices = [p for p in CATALOG if p.language == language] or [persona(DEFAULT_ID)]
+    if like is not None and like.local[1:2] in ("f", "m"):
+        same = [p for p in choices if p.local[1:2] == like.local[1:2]]
+        choices = same or choices
+    return choices[0]
+
+
 def labels() -> list[str]:
-    """Dropdown entries, grouped by category, Classic last."""
-    return [p.label for p in CATALOG]
+    """Dropdown entries, grouped by category, Classic last. My voice only once it is made."""
+    from . import myvoice
+
+    made = myvoice.ready()
+    return [p.label for p in CATALOG if p.id != MY_VOICE or made]

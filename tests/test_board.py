@@ -114,3 +114,28 @@ def test_changed_marks_rewritten_scenes_not_moved_ones():
 def test_stock_words_come_from_the_description():
     assert board.stock_words("a robot holding an office clipboard") == "robot holding office"
     assert board.stock_words("") == board.NEW_VISUAL
+
+
+def test_a_scene_length_is_set_to_the_half_second_and_can_go_back_to_automatic():
+    from vidgen import voices
+
+    b = board.Board.from_text("Visual: a\nVoice: One two three four five six.\n\nVisual: b\n"
+                              "Voice: Seven.")
+    b.set_length(0, 3.26)
+    assert b.scenes[0].duration == 3.5 and "Duration: 3.5s" in b.text()
+    b.set_length(1, 99)
+    assert b.scenes[1].duration == board.MAX_LENGTH
+    lengths = b.lengths(voices.persona(""), 0.3)
+    assert lengths[0] == 3.5 and lengths[1] == board.MAX_LENGTH
+    b.set_length(0, None)
+    assert b.scenes[0].duration is None
+    assert b.lengths(voices.persona(""), 0.3)[0] > 1.0
+
+
+def test_a_translation_replaces_only_the_spoken_lines():
+    script = ("Visual: keyboard\nVoice: Press Windows and V.\nCard: Win + V\n\n"
+              "Visual: local: intro.png\nDuration: 2s\n\nVisual: ai: a desk\nVoice: Pin it.")
+    out = board.with_lines(script, ["Presiona Windows y V.", "Fíjalo."])
+    scenes = board.parse_script(out)
+    assert [s.voice for s in scenes] == ["Presiona Windows y V.", None, "Fíjalo."]
+    assert scenes[0].card == "Win + V" and scenes[1].duration == 2 and scenes[2].is_ai
