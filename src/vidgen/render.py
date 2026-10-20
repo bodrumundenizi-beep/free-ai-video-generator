@@ -20,6 +20,7 @@ once and shared. Cancel is checked between steps and on every encoded frame.
 from __future__ import annotations
 
 import dataclasses
+import functools
 import os
 import re
 import shutil
@@ -28,7 +29,8 @@ import time
 from dataclasses import dataclass, field
 
 from . import footage, paths
-from .formats import resolve_target
+from .formats import BITRATE_MAP, DRAFT, resolve_target
+from .stages import Stages
 from .paths import next_free_path  # noqa: F401 - re-exported for the window and tests
 from .script import Scene, parse_script
 from .timeline import boundaries, shot_spans
@@ -108,11 +110,20 @@ class UiBridge:
     def cancelled(self):
         self._post("cancelled")
 
+    def timings(self, stages):
+        """The finished render's Stages; the window has the ⏱️ line, the benchmark wants more."""
+
 
 @dataclass
 class _Source:
     path: str
     kind: str  # "video" or "image"
+    # A stock clip already cut to the frame (clips.py): the download itself, and the
+    # motion and focus framed_shot should use with the cut clip.
+    original: str = ""
+    movement: float | None = None
+    focus: tuple | None = None
+    cut: bool = False
 
 
 @dataclass
@@ -352,22 +363,25 @@ def _render(cfg, ui, work_dir, job):
         f"🚀 Starting {ratio} render at {target_w}x{target_h} "
         f"({quality}, {bitrate})..."
     )
+    from . import stages, writer
+
+    hint = stages.load_hint(writer.free_memory(), stages.cpu_busy())
+    if hint:   # a hint, never a stop: the render goes ahead either way
+        ui.log(hint)
     ui.status(f"Rendering {target_w}x{target_h}...")
     total_scenes = len(plans)
-    spent = {"voices": 0.0, "footage": 0.0, "encode": 0.0}
-    began = time.perf_counter()
+    spent = Stages()
 
     # 2. Voiceovers. Each one decides its scene's length.
+    ui.status("Step 1 of 4: Voices...")
+    voices_began = spent.clock(), spent.cpu()
     for i, plan in enumerate(plans):
         _check(stop)
         scene = plan.scene
         ui.log(f"🎬 Scene {i + 1} of {total_scenes}")
         if scene.voice:
-            voice_path = os.path.join(work_dir, f"voice_{i}.mp3")
-            # Studio voices come back as a mastered .wav, classic ones as the .mp3.
-            voice_path, words = generate_voiceover_timed(
-                scene.voice, voice_path, ui.log, cfg.get("voice"),
-                bool(cfg.get("voice_online")))
+            voice_path, words = _voice(scene.voice, os.path.join(work_dir, f"voice_{i}.mp3"),
+                                       cfg, ui)
             # The file is registered for closing; the trimmed copy shares its reader.
             raw = job.keep(AudioFileClip(voice_path))
             lead, tail = audio.speech_window(raw)
@@ -378,8 +392,10 @@ def _render(cfg, ui, work_dir, job):
             plan.words = [(max(start - lead, 0.0), length, text)
                           for start, length, text in words]
         ui.progress(VOICE_SHARE * (i + 1) / total_scenes)
+    spent.add("voices", spent.clock() - voices_began[0], spent.cpu() - voices_began[1])
 
-    paddings = _pace(plans, cfg.get("target_length"), default_padding, work_dir, job, ui)
+    with spent.time("pacing"):
+        paddings = _pace(plans, cfg.get("target_length"), default_padding, work_dir, job, ui)
 
     for plan in plans:
         scene = plan.scene
@@ -395,7 +411,6 @@ def _render(cfg, ui, work_dir, job):
                     f"Duration: is {plan.duration:g}s, so it will be cut short."
                 )
         plan.duration = max(plan.duration, MIN_SCENE)
-    spent["voices"] = time.perf_counter() - began
 
     # 3-7. Once per version: footage, timeline, pictures, sound, encode.
     choices = cfg.get("clip_choices") or {}
@@ -413,10 +428,10 @@ def _render(cfg, ui, work_dir, job):
             cfg, ui, work_dir, job, plans, search, choices, version, wanted, fallbacks,
             (target_w, target_h, ratio, bitrate), share, spent, stop))
 
-    total_time = time.perf_counter() - began
     # Where the time went: the first thing asked when a render "feels slow".
-    ui.log(f"⏱️ Voices {spent['voices']:.1f} s · footage {spent['footage']:.1f} s · "
-           f"encode {spent['encode']:.1f} s · total {total_time:.1f} s")
+    total_time = spent.total()
+    ui.log(spent.line(total_time))
+    ui.timings(spent)
     ui.log("🧹 Releasing memory and deleting temp files...")
     ui.progress(1.0)
     listing = "\n".join(saved)
@@ -431,6 +446,31 @@ def _render(cfg, ui, work_dir, job):
 
 
 VOICE_SHARE = 0.25  # of the progress bar; the rest is split between the versions
+
+
+def _voice(text, path, cfg, ui):
+    """(file, word timings) for one spoken line: kept from an earlier render, or made now.
+
+    Kept by everything that changes the sound: the words, the speaker, offline or online,
+    and the app version (a new version may change the voice engine or its mastering).
+    """
+    from . import cache
+
+    store = cache.Cache(cfg.get("cache_root"), "voices")
+    online = bool(cfg.get("voice_online"))
+    name = cache.key("voice", text, cfg.get("voice"), online, cfg.get("app_version"))
+    kept = store.get_json(name + ".json")
+    if kept:
+        audio_file = store.get(name + kept["ext"])
+        if audio_file:
+            ui.log("🗣️ Same line and voice as before: reusing it")
+            return audio_file, [tuple(word) for word in kept["words"]]
+    # Studio voices come back as a mastered .wav, classic ones as the .mp3.
+    made, words = generate_voiceover_timed(text, path, ui.log, cfg.get("voice"), online)
+    ext = os.path.splitext(made)[1]
+    if store.put(name + ext, made):
+        store.put_json(name + ".json", {"ext": ext, "words": [list(w) for w in words]})
+    return made, words
 
 
 def _pace(plans, target, default_padding, work_dir, job, ui):
@@ -506,7 +546,7 @@ def _retime(plan, tempo, dest, job):
 def _make_version(cfg, ui, work_dir, job, plans, search, choices, version, save_path,
                   fallbacks, frame, share, spent, stop):
     """Footage to finished file for one version; returns where it was saved."""
-    from moviepy import CompositeVideoClip, ImageClip, VideoFileClip, vfx
+    from moviepy import ImageClip, VideoFileClip, vfx
 
     from . import audio, motion
 
@@ -515,33 +555,50 @@ def _make_version(cfg, ui, work_dir, job, plans, search, choices, version, save_
     total_scenes = len(plans)
 
     # 3. Footage. FootageSearch remembers what it has handed out, so a second
-    #    version gets different clips without being asked to.
-    began = time.perf_counter()
+    #    version gets different clips without being asked to. Stock clips are fetched and
+    #    cut a few at a time in the background while AI pictures are made.
+    from concurrent.futures import ThreadPoolExecutor
+
+    from . import cache
+
     credits, providers_used = [], set()
     ai_seen = 0
-    for i, plan in enumerate(plans):
-        _check(stop)
-        if plan.scene.is_ai and not _ai_picture(plan, i, cfg, ratio, work_dir, ui, version,
-                                                search, stop):
-            plan.scene = _stock_instead(plan.scene)
-        if plan.scene.is_ai:
-            plan.kind = "still AI picture"
-            _moving_picture(plan, i, cfg, ratio, work_dir, ui, version, ai_seen, stop)
-            ai_seen += 1
-        if plan.scene.is_local:
-            plan.kind = "your file"
-            ui.log(f"📁 Scene {i + 1}: {os.path.basename(plan.sources[0].path)}")
-        elif plan.scene.is_ai:
-            pass   # its picture was just made
-        else:
-            plan.parts = 2 if (plan.scene.duration is None and plan.voice_len > LONG_SCENE) else 1
-            previous, plan.sources = plan.sources, []
-            _acquire_stock(plan, i, search, work_dir, ui, credits, providers_used,
-                           choices.get(i), version, previous, stop)
-        ui.progress(base_progress + span * 0.35 * (i + 1) / total_scenes)
-    spent["footage"] += time.perf_counter() - began
+    stock = _StockFetch(cache.Cache(cfg.get("cache_root"), "clips"), (target_w, target_h),
+                        bool(cfg.get("smart_motion")), work_dir, stop,
+                        ThreadPoolExecutor(DOWNLOADS, thread_name_prefix="clip"))
+    ui.status("Step 2 of 4: Clips and pictures...")
+    try:
+        with spent.time("stock"):
+            stock.start(plans, search, choices)
+        for i, plan in enumerate(plans):
+            _check(stop)
+            if plan.scene.is_ai:
+                with spent.time("AI pictures"):
+                    made = _ai_picture(plan, i, cfg, ratio, work_dir, ui, version, search, stop)
+                if not made:
+                    plan.scene = _stock_instead(plan.scene)
+            if plan.scene.is_ai:
+                plan.kind = "still AI picture"
+                with spent.time("moving pictures"):
+                    _moving_picture(plan, i, cfg, ratio, work_dir, ui, version, ai_seen, stop)
+                ai_seen += 1
+            if plan.scene.is_local:
+                plan.kind = "your file"
+                ui.log(f"📁 Scene {i + 1}: {os.path.basename(plan.sources[0].path)}")
+            elif plan.scene.is_ai:
+                pass   # its picture was just made
+            else:
+                plan.parts = _parts(plan)
+                previous, plan.sources = plan.sources, []
+                with spent.time("stock"):
+                    _acquire_stock(plan, i, search, ui, credits, providers_used,
+                                   choices.get(i), previous, stop, stock)
+            ui.progress(base_progress + span * 0.35 * (i + 1) / total_scenes)
+    finally:
+        stock.pool.shutdown(wait=True, cancel_futures=True)
 
     # 4. Timeline. With music, the cuts between scenes move onto its beats.
+    timeline_began = spent.clock(), spent.cpu()
     music_file = (cfg.get("music_path") or "").strip()
     if cfg.get("smart_motion") and cfg.get("music_enabled") and os.path.isfile(music_file):
         try:
@@ -558,12 +615,15 @@ def _make_version(cfg, ui, work_dir, job, plans, search, choices, version, save_
     starts = boundaries(durations)
     total = starts[-1]
     shots = shot_spans(durations, [p.parts for p in plans])
+    spent.add("timeline", spent.clock() - timeline_began[0], spent.cpu() - timeline_began[1])
 
     # 5. Pictures.
     _check(stop)
+    layers_began = spent.clock(), spent.cpu()
     for line in scene_lines(plans):
         ui.log(line)
     ui.log(f"✂️ Stitching {ratio} scenes at {target_w}x{target_h}...")
+    ui.status("Step 3 of 4: Putting the scenes together...")
     from PIL import Image
 
     from . import drawn
@@ -578,8 +638,9 @@ def _make_version(cfg, ui, work_dir, job, plans, search, choices, version, save_
         if style != drawn.NORMAL:   # drawn on screen from one still, instead of the footage
             if source.kind == "image":
                 still = Image.open(source.path)
-            else:
-                footage_clip = job.keep(VideoFileClip(source.path, audio=False))
+            else:   # the whole download, as before: drawing has its own centre crop
+                footage_clip = job.keep(VideoFileClip(source.original or source.path,
+                                                      audio=False))
                 still = Image.fromarray(footage_clip.get_frame((footage_clip.duration or 0) / 2))
             layers.append(drawn.clip(still, shot.length, (target_w, target_h), style)
                           .with_start(shot.start))
@@ -589,11 +650,11 @@ def _make_version(cfg, ui, work_dir, job, plans, search, choices, version, save_
             base, movement = ImageClip(still), None
         else:
             base = job.keep(VideoFileClip(source.path, audio=False))
-            movement = motion.measure_motion(base)
+            movement = source.movement if source.cut else motion.measure_motion(base)
         zoom = motion.zoom_range(plan.scene.zoom, source.kind, movement, flip)
         flip = not flip
-        focus = None
-        if cfg.get("smart_motion"):
+        focus = source.focus   # measured on the download, moved onto the cut clip
+        if cfg.get("smart_motion") and not source.cut:
             try:   # a few frames of the clip say where its detail is
                 length = base.duration or 0.0
                 focus = motion.busiest_point(
@@ -605,48 +666,113 @@ def _make_version(cfg, ui, work_dir, job, plans, search, choices, version, save_
         if shot.fade_in > 0:
             clip = clip.with_effects([vfx.CrossFadeIn(shot.fade_in)])
         layers.append(clip.with_start(shot.start))
+    spent.add("layers", spent.clock() - layers_began[0], spent.cpu() - layers_began[1])
 
     # Cards go over the footage and under the captions. They never sink a render either.
     carded = [(i, plan.scene.card) for i, plan in enumerate(plans) if plan.scene.card]
-    if carded:
-        from . import captions, cards
-
-        look = captions.CaptionOptions.from_cfg(cfg)
-        accent = captions.COLORS[look.color].fill
-        accent = captions.FILL if accent == captions.STROKE else accent  # black on a dark panel
-        for i, text in carded:
-            try:
-                layers.append(cards.layer(text, (target_w, target_h), starts[i], durations[i],
-                                          accent, look.position))
-            except Exception as exc:  # noqa: BLE001
-                ui.log(f"⚠️ Couldn't draw the card for scene {i + 1} ({exc}); left out.")
-        ui.log(f"🃏 Cards: {len(carded)}")
+    with spent.time("cards"):
+        _add_cards(cfg, ui, carded, layers, (target_w, target_h), starts, durations)
 
     # Captions sit on top of everything. Like music, they never sink a render.
-    cues = []
-    if cfg.get("captions", True):
-        try:
-            from . import captions
+    with spent.time("captions"):
+        cues = _add_captions(cfg, ui, plans, starts, layers, (target_w, target_h), total)
 
-            options = captions.CaptionOptions.from_cfg(cfg)
-            words = _timeline_words(plans, starts)
-            _shown, states = captions.plan(words, options)
-            # The subtitle file reads better in phrases, whatever is on screen.
-            cues = captions.group_words(words)
-            layer = captions.caption_layer(states, (target_w, target_h), options, total)
-            if layer is not None:
-                layers.append(layer)
-                ui.log(f"💬 Captions: {len(words)} words, {options.style.lower()} style")
-        except Exception as exc:  # noqa: BLE001
-            ui.log(f"⚠️ Couldn't add captions ({exc}); rendering without them.")
-            cues = []
+    from . import compose
 
-    video = job.keep(
-        CompositeVideoClip(layers, size=(target_w, target_h), bg_color=(0, 0, 0))
-        .with_duration(total)
-    )
+    video = job.keep(compose.layered(layers, (target_w, target_h), total))
 
     # 6. Soundtrack.
+    with spent.time("sound"):
+        soundtrack = _soundtrack(cfg, ui, job, plans, starts, total)
+        speech = [(start, start + min(plan.voice_len, plan.duration))
+                  for plan, start in zip(plans, starts) if plan.voice is not None]
+    if soundtrack is not None:
+        video = video.with_audio(job.keep(soundtrack))
+
+    # 7. Encode.
+    _check(stop)
+    ui.status("Step 4 of 4: Encoding...")
+    # Encoded here, in the temp folder, then moved: ffmpeg is a separate
+    # program, and folder protection may refuse it where it allows this app.
+    encoded = os.path.join(work_dir, f"output_{version}.mp4")
+    encode_from, encode_span = base_progress + span * 0.35, span * 0.6
+
+    encode_began, shown = time.perf_counter(), [0.0]
+
+    def encoding(fraction):
+        ui.progress(encode_from + encode_span * fraction)
+        now = time.perf_counter()
+        if fraction > 0.05 and now - shown[0] > 1.0:   # once a second, not every frame
+            shown[0] = now
+            left = (now - encode_began) * (1 - fraction) / fraction
+            ui.status(f"Step 4 of 4: Encoding, about {_minutes(left)} left")
+
+    try:
+        codec = encoder(cfg)
+        if codec != X264:
+            ui.log("⚡ Encoding on the Intel graphics chip (Quick Sync)")
+        with spent.time("encode"):
+            _encode(video, encoded, soundtrack is not None, bitrate, work_dir, encoding, stop,
+                    codec, ui.log)
+    except RenderCancelled:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise RenderError("Couldn't encode the video. The Log has the technical details.",
+                          _one_line(exc)) from exc
+    with spent.time("deliver"):
+        save_path = paths.deliver(encoded, save_path, fallbacks, ui.log)
+    ui.progress(base_progress + span)
+
+    with spent.time("credits"):
+        _write_side_files(ui, save_path, credits, providers_used, cues)
+
+    with spent.time("thumbnail"):
+        _thumbnail(cfg, ui, save_path, speech)
+    return save_path
+
+
+def _add_cards(cfg, ui, carded, layers, size, starts, durations):
+    if not carded:
+        return
+    from . import captions, cards
+
+    look = captions.CaptionOptions.from_cfg(cfg)
+    accent = captions.COLORS[look.color].fill
+    accent = captions.FILL if accent == captions.STROKE else accent  # black on a dark panel
+    for i, text in carded:
+        try:
+            layers.append(cards.layer(text, size, starts[i], durations[i], accent, look.position))
+        except Exception as exc:  # noqa: BLE001
+            ui.log(f"⚠️ Couldn't draw the card for scene {i + 1} ({exc}); left out.")
+    ui.log(f"🃏 Cards: {len(carded)}")
+
+
+def _add_captions(cfg, ui, plans, starts, layers, size, total) -> list:
+    """Adds the caption layer; returns the subtitle file's cues."""
+    if not cfg.get("captions", True):
+        return []
+    try:
+        from . import captions
+
+        options = captions.CaptionOptions.from_cfg(cfg)
+        words = _timeline_words(plans, starts)
+        _shown, states = captions.plan(words, options)
+        # The subtitle file reads better in phrases, whatever is on screen.
+        cues = captions.group_words(words)
+        layer = captions.caption_layer(states, size, options, total)
+        if layer is not None:
+            layers.append(layer)
+            ui.log(f"💬 Captions: {len(words)} words, {options.style.lower()} style")
+        return cues
+    except Exception as exc:  # noqa: BLE001
+        ui.log(f"⚠️ Couldn't add captions ({exc}); rendering without them.")
+        return []
+
+
+def _soundtrack(cfg, ui, job, plans, starts, total):
+    """Voices at their scene starts, music ducked beneath them, sound effects; or None."""
+    from . import audio
+
     voices, speech = [], []
     for plan, start in zip(plans, starts):
         if plan.voice is None:
@@ -680,33 +806,10 @@ def _make_version(cfg, ui, work_dir, job, plans, search, choices, version, save_
             ui.log(f"🔊 Sound effects: {len(effects)}")
         except Exception as exc:  # noqa: BLE001 - like music, never sinks a render
             ui.log(f"⚠️ Couldn't add the sound effects ({exc}).")
-    soundtrack = audio.mix_audio(voices, music, total)
-    if soundtrack is not None:
-        video = video.with_audio(job.keep(soundtrack))
+    return audio.mix_audio(voices, music, total)
 
-    # 7. Encode.
-    _check(stop)
-    began = time.perf_counter()
-    ui.status("Encoding final video...")
-    # Encoded here, in the temp folder, then moved: ffmpeg is a separate
-    # program, and folder protection may refuse it where it allows this app.
-    encoded = os.path.join(work_dir, f"output_{version}.mp4")
-    encode_from, encode_span = base_progress + span * 0.35, span * 0.6
 
-    def encoding(fraction):
-        ui.progress(encode_from + encode_span * fraction)
-
-    try:
-        _encode(video, encoded, soundtrack is not None, bitrate, work_dir, encoding, stop)
-    except RenderCancelled:
-        raise
-    except Exception as exc:  # noqa: BLE001
-        raise RenderError("Couldn't encode the video. The Log has the technical details.",
-                          _one_line(exc)) from exc
-    save_path = paths.deliver(encoded, save_path, fallbacks, ui.log)
-    spent["encode"] += time.perf_counter() - began
-    ui.progress(base_progress + span)
-
+def _write_side_files(ui, save_path, credits, providers_used, cues):
     if credits:
         try:
             credits_path = footage.write_credits(save_path, credits, providers_used)
@@ -715,12 +818,16 @@ def _make_version(cfg, ui, work_dir, job, plans, search, choices, version, save_
             ui.log(f"⚠️ Couldn't save the footage credits file ({exc}).")
 
     if cues:
+        from . import captions
+
         try:
             srt_path = captions.write_srt(save_path, cues)
             ui.log(f"💬 Subtitles saved to {os.path.basename(srt_path)}")
         except OSError as exc:
             ui.log(f"⚠️ Couldn't save the subtitle file ({exc}).")
 
+
+def _thumbnail(cfg, ui, save_path, speech):
     try:
         from . import projects, thumbnail
 
@@ -733,7 +840,6 @@ def _make_version(cfg, ui, work_dir, job, plans, search, choices, version, save_
         ui.log(f"🖼️ Thumbnail saved to {os.path.basename(thumb)}")
     except Exception as exc:  # noqa: BLE001 - the video is saved either way
         ui.log(f"⚠️ Couldn't make the thumbnail ({exc}).")
-    return save_path
 
 
 def _encode_logger(on_progress, stop):
@@ -761,16 +867,57 @@ def _encode_logger(on_progress, stop):
     return EncodeLogger()
 
 
+X264 = "libx264"
+QSV = "h264_qsv"
+
+
+@functools.lru_cache(maxsize=1)
+def quick_sync_works() -> bool:
+    """Whether this PC's ffmpeg can encode on an Intel graphics chip (checked once).
+
+    The bundled ffmpeg always lists h264_qsv; only a real test frame shows whether the
+    chip and its driver are there.
+    """
+    from . import mastering
+
+    try:
+        mastering.run_ffmpeg(["-f", "lavfi", "-i", "color=c=black:s=256x256:d=0.2",
+                              "-frames:v", "2", "-c:v", QSV, "-f", "null", "-"])
+        return True
+    except Exception:  # noqa: BLE001 - no chip, no driver, or a locked-down PC
+        return False
+
+
+def encoder(cfg) -> str:
+    """The video encoder for this render: Quick Sync if asked for and it works, else x264."""
+    return QSV if cfg.get("quick_sync") and quick_sync_works() else X264
+
+
 def _encode(video, path, with_audio, bitrate, work_dir, on_progress=lambda f: None,
-            stop=lambda: False):
+            stop=lambda: False, codec=X264, log=lambda m: None):
+    """Write the video; a Quick Sync encode that fails part-way is made again with x264."""
+    try:
+        _write(video, path, with_audio, bitrate, work_dir, on_progress, stop, codec)
+    except RenderCancelled:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        if codec == X264:
+            raise
+        log(f"⚠️ The Intel graphics chip couldn't encode ({_one_line(exc, 120)}); "
+            "using the normal encoder.")
+        _write(video, path, with_audio, bitrate, work_dir, on_progress, stop, X264)
+
+
+def _write(video, path, with_audio, bitrate, work_dir, on_progress, stop, codec):
+    preset = "ultrafast" if bitrate == BITRATE_MAP[DRAFT] else "fast"   # a draft is for checking
     video.write_videofile(
         path,
-        codec="libx264",
+        codec=codec,
         audio_codec="aac",
         audio=with_audio,
         audio_fps=44100,
         fps=30,
-        preset="fast",
+        preset=preset,
         bitrate=bitrate,
         # Without this MoviePy drops TEMP_MPY_wvf_snd.mp3 beside the output.
         temp_audiofile_path=work_dir,
@@ -836,9 +983,31 @@ def _moving_picture(plan, index, cfg, ratio, work_dir, ui, version, ai_before, s
     if cfg.get("ai_images_backend") == "cpu":   # minutes per picture there: hours per clip
         ui.log("🎞️ Moving pictures need the graphics card; the scene keeps its still picture.")
         return
+    if cfg.get("resolution") == DRAFT:
+        return   # a draft keeps the still: quick, and the timing is the same
     if cfg.get("_moving_failed"):
         # It failed earlier in this render: the same settings on the same card would again.
         plan.note = "moving picture skipped: it failed earlier in this video"
+        return
+    import hashlib
+
+    from . import cache
+
+    # Kept by the picture itself, the prompt and everything that changes the clip.
+    store = cache.Cache(cfg.get("cache_root"), "clips")
+    try:
+        with open(plan.sources[0].path, "rb") as fh:
+            still = hashlib.sha1(fh.read()).hexdigest()
+    except OSError:
+        still = plan.sources[0].path
+    name = cache.key("moving", still, plan.scene.ai_prompt or "", ratio,
+                     cfg.get("ai_gpu") == "integrated", animate.FRAMES, animate.GOOD_FRAMES,
+                     cfg.get("app_version")) + ".mp4"
+    kept = store.get(name)
+    if kept:
+        ui.log(f"🎞️ Scene {index + 1}: the same picture moved before: reusing that clip")
+        plan.parts, plan.sources = 1, [_Source(kept, "video")]
+        plan.kind = "moving AI picture"
         return
     clip = os.path.join(work_dir, f"moving_{version}_{index}.avi")
     try:
@@ -855,7 +1024,7 @@ def _moving_picture(plan, index, cfg, ratio, work_dir, ui, version, ai_before, s
         plan.note = "moving picture failed, the still is used"
         return
     ui.log(f"🎞️ Scene {index + 1}: the picture moves (made in {moved.seconds:.0f} s)")
-    plan.parts, plan.sources = 1, [_Source(looped, "video")]
+    plan.parts, plan.sources = 1, [_Source(store.put(name, looped) or looped, "video")]
     plan.kind = "moving AI picture"
 
 
@@ -873,6 +1042,9 @@ def _ai_picture(plan, index, cfg, ratio, work_dir, ui, version, search, stop) ->
         ui.log(f"🎨 Scene {index + 1}: using the AI picture from the Storyboard")
         plan.parts, plan.sources = 1, [_Source(ready_made, "image")]
         return True
+    if cfg.get("resolution") == DRAFT and search.providers:
+        plan.note = "draft: a stock clip stands in for the AI picture"
+        return False   # minutes per picture would defeat a quick check
     # On a slow PC the user may have chosen to make a few pictures and use them again.
     made_here = cfg.setdefault("_ai_made", [])
     reuse = cfg.get("ai_reuse") or 0
@@ -924,40 +1096,94 @@ def _ai_picture(plan, index, cfg, ratio, work_dir, ui, version, search, stop) ->
     return True
 
 
-def _acquire_stock(plan, index, search, work_dir, ui, credits, providers_used,
-                   preferred=None, version=1, previous=(), stop=lambda: False):
-    """Search and download the clip(s) for one stock scene.
+DOWNLOADS = 3   # stock clips fetched and cut at the same time
 
-    ``preferred`` are clips the user picked in the scene preview, best first;
-    they are tried before the search's own results. ``previous`` are this
-    scene's clips from an earlier version, reused if nothing new can be found.
-    """
+
+def _parts(plan) -> int:
+    """How many clips a stock scene uses: two for a long line, cut at the middle."""
+    return 2 if (plan.scene.duration is None and plan.voice_len > LONG_SCENE) else 1
+
+
+def _candidates(plan, search, preferred, wanted):
+    """The clips to try for a stock scene, in order: the user's picks, then the best matches."""
     query = plan.scene.visual
-    wanted = plan.parts
     picked = [c for c in (preferred or []) if c.key not in search.used]
     seen = {c.key for c in picked}
     # The top results, the one whose description fits the scene best first.
     found = footage.rank(search.find(query, max(RANKED, wanted + SPARE_CANDIDATES)), query,
                          plan.scene.voice or "")
-    candidates = picked + [c for c in found if c.key not in seen]
+    return picked + [c for c in found if c.key not in seen]
+
+
+class _StockFetch:
+    """Stock clips downloaded and cut in the background, ``pool`` workers at a time.
+
+    ``start`` queues each stock scene's first choices in scene order, skipping a clip an
+    earlier scene will take, as the scene loop would. ``get`` then hands over a queued
+    clip (waiting for it if needed) or fetches one that wasn't queued, such as a spare
+    after a failed download.
+    """
+
+    def __init__(self, store, frame, smart, work_dir, stop, pool):
+        self.store, self.frame, self.smart = store, frame, smart
+        self.work_dir, self.stop, self.pool = work_dir, stop, pool
+        self.queued = {}
+
+    def _ready(self, url):
+        from . import cache, clips
+
+        return clips.ready(url, self.frame, self.smart, self.store, self.work_dir,
+                           cache.key(url)[:12], self.stop)
+
+    def start(self, plans, search, choices):
+        taken = set()
+        for i, plan in enumerate(plans):
+            if plan.scene.is_local or plan.scene.is_ai:
+                continue
+            wanted = _parts(plan)
+            try:
+                candidates = _candidates(plan, search, choices.get(i), wanted)
+            except Exception:  # noqa: BLE001 - the scene loop searches again and reports it
+                continue
+            for candidate in [c for c in candidates if c.key not in taken][:wanted]:
+                taken.add(candidate.key)
+                self.queued[candidate.url] = self.pool.submit(self._ready, candidate.url)
+
+    def get(self, url) -> dict:
+        future = self.queued.pop(url, None)
+        return future.result() if future else self._ready(url)
+
+
+def _acquire_stock(plan, index, search, ui, credits, providers_used, preferred, previous,
+                   stop, stock):
+    """Search and download the clip(s) for one stock scene.
+
+    ``preferred`` are clips the user picked in the scene preview, best first;
+    they are tried before the search's own results. ``previous`` are this
+    scene's clips from an earlier version, reused if nothing new can be found.
+    ``stock`` (a _StockFetch) has usually started the download already.
+    """
+    query = plan.scene.visual
+    wanted = plan.parts
+    candidates = _candidates(plan, search, preferred, wanted)
     for candidate in candidates:
         if len(plan.sources) == wanted:
             break
         _check(stop)
-        dest = os.path.join(work_dir, f"clip_{version}_{index}_{len(plan.sources)}.mp4")
         ui.log(
             f"⬇️ Downloading {candidate.provider} clip "
             f"({candidate.width}x{candidate.height})..."
         )
         try:
-            footage.download(candidate.url, dest, should_stop=stop)
+            got = stock.get(candidate.url)
         except footage.Stopped:
             raise
         except Exception as exc:  # noqa: BLE001 - try the next result instead
             ui.log(f"⚠️ That download failed ({exc.__class__.__name__}); trying another clip.")
             continue
         search.mark_used(candidate)
-        plan.sources.append(_Source(dest, "video"))
+        plan.sources.append(_Source(got["path"], "video", got["original"], got["motion"],
+                                    tuple(got["focus"]) if got.get("focus") else None, True))
         providers_used.add(candidate.provider)
         credits.append(f"Scene {index + 1}: {candidate.credit()}")
         plan.kind = plan.kind or f"stock clip ({candidate.provider})"

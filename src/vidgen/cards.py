@@ -189,6 +189,7 @@ def layer(text: str, frame_size, start: float, length: float, accent: str = "#FF
     def picture_for(step):
         return full if count == 1 else draw(text, frame_size, accent, shown=step)
 
+    @lru_cache(maxsize=2)   # the picture and its mask both ask for the same t: drawn once
     def frame(t):
         """(rgb, alpha) at ``t``: the right picture, at the right size and strength."""
         strength = visible(t, length)

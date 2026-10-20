@@ -144,8 +144,8 @@ from vidgen.script import (  # noqa: E402
 from vidgen import voices  # noqa: E402
 from vidgen.render import TEMP_ROOT  # noqa: E402
 from vidgen import (  # noqa: E402
-    captions, diagnostics, draft, footage, pacing, paths, preview, projects, scenes, updates,
-    writer,
+    cache, captions, diagnostics, draft, footage, pacing, paths, preview, projects, scenes,
+    updates, writer,
 )
 from vidgen import board as boards  # noqa: E402
 from vidgen import animate, drawn, imagegen, localvoice, myvoice  # noqa: E402
@@ -153,7 +153,7 @@ from vidgen.voice import generate_voiceover  # noqa: E402
 
 
 APP_NAME = "AI Video Studio"
-APP_VERSION = "4.5.0"
+APP_VERSION = "4.6.0"
 # Must match AppUserModelID in packaging/installer.iss, or a pinned taskbar
 # shortcut will not group with the running window.
 APP_MODEL_ID = "AIVideoStudio.Desktop.3"
@@ -179,7 +179,9 @@ def default_output_dir() -> str:
 MUSIC_DIR = os.path.join(paths.known_folder(paths.CSIDL_DOCUMENTS, "Documents"),
                          "AI Video Studio", "Music")
 MUSIC_EXTS = (".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac")
-SEARCH_CACHE_DIR = os.path.join(SETTINGS_DIR, "cache", "search")
+# Kept between renders (vidgen.cache): search results, clips, voices. Clear cache empties it.
+CACHE_ROOT = os.path.join(SETTINGS_DIR, "cache")
+SEARCH_CACHE_DIR = os.path.join(CACHE_ROOT, "search")
 # Stays on this PC. Only a report the user sends themselves ever quotes from it.
 LOG_DIR = os.path.join(SETTINGS_DIR, "logs")
 LOG_FILE = os.path.join(LOG_DIR, "app.log")
@@ -338,6 +340,7 @@ def default_settings() -> dict:
         "animate": "Off",          # which AI pictures become moving clips (vidgen.animate)
         "web_facts": True,         # fact ideas are looked up on Wikipedia first (webfacts)
         "style": "Normal",         # Normal footage, or drawn on screen (vidgen.drawn)
+        "quick_sync": False,       # encode on an Intel graphics chip when it works (render)
         "ai_images_speed": "",     # Fast / Balanced / Best; "" = chosen for this PC
         "ai_threads": "Auto",      # processor threads for AI pictures, or a number
         "ai_threads_best": "",     # "threads:affinity" the Test speed button found fastest
@@ -418,7 +421,7 @@ def load_settings() -> dict:
     if data["style"] not in drawn.STYLES:
         data["style"] = drawn.NORMAL
     for key in ("intro_on", "outro_on", "sound_effects", "smart_motion", "web_facts",
-                "whats_new_off"):
+                "whats_new_off", "quick_sync"):
         data[key] = bool(data[key])
     for key in ("intro_text", "outro_text"):
         data[key] = " ".join(str(data[key]).split())[:60]
@@ -1300,10 +1303,12 @@ TOUR = (
 # Shown once after updating to this version (WhatsNewDialog). Short: the release notes have
 # the whole story.
 WHATS_NEW = (
-    "Drawn videos: the Blackboard and Drawing styles draw each scene on screen, fast on any PC.",
-    "Facts from Wikipedia: ask for \"top 5...\" or \"fastest...\" and the Smart writer reads "
-    "Wikipedia first instead of guessing.",
-    "This window: it shows once after each update. Tick the box to never see it again.",
+    "Faster videos: frames are put together with less work, and stock clips are cut to the "
+    "video's size once, downloaded a few at a time and kept for the next render.",
+    "Spoken lines that didn't change are reused instead of made again.",
+    "The Log now shows where the time went, step by step, and the progress line counts down "
+    "while the video is encoded.",
+    "Intel laptops: Settings has a Quick Sync switch to encode on the graphics chip.",
 )
 
 
@@ -2917,6 +2922,7 @@ class App(ctk.CTk):
         self.var_animate = tk.StringVar(value=s["animate"])
         self.var_web_facts = tk.BooleanVar(value=s["web_facts"])
         self.var_style = tk.StringVar(value=s["style"])
+        self.var_quick_sync = tk.BooleanVar(value=s["quick_sync"])
         self.var_style.trace_add("write", lambda *_args: getattr(self, "board_cards", None)
                                  and self.refresh_board(force=True))   # cards show the style
         self.whats_new_seen, self.whats_new_off = s["whats_new_seen"], s["whats_new_off"]
@@ -2944,7 +2950,7 @@ class App(ctk.CTk):
                     self.var_target, self.var_intro_on, self.var_intro_text,
                     self.var_outro_on, self.var_outro_text, self.var_sfx,
                     self.var_smart_motion, self.var_animate, self.var_web_facts,
-                    self.var_style,
+                    self.var_style, self.var_quick_sync,
                     *self.caption_vars.values()):
             var.trace_add("write", self._on_setting_changed)
 
@@ -2979,6 +2985,7 @@ class App(ctk.CTk):
             "animate": self.var_animate.get(),
             "web_facts": bool(self.var_web_facts.get()),
             "style": self.var_style.get(),
+            "quick_sync": bool(self.var_quick_sync.get()),
             "whats_new_seen": self.whats_new_seen,
             "whats_new_off": self.whats_new_off,
             "key_tip": self.key_tip,
@@ -4020,6 +4027,25 @@ class App(ctk.CTk):
         self._segmented(style_row.control, list(drawn.STYLES), self.var_style, 330)
         ctk.CTkSwitch(motion_row.control, text="", width=44, variable=self.var_smart_motion,
                       onvalue=True, offvalue=False, progress_color=ACCENT).pack(side="left")
+        qsv_row = SettingRow(page, self, self.icon("scenes"), "Encode on the Intel graphics chip",
+                             "Quick Sync: faster on Intel laptops. Falls back to the normal "
+                             "encoder by itself where it isn't there or fails")
+        qsv_row.grid(row=next(rows), column=0, sticky="ew", pady=PAD // 2)
+        ctk.CTkSwitch(qsv_row.control, text="", width=44, variable=self.var_quick_sync,
+                      onvalue=True, offvalue=False, progress_color=ACCENT).pack(side="left")
+        cache_row = SettingRow(page, self, self.icon("folder"), "Kept clips and voices",
+                               "Re-renders reuse downloaded clips and spoken lines. "
+                               f"Limit {cache.LIMIT_BYTES // 1024 ** 3} GB; oldest go first")
+        cache_row.grid(row=next(rows), column=0, sticky="ew", pady=PAD // 2)
+        self.cache_label = ctk.CTkLabel(cache_row.control, text="", font=self.font_body,
+                                        text_color=TEXT_MUTED)
+        ctk.CTkButton(
+            cache_row.control, text="Clear cache", width=110, height=32, corner_radius=4,
+            font=self.font_body, fg_color=FIELD_BG, hover_color=CARD_HOVER, border_width=1,
+            border_color=FIELD_BORDER, text_color=TEXT, command=self.clear_cache,
+        ).pack(side="left")
+        self.cache_label.pack(side="left", padx=(10, 0))
+        self._show_cache_size()
 
         self._caption(page, "APPEARANCE", next(rows))
 
@@ -4518,6 +4544,7 @@ class App(ctk.CTk):
 
     def _warm_moviepy(self):
         sweep_old_work_dirs()
+        cache.trim(CACHE_ROOT)   # back under the size limit, oldest files first
         shutil.rmtree(THUMB_DIR, ignore_errors=True)   # last session's preview stills
         try:
             # Importing the engine's heavy half pulls in MoviePy, NumPy and PIL.
@@ -6561,7 +6588,8 @@ class App(ctk.CTk):
         self._cancel = threading.Event()
         # What was chosen in the Storyboard holds only for the script it shows.
         choices, pictures = self.board_choices(settings["script"])
-        cfg = dict(settings, cache_dir=SEARCH_CACHE_DIR, overwrite=overwrite,
+        cfg = dict(settings, cache_dir=SEARCH_CACHE_DIR, cache_root=CACHE_ROOT,
+                   app_version=APP_VERSION, overwrite=overwrite,
                    cancel=self._cancel, clip_choices=choices, ai_pictures=pictures,
                    ai_images_speed=self.ai_speed_now(), ai_threads=self.threads_pair(),
                    ai_images_backend=self.ai_backend_now(),
@@ -6583,6 +6611,19 @@ class App(ctk.CTk):
         self.select_page("log")
         threading.Thread(target=render_worker, args=(cfg, self.ui), daemon=True).start()
 
+    # -- cache -----------------------------------------------------------------
+    def _show_cache_size(self):
+        size = cache.size(CACHE_ROOT)
+        self.cache_label.configure(text=f"{size / 1e6:.0f} MB kept" if size else "Empty")
+
+    def clear_cache(self):
+        if self.is_rendering:
+            self.cache_label.configure(text="Wait for the render to finish first.")
+            return
+        freed = cache.clear(CACHE_ROOT)
+        self.append_log(f"🧹 Cache cleared: {freed / 1e6:.0f} MB freed.")
+        self._show_cache_size()
+
     # -- shutdown ------------------------------------------------------------
     def _on_close(self):
         self.save_project()
@@ -6599,6 +6640,14 @@ def main():
             )
         except Exception:
             pass
+    if "--bench" in sys.argv:   # developer tool: timed sample renders, report on the Desktop
+        from vidgen import bench
+
+        report = os.path.join(paths.known_folder(paths.CSIDL_DESKTOP, "Desktop"),
+                              f"AIVideoStudio-bench-{time.strftime('%Y%m%d-%H%M')}.txt")
+        bench.main(sys.argv[1:], APP_VERSION, load_settings(), report)
+        os.startfile(report)
+        return
     app = App()
     app.mainloop()
 

@@ -67,7 +67,7 @@ You can confirm you have the real file by checking its hash against
 `SHA256SUMS.txt` on the release page:
 
 ```powershell
-Get-FileHash .\AIVideoStudio-4.5.0-setup.exe -Algorithm SHA256
+Get-FileHash .\AIVideoStudio-4.6.0-setup.exe -Algorithm SHA256
 ```
 
 ## The quick way
@@ -652,8 +652,14 @@ python -m pytest
 python packaging/make_icon.py
 python packaging/fetch_llama.py
 pyinstaller --noconfirm --clean packaging/ai_video_studio.spec
-"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion=4.5.0 packaging\installer.iss
+"%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe" /DMyAppVersion=4.6.0 packaging\installer.iss
 ```
+
+That is where Inno Setup goes when installed for one user; installed for everyone, it is
+`C:\Program Files (x86)\Inno Setup 6\ISCC.exe`.
+
+To time renders on your own PC: `python -m vidgen.bench --runs 3` from `src`, or
+`AIVideoStudio.exe --bench` in the installed app (the report lands on the Desktop).
 
 Releases are built automatically by GitHub Actions when a `v*` tag is pushed.
 
