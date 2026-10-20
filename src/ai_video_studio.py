@@ -148,12 +148,12 @@ from vidgen import (  # noqa: E402
     writer,
 )
 from vidgen import board as boards  # noqa: E402
-from vidgen import animate, imagegen, localvoice, myvoice  # noqa: E402
+from vidgen import animate, drawn, imagegen, localvoice, myvoice  # noqa: E402
 from vidgen.voice import generate_voiceover  # noqa: E402
 
 
 APP_NAME = "AI Video Studio"
-APP_VERSION = "4.4.0"
+APP_VERSION = "4.5.0"
 # Must match AppUserModelID in packaging/installer.iss, or a pinned taskbar
 # shortcut will not group with the running window.
 APP_MODEL_ID = "AIVideoStudio.Desktop.3"
@@ -312,6 +312,8 @@ def default_settings() -> dict:
         "ask_save": True,
         "welcome_seen": False,
         "tour_seen": False,
+        "whats_new_seen": "",      # the last version whose What's new was shown
+        "whats_new_off": False,    # "Don't show again" was ticked
         "check_updates": True,
         "versions": 1,
         "target_length": pacing.DEFAULT_TARGET,
@@ -334,6 +336,8 @@ def default_settings() -> dict:
         "sound_effects": True,     # a whoosh on each cut, a pop as a card appears
         "smart_motion": True,      # cuts on the music's beats, framing toward the detail
         "animate": "Off",          # which AI pictures become moving clips (vidgen.animate)
+        "web_facts": True,         # fact ideas are looked up on Wikipedia first (webfacts)
+        "style": "Normal",         # Normal footage, or drawn on screen (vidgen.drawn)
         "ai_images_speed": "",     # Fast / Balanced / Best; "" = chosen for this PC
         "ai_threads": "Auto",      # processor threads for AI pictures, or a number
         "ai_threads_best": "",     # "threads:affinity" the Test speed button found fastest
@@ -410,7 +414,11 @@ def load_settings() -> dict:
     data["project"] = str(data["project"])
     if data["animate"] not in animate.CHOICES:
         data["animate"] = animate.CHOICES[0]
-    for key in ("intro_on", "outro_on", "sound_effects", "smart_motion"):
+    data["whats_new_seen"] = str(data["whats_new_seen"])
+    if data["style"] not in drawn.STYLES:
+        data["style"] = drawn.NORMAL
+    for key in ("intro_on", "outro_on", "sound_effects", "smart_motion", "web_facts",
+                "whats_new_off"):
         data[key] = bool(data[key])
     for key in ("intro_text", "outro_text"):
         data[key] = " ".join(str(data[key]).split())[:60]
@@ -1287,6 +1295,59 @@ TOUR = (
      "To download video clips the app needs one free key from Pixabay or Pexels. It takes about "
      "a minute, and the next window walks you through it."),
 )
+
+
+# Shown once after updating to this version (WhatsNewDialog). Short: the release notes have
+# the whole story.
+WHATS_NEW = (
+    "Drawn videos: the Blackboard and Drawing styles draw each scene on screen, fast on any PC.",
+    "Facts from Wikipedia: ask for \"top 5...\" or \"fastest...\" and the Smart writer reads "
+    "Wikipedia first instead of guessing.",
+    "This window: it shows once after each update. Tick the box to never see it again.",
+)
+
+
+class WhatsNewDialog(ctk.CTkToplevel):
+    """After an update, once: what is new in this version, with "Don't show again"."""
+
+    def __init__(self, app):
+        super().__init__(app)
+        self.app = app
+        self.title("What's new")
+        self.resizable(False, False)
+        self.configure(fg_color=MAIN_BG)
+        self.transient(app)
+        card = Card(self)
+        card.pack(fill="both", expand=True, padx=14, pady=14)
+        ctk.CTkLabel(card, text=f"What's new in {APP_VERSION}", font=app.font_title,
+                     text_color=TEXT).pack(anchor="w", padx=18, pady=(16, 8))
+        for line in WHATS_NEW:
+            ctk.CTkLabel(card, text=f"•  {line}", font=app.font_body, text_color=TEXT_MUTED,
+                         wraplength=440, justify="left", anchor="w").pack(fill="x", padx=18,
+                                                                          pady=2)
+        row = ctk.CTkFrame(card, fg_color="transparent")
+        row.pack(fill="x", padx=18, pady=(12, 16))
+        self.var_never = tk.BooleanVar(self, False)
+        ctk.CTkCheckBox(row, text="Don't show again", variable=self.var_never,
+                        font=app.font_tiny, text_color=TEXT_DIM, checkbox_width=16,
+                        checkbox_height=16, border_width=1).pack(side="left")
+        ctk.CTkButton(row, text="OK", width=96, height=32, corner_radius=4, font=app.font_body,
+                      fg_color=ACCENT, hover_color=ACCENT_HOVER, text_color=ACCENT_TEXT,
+                      command=self.close).pack(side="right")
+        self.protocol("WM_DELETE_WINDOW", self.close)
+        centre_on(self, app)
+
+    def close(self):
+        self.app.whats_new_seen = APP_VERSION
+        if self.var_never.get():
+            self.app.whats_new_off = True
+        save_settings(self.app._collect_settings())
+        self.destroy()
+
+
+def show_whats_new(seen: str, off: bool, first_run: bool) -> bool:
+    """Once per version, after an update only, unless switched off."""
+    return not (off or first_run) and seen != APP_VERSION
 
 
 class TourDialog(ctk.CTkToplevel):
@@ -2267,13 +2328,14 @@ class DraftDialog(ctk.CTkToplevel):
         # Everything the worker needs is read here: it must not touch Tk variables.
         args = (job, self.text(), self.audience(), self.var_length.get(),
                 self.app.settings["padding"], bool(self.app.var_writer_gpu.get()),
-                bool(self.app.var_auto_cards.get()), self.app.ai_mode())
+                bool(self.app.var_auto_cards.get()), self.app.ai_mode(),
+                bool(self.app.var_web_facts.get()))
         threading.Thread(target=self._work, args=args, daemon=True).start()
 
     def _post(self, **payload):
         self.app._queue.put(("draft", dict(payload, dialog=self)))
 
-    def _work(self, job, text, audience, length, padding, gpu, cards, ai):
+    def _work(self, job, text, audience, length, padding, gpu, cards, ai, web=False):
         """Worker thread: never touches a widget."""
         keep_loaded = False
         try:
@@ -2286,7 +2348,7 @@ class DraftDialog(ctk.CTkToplevel):
             else:
                 self._post(event="written",
                            result=self.session.write(text, audience, length, padding, cards,
-                                                     ai))
+                                                     ai, web))
         except writer.Stopped:
             self._post(event="stopped")
         except (writer.WriterError, draft.DraftError, ScriptError) as exc:
@@ -2853,6 +2915,11 @@ class App(ctk.CTk):
         self.var_sfx = tk.BooleanVar(value=s["sound_effects"])
         self.var_smart_motion = tk.BooleanVar(value=s["smart_motion"])
         self.var_animate = tk.StringVar(value=s["animate"])
+        self.var_web_facts = tk.BooleanVar(value=s["web_facts"])
+        self.var_style = tk.StringVar(value=s["style"])
+        self.var_style.trace_add("write", lambda *_args: getattr(self, "board_cards", None)
+                                 and self.refresh_board(force=True))   # cards show the style
+        self.whats_new_seen, self.whats_new_off = s["whats_new_seen"], s["whats_new_off"]
         self.key_tip = s["key_tip"]
         self.ai_gpu, self.ai_fast_seconds = s["ai_gpu"], s["ai_fast_seconds"]
         self.ai_threads_best = s["ai_threads_best"]
@@ -2876,7 +2943,8 @@ class App(ctk.CTk):
                     self.var_ai_for, self.var_ai_look,
                     self.var_target, self.var_intro_on, self.var_intro_text,
                     self.var_outro_on, self.var_outro_text, self.var_sfx,
-                    self.var_smart_motion, self.var_animate,
+                    self.var_smart_motion, self.var_animate, self.var_web_facts,
+                    self.var_style,
                     *self.caption_vars.values()):
             var.trace_add("write", self._on_setting_changed)
 
@@ -2909,6 +2977,10 @@ class App(ctk.CTk):
             "sound_effects": bool(self.var_sfx.get()),
             "smart_motion": bool(self.var_smart_motion.get()),
             "animate": self.var_animate.get(),
+            "web_facts": bool(self.var_web_facts.get()),
+            "style": self.var_style.get(),
+            "whats_new_seen": self.whats_new_seen,
+            "whats_new_off": self.whats_new_off,
             "key_tip": self.key_tip,
             "ai_images_speed": self.var_ai_speed.get() if self.ai_speed_chosen else "",
             "ai_threads": self.var_ai_threads.get(),
@@ -3143,7 +3215,15 @@ class App(ctk.CTk):
                      ).pack(side="left", padx=(0, 10))
         self.var_template = tk.StringVar(value=NO_TEMPLATE)
         FluentSegmented(template_bar, self, [NO_TEMPLATE, *draft.TEMPLATES], self.var_template,
-                        520).pack(side="left")
+                        540).pack(side="left")
+        ctk.CTkLabel(template_bar, text="Style", font=self.font_body, text_color=TEXT_MUTED,
+                     ).pack(side="left", padx=(16, 8))
+        ctk.CTkOptionMenu(
+            template_bar, values=list(drawn.STYLES), variable=self.var_style, width=120,
+            height=30, corner_radius=4, font=self.font_body, fg_color=FIELD_BG,
+            button_color=FIELD_BG, button_hover_color=CARD_HOVER, text_color=TEXT,
+            dropdown_fg_color=CARD_BG, dropdown_text_color=TEXT, dropdown_hover_color=CARD_HOVER,
+            dropdown_font=self.font_body, dynamic_resizing=False).pack(side="left")
         ctk.CTkButton(template_bar, text="Make several...", width=120, height=30,
                       corner_radius=4, font=self.font_body, fg_color=FIELD_BG,
                       hover_color=CARD_HOVER, border_width=1, border_color=FIELD_BORDER,
@@ -3233,6 +3313,7 @@ class App(ctk.CTk):
         # A template answers the questions itself; they are still shown, to change.
         self.var_auto_cards.set(template.cards)
         self.caption_vars["caption_style"].set(template.caption_style)
+        self.var_style.set(template.look)
         dialog.style = template.audience.style
         dialog.var_platform.set(template.audience.platform)   # before the length it presets
         dialog._apply(draft.Suggestion(template.audience, template.length,
@@ -3932,6 +4013,11 @@ class App(ctk.CTk):
                                 "Scene changes land on the music's beats; the picture moves "
                                 "toward where the detail is")
         motion_row.grid(row=next(rows), column=0, sticky="ew", pady=PAD // 2)
+        style_row = SettingRow(page, self, self.icon("script"), "Style",
+                               "Normal footage, or every scene drawn on screen: chalk on a "
+                               "blackboard, or a flat-colour drawing. Fast on any PC")
+        style_row.grid(row=next(rows), column=0, sticky="ew", pady=PAD // 2)
+        self._segmented(style_row.control, list(drawn.STYLES), self.var_style, 330)
         ctk.CTkSwitch(motion_row.control, text="", width=44, variable=self.var_smart_motion,
                       onvalue=True, offvalue=False, progress_color=ACCENT).pack(side="left")
 
@@ -3956,6 +4042,12 @@ class App(ctk.CTk):
         ).pack(side="left")
 
         self._caption(page, "SCRIPT WRITER", next(rows))
+        web_row = SettingRow(page, self, self.icon("info"), "Look facts up on Wikipedia",
+                             "For an idea that asks for facts (top 5, latest, fastest...), the "
+                             "Smart writer reads Wikipedia first. Only the search words are sent")
+        web_row.grid(row=next(rows), column=0, sticky="ew", pady=PAD // 2)
+        ctk.CTkSwitch(web_row.control, text="", width=44, variable=self.var_web_facts,
+                      onvalue=True, offvalue=False, progress_color=ACCENT).pack(side="left")
 
         writer_row = SettingRow(
             page, self, self.icon("script"), "Smart writer",
@@ -4230,7 +4322,10 @@ class App(ctk.CTk):
         self.refresh_home()
         threading.Thread(target=self._warm_moviepy, daemon=True).start()
         if not self.tour_seen:
+            self.whats_new_seen = APP_VERSION   # a first install: nothing is "new" yet
             self.after(300, lambda: TourDialog(self))   # it leads into the key setup itself
+        elif show_whats_new(self.whats_new_seen, self.whats_new_off, False):
+            self.after(300, lambda: WhatsNewDialog(self))
         elif not self._has_footage_key() and not self.welcome_seen:
             self.after(300, lambda: WelcomeDialog(self))
         self.detect_graphics()
@@ -5000,6 +5095,8 @@ class App(ctk.CTk):
         for key, allowed, _default in CAPTION_SETTINGS:
             if snap.get(key) in allowed:
                 self.caption_vars[key].set(snap[key])
+        if snap.get("style") in drawn.STYLES:
+            self.var_style.set(snap["style"])
         if snap.get("ai_images_look") in imagegen.LOOKS:
             self.var_ai_look.set(snap["ai_images_look"])
         if snap.get("target_length") in pacing.TARGETS:
@@ -5357,6 +5454,7 @@ class App(ctk.CTk):
     def _board_ctx(self, search=True) -> dict:
         """UI thread: what the picture workers need, read here because they must not touch Tk."""
         return {"look": self.var_ai_look.get(), "aspect": self.var_aspect.get(),
+                "style": self.var_style.get(),
                 "has_key": self._has_footage_key(), "ai": imagegen.installed(),
                 "base": os.path.dirname(os.path.abspath(self.var_output.get() or ".")),
                 "search": self.new_footage_search() if search else None}
@@ -5406,6 +5504,17 @@ class App(ctk.CTk):
                     note = f"Stock clip {at + 1} of {len(clips)}" + (f": {told}" if told else "")
                 else:
                     note = "No stock clip found for these words"
+            style = ctx.get("style")
+            if path and style in drawn.STYLES and style != drawn.NORMAL:
+                # The render draws every scene from its still: show the card the same way.
+                from PIL import Image
+
+                with Image.open(path) as image:
+                    finished = drawn.prepare(image, preview.fit(image.size, (320, 320)), style)[0]
+                os.makedirs(THUMB_DIR, exist_ok=True)
+                path = os.path.join(THUMB_DIR, f"board_drawn_{index}.jpg")
+                Image.fromarray(finished).save(path)
+                note += f" · drawn as {style}"
         except Exception as exc:  # noqa: BLE001 - a missing still is not worth an error
             note = note or f"Could not load a picture ({type(exc).__name__})"
         self._board_post(gen, event="still", index=index, path=path, note=note)
@@ -6276,7 +6385,10 @@ class App(ctk.CTk):
             projects.save(payload["project"], dict(data, upload=upload), touch=False)
         for window in self.winfo_children():
             if isinstance(window, ResultDialog):
-                window.set_upload(upload)
+                try:
+                    window.set_upload(upload)
+                except tk.TclError:
+                    pass   # closed before the text arrived; it is saved beside the video
 
     # -- make several -------------------------------------------------------
     def start_batch(self, texts):
@@ -6331,7 +6443,8 @@ class App(ctk.CTk):
         try:
             if self.writer_mode == "Smart writer" and writer.ready()[0]:
                 with writer.Session(gpu=gpu) as session:
-                    result = session.write(text, audience, length, padding, cards, ai)
+                    result = session.write(text, audience, length, padding, cards, ai,
+                                           bool(self.var_web_facts.get()))
                     try:   # while the model is loaded anyway
                         upload = session.upload_text(result.script)
                     except writer.WriterError:

@@ -42,12 +42,33 @@ def test_the_profile_folder_is_hidden_including_short_names():
                   r"and c:/users/Some Body/Desktop")
     assert "Deniz" not in text and "EXCALI~1" not in text
     assert "Some" not in text and "Body" not in text
-    assert rf"C:\Users\{USER}\Videos\a.mp4" in text
+    assert r"%USERPROFILE%\Videos\a.mp4" in text
 
 
 def test_the_bare_user_name_is_hidden_but_not_inside_other_words():
-    text = redact("owner Lab ran it; the Laboratory is fine; LAB again", user_name="Lab")
-    assert text == f"owner {USER} ran it; the Laboratory is fine; {USER} again"
+    text = redact("owner Lab ran it; the Laboratory is fine; lab work", user_name="Lab")
+    assert text == f"owner {USER} ran it; the Laboratory is fine; lab work"
+
+
+def test_the_user_name_never_damages_a_word_that_contains_it():
+    from vidgen.diagnostics import scrub_user
+
+    line = "cannot make enough memory available on Vulkan0: need 809.00 MB"
+    assert scrub_user(line, "Lab", home=r"C:\Users\Lab") == line      # was "avai<user>le"
+    assert scrub_user(r"C:\Users\Lab\Desktop", "Lab", home=r"C:\Users\Lab") == \
+        r"%USERPROFILE%\Desktop"
+    # a user name that is also an ordinary word: the word itself survives
+    text = scrub_user(r"Run the test as admin. D:\Profiles\Admin\Videos", "Admin",
+                      home=r"D:\Profiles\Admin")
+    assert text == r"Run the test as admin. %USERPROFILE%\Videos"
+
+
+def test_the_picture_engine_output_is_scrubbed_the_same_way(monkeypatch):
+    from vidgen import imagegen
+
+    monkeypatch.setattr(imagegen.os.path, "expanduser", lambda _p: r"C:\Users\Lab")
+    assert imagegen._scrub(r"available at C:\Users\Lab\AppData\x") == \
+        r"available at %USERPROFILE%\AppData\x"
 
 
 def test_spoken_lines_are_removed_but_the_voice_name_stays():

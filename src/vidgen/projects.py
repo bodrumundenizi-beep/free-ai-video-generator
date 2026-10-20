@@ -21,7 +21,7 @@ THUMB = "thumb.png"
 # The settings a video was made with; opening the project puts them back.
 KEYS = ("aspect", "resolution", "voice", "captions", "caption_style", "caption_size",
         "caption_color", "caption_position", "ai_images_look", "target_length",
-        "music_enabled", "music_path")
+        "music_enabled", "music_path", "style")
 
 
 def new_id() -> str:

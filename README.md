@@ -17,6 +17,8 @@ voiceover, and renders a 1080p or 720p MP4 in portrait or landscape.
 - **Tell it what to change:** Type "make it shorter" or "more exciting start" and the built-in AI rewrites the script; you see what changed before anything is rendered.
 - **Paste any text, get a script:** Paste plain text, say who the video is for and how long it should be, and a built-in open-source AI writes the script. It runs on your PC: no account, no key, nothing sent anywhere.
 - **Automated Stock Footage:** Automatically fetches relevant video clips from Pexels or Pixabay, and picks the one whose description fits the scene best.
+- **Drawn styles:** Blackboard chalk or flat-colour drawing, each scene drawn on screen. Fast on any PC.
+- **Facts from Wikipedia:** Ask for "top 5..." and the Smart writer reads Wikipedia instead of guessing.
 - **Templates and batches:** Start from Tech tip, Story, Top 5 or Motivation, or make several videos in one go.
 - **Moving AI pictures (beta):** With a graphics card, an AI picture can become a short moving clip.
 - **Music included:** Eight public-domain tracks, picked by the video's mood.
@@ -65,7 +67,7 @@ You can confirm you have the real file by checking its hash against
 `SHA256SUMS.txt` on the release page:
 
 ```powershell
-Get-FileHash .\AIVideoStudio-4.4.0-setup.exe -Algorithm SHA256
+Get-FileHash .\AIVideoStudio-4.5.0-setup.exe -Algorithm SHA256
 ```
 
 ## The quick way
@@ -344,6 +346,27 @@ processor if the card fails), **Graphics card** only (a scene whose picture fail
 clip), or **Processor** only.
 
 You are responsible for what you ask it to draw and for how you use the pictures.
+
+### Drawn styles: Blackboard and Drawing
+
+**Style** (on Home next to the templates, and in Settings): **Blackboard** turns every scene
+into white chalk lines on a dark board, like a teacher explaining; **Drawing** turns it into a
+simple drawing with flat colours and dark outlines. Each scene draws itself on screen in its
+first two seconds, then stays. The **Explainer** template uses Blackboard.
+
+It is made from the picture each scene already has (a stock clip's middle frame, an AI
+picture or your own image) with simple image maths, not AI, so it is quick on any PC: about
+2 seconds a scene here, and the whole render is no slower than a normal one. Busy stock clips
+make busy drawings; simple pictures make the best ones.
+
+### Facts from Wikipedia
+
+When you type an idea that asks for facts ("top 5...", "fastest...", "latest..."), the Smart
+writer first reads the best matching Wikipedia pages and is told to use only what they say;
+the window names the pages. Only the search words leave your PC. It is much better than the
+model's own guesses, but not perfect (rankings and "newest" models can still come out
+wrong), so read a fact video before posting it. **Settings → Look facts up on Wikipedia**
+turns it off.
 
 ### Moving pictures (beta, graphics card only)
 
@@ -629,7 +652,7 @@ python -m pytest
 python packaging/make_icon.py
 python packaging/fetch_llama.py
 pyinstaller --noconfirm --clean packaging/ai_video_studio.spec
-"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion=4.4.0 packaging\installer.iss
+"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion=4.5.0 packaging\installer.iss
 ```
 
 Releases are built automatically by GitHub Actions when a `v*` tag is pushed.

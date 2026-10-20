@@ -153,6 +153,7 @@ class Template:
     length: str
     cards: bool
     caption_style: str
+    look: str = "Normal"   # vidgen.drawn style: Normal, Blackboard or Drawing
 
 
 TEMPLATES = {
@@ -166,6 +167,10 @@ TEMPLATES = {
                       "60 s", True, "Highlight"),
     "Motivation": Template(Audience("Motivation", "Young adults", "TikTok"), "30 s", False,
                            "One word"),
+    "Explainer": Template(Audience("Story and facts", "Adults", "YouTube Shorts",
+                                   "Explain it the way a good teacher would at a blackboard: "
+                                   "one idea per scene, simple words, a clear example."),
+                          "60 s", True, "Plain", "Blackboard"),
 }
 
 

@@ -126,6 +126,10 @@ class _ScenePlan:
     duration: float = 0.0
     parts: int = 1
     sources: list = field(default_factory=list)
+    # What the scene shows, for the Log's line per scene: a name ("stock clip", "still AI
+    # picture"...) and, after a fallback, why ("moving picture failed: ...").
+    kind: str = ""
+    note: str = ""
 
     @property
     def flexible(self) -> bool:
@@ -521,9 +525,11 @@ def _make_version(cfg, ui, work_dir, job, plans, search, choices, version, save_
                                                 search, stop):
             plan.scene = _stock_instead(plan.scene)
         if plan.scene.is_ai:
+            plan.kind = "still AI picture"
             _moving_picture(plan, i, cfg, ratio, work_dir, ui, version, ai_seen, stop)
             ai_seen += 1
         if plan.scene.is_local:
+            plan.kind = "your file"
             ui.log(f"📁 Scene {i + 1}: {os.path.basename(plan.sources[0].path)}")
         elif plan.scene.is_ai:
             pass   # its picture was just made
@@ -555,11 +561,29 @@ def _make_version(cfg, ui, work_dir, job, plans, search, choices, version, save_
 
     # 5. Pictures.
     _check(stop)
+    for line in scene_lines(plans):
+        ui.log(line)
     ui.log(f"✂️ Stitching {ratio} scenes at {target_w}x{target_h}...")
+    from PIL import Image
+
+    from . import drawn
+
+    style = cfg.get("style") if cfg.get("style") in drawn.STYLES else drawn.NORMAL
+    if style != drawn.NORMAL:
+        ui.log(f"✏️ {style} style: every scene is drawn on screen")
     layers, flip = [], False
     for shot in shots:
         plan = plans[shot.scene]
         source = plan.sources[shot.part]
+        if style != drawn.NORMAL:   # drawn on screen from one still, instead of the footage
+            if source.kind == "image":
+                still = Image.open(source.path)
+            else:
+                footage_clip = job.keep(VideoFileClip(source.path, audio=False))
+                still = Image.fromarray(footage_clip.get_frame((footage_clip.duration or 0) / 2))
+            layers.append(drawn.clip(still, shot.length, (target_w, target_h), style)
+                          .with_start(shot.start))
+            continue
         if source.kind == "image":
             still = motion.load_image(source.path, target_w, target_h)
             base, movement = ImageClip(still), None
@@ -788,6 +812,12 @@ def _stock_instead(scene):
     return dataclasses.replace(scene, visual=" ".join(words[:3]) or "abstract background")
 
 
+def scene_lines(plans) -> list[str]:
+    """One Log line per scene: what it shows, and what replaced what when something failed."""
+    return [f"🧩 Scene {i + 1}: {plan.kind or 'stock clip'}"
+            + (f" ({plan.note})" if plan.note else "") for i, plan in enumerate(plans)]
+
+
 def _moving_picture(plan, index, cfg, ratio, work_dir, ui, version, ai_before, stop) -> None:
     """Turn the scene's AI picture into a short moving clip, if Moving pictures asks for it.
 
@@ -796,6 +826,8 @@ def _moving_picture(plan, index, cfg, ratio, work_dir, ui, version, ai_before, s
     from . import animate
 
     choice = cfg.get("animate") or ""
+    if cfg.get("style") in ("Blackboard", "Drawing"):
+        return   # the scene is drawn from the still picture anyway
     if not animate.wanted(choice, index, ai_before) or plan.sources[0].kind != "image":
         return
     if not animate.installed():
@@ -804,18 +836,27 @@ def _moving_picture(plan, index, cfg, ratio, work_dir, ui, version, ai_before, s
     if cfg.get("ai_images_backend") == "cpu":   # minutes per picture there: hours per clip
         ui.log("🎞️ Moving pictures need the graphics card; the scene keeps its still picture.")
         return
+    if cfg.get("_moving_failed"):
+        # It failed earlier in this render: the same settings on the same card would again.
+        plan.note = "moving picture skipped: it failed earlier in this video"
+        return
     clip = os.path.join(work_dir, f"moving_{version}_{index}.avi")
     try:
-        seconds = animate.make(plan.sources[0].path, plan.scene.ai_prompt or "", ratio, clip,
-                               should_stop=stop, log=ui.log)
-        looped = animate.ping_pong(clip, os.path.join(work_dir, f"moving_{version}_{index}.mp4"))
+        moved = animate.make(plan.sources[0].path, plan.scene.ai_prompt or "", ratio, clip,
+                             should_stop=stop, log=ui.log,
+                             shared=cfg.get("ai_gpu") == "integrated")
+        looped = animate.ping_pong(clip, os.path.join(work_dir, f"moving_{version}_{index}.mp4"),
+                                   moved.frames - (animate.FRAMES - animate.GOOD_FRAMES))
     except animate.Stopped as exc:
         raise RenderCancelled() from exc
     except Exception as exc:  # noqa: BLE001 - the still picture is a fine scene too
+        cfg["_moving_failed"] = True
         ui.log(f"⚠️ Scene {index + 1}: {exc}")
+        plan.note = "moving picture failed, the still is used"
         return
-    ui.log(f"🎞️ Scene {index + 1}: the picture moves (made in {seconds:.0f} s)")
+    ui.log(f"🎞️ Scene {index + 1}: the picture moves (made in {moved.seconds:.0f} s)")
     plan.parts, plan.sources = 1, [_Source(looped, "video")]
+    plan.kind = "moving AI picture"
 
 
 def _ai_picture(plan, index, cfg, ratio, work_dir, ui, version, search, stop) -> bool:
@@ -856,6 +897,7 @@ def _ai_picture(plan, index, cfg, ratio, work_dir, ui, version, search, stop) ->
         if not search.providers:
             raise Exception(f"Scene {index + 1}: {exc}") from exc
         ui.log(f"⚠️ {exc} Using stock footage for scene {index + 1}.")
+        plan.note = "AI picture failed, a stock clip is used"
         return False
     made_here.append(path)
     if cfg.get("project_dir"):
@@ -918,6 +960,7 @@ def _acquire_stock(plan, index, search, work_dir, ui, credits, providers_used,
         plan.sources.append(_Source(dest, "video"))
         providers_used.add(candidate.provider)
         credits.append(f"Scene {index + 1}: {candidate.credit()}")
+        plan.kind = plan.kind or f"stock clip ({candidate.provider})"
         ui.log(f"🎞️ {candidate.credit()}")
 
     if not plan.sources and previous:

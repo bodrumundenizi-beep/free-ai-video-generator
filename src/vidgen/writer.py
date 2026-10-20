@@ -31,7 +31,7 @@ from dataclasses import dataclass
 
 import requests
 
-from . import draft, pacing, voices
+from . import draft, pacing, voices, webfacts
 from .footage import Stopped
 from .script import parse_script
 
@@ -294,7 +294,7 @@ def is_idea(text: str) -> bool:
 
 
 def build_prompt(audience: draft.Audience, words: int, pictures: bool = False,
-                 idea: str = "") -> str:
+                 idea: str = "", facts: bool = False) -> str:
     """The instructions for writing a script of about ``words`` spoken words.
 
     With ``pictures`` every scene also gets a description an image model can draw. With
@@ -331,7 +331,10 @@ def build_prompt(audience: draft.Audience, words: int, pictures: bool = False,
         + ("- \"picture\" is one sentence describing a photo for this scene: who or what is "
            "in it, what they are doing and where. Things you can see, not ideas. No writing, "
            "logos or brand names in the picture.\n" if pictures else "")
-        + ("- No greetings, hashtags or emojis.\n" if idea else
+        + ("- Use only the facts given after the request, with names and numbers exactly "
+           "as written there. Leave out anything they don't say. No greetings, hashtags or "
+           "emojis.\n" if facts else
+           "- No greetings, hashtags or emojis.\n" if idea else
            "- Use only facts from the text. No greetings, hashtags or emojis.\n")
         + "Answer with JSON only."
     )
@@ -799,8 +802,9 @@ class Session:
 
     def write(self, text: str, audience: draft.Audience | None = None,
               length: str | None = None, padding: float = 0.3,
-              cards: bool = True, ai: str = draft.AI_NONE) -> draft.Draft:
-        """A script for ``text``, rewritten for the audience and the length."""
+              cards: bool = True, ai: str = draft.AI_NONE, web: bool = False) -> draft.Draft:
+        """A script for ``text``, rewritten for the audience and the length. With ``web``, an
+        idea that asks for facts is first looked up on Wikipedia (vidgen.webfacts)."""
         audience = audience or draft.Audience()
         length = length if length in draft.LENGTHS else audience.length
         persona = voices.persona(audience.voice)
@@ -814,20 +818,26 @@ class Session:
             words = target_words(target, persona)
 
         pictures = bool(ai)
-        scenes = self._write_once(text, audience, words, pictures)
+        facts, sources, source = "", [], "Smart writer"
+        if web and is_idea(text) and webfacts.wants_facts(text):
+            facts, sources = webfacts.facts(text)
+            source = (f"Smart writer, with facts from Wikipedia ({', '.join(sources)})" if facts
+                      else "Smart writer (Wikipedia could not be reached, so from what it "
+                           "knows: check the facts)")
+        scenes = self._write_once(text, audience, words, pictures, facts)
         if target is not None and not _fits(scenes, target, persona):
             # Too long. Ask once more for less, then cut what still does not fit.
             spoken = sum(len(draft.words_in(s.voice)) for s in scenes)
             fewer = max(8, round(words * words / max(spoken, words)))
             self._stopping()
-            scenes = self._write_once(text, audience, fewer, pictures)
+            scenes = self._write_once(text, audience, fewer, pictures, facts)
             if not _fits(scenes, target, persona):
                 scenes = _trim(scenes, target, persona)
         script = draft.to_script(scenes, cards, ai)
         seconds = sum(pacing.estimate_voice(s.voice, persona.rate, persona.pause_scale,
                                             persona.enhanced) + padding for s in scenes)
         return draft.Draft(script, scenes, seconds, length, persona.id, audience.aspect,
-                           source="Smart writer")
+                           source=source)
 
     def revise(self, scenes: list[tuple[str, str]], comment: str,
                source: str = "") -> list[tuple[str, str]]:
@@ -882,12 +892,15 @@ class Session:
             raise WriterError("The Smart writer gave an empty answer.")
         return found
 
-    def _write_once(self, text, audience, words, pictures=False):
+    def _write_once(self, text, audience, words, pictures=False, facts=""):
         room = _answer_tokens(words, pictures)
+        idea = text if is_idea(text) else ""
+        if facts:   # the request, then what to take its facts from
+            text = f"{text}\n\nFacts to use:\n{facts}"
         _check_fits(text, room)
         example = _EXAMPLE_OUT_PICTURES if pictures else _EXAMPLE_OUT
         content = self._ask(
-            build_prompt(audience, words, pictures, text if is_idea(text) else ""),
+            build_prompt(audience, words, pictures, idea, bool(facts)),
             [("user", _EXAMPLE_IN), ("assistant", example), ("user", text)],
             script_schema(scene_count(words), pictures), room)
         return parse_scenes(content)

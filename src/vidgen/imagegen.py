@@ -413,11 +413,11 @@ def _output(log_path) -> list[str]:
 
 
 def _scrub(text: str) -> str:
-    """``text`` without this PC's user name: the program prints full paths."""
-    home = os.path.expanduser("~")
-    name = os.path.basename(home)
-    text = text.replace(home, "~")
-    return re.sub(re.escape(name), "<user>", text, flags=re.I) if len(name) > 2 else text
+    """``text`` without this PC's user name: the program prints full paths. Whole words only
+    (it used to turn "available" into "avai<user>le" for the user "Lab")."""
+    from .diagnostics import scrub_user
+
+    return scrub_user(text, os.path.basename(os.path.expanduser("~")))
 
 
 def device_name(lines) -> str:

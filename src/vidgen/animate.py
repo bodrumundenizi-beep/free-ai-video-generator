@@ -12,6 +12,7 @@ imagegen.ImageError, and the renderer keeps the still picture with its slow zoom
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 import random
 import time
 
@@ -68,6 +69,13 @@ FRAMES, FPS, STEPS = 33, 16, 20
 GOOD_FRAMES = 29
 TIMEOUT = 1200.0   # seconds for one clip before the PC is judged too slow
 NEGATIVE = "blurry, distorted, deformed, static, still image, text, watermark, low quality"
+# Free memory needed, from the 4.4.1 measurements (engine peak: 1.9 GB of RAM; on the card
+# 4.3 GB at full size, 3.8 GB small). Integrated graphics take the card's share from the same
+# RAM, so both count there; a card with its own memory needs only the RAM part. A margin of
+# about 0.8 GB is kept for Windows and the app.
+SMALL_SIZES = {"9:16": (384, 672), "16:9": (672, 384)}
+SMALL_FRAMES = 25
+SHARED_FULL, SHARED_SMALL, DEDICATED_MIN = 7.0e9, 6.5e9, 3.0e9
 FIRST, ALL = "First AI scene", "Every AI scene"
 CHOICES = ("Off", FIRST, ALL)
 
@@ -117,37 +125,82 @@ def command(exe: str, picture: str, prompt: str, size, out_path: str, seed: int,
             "--cfg-scale", "5.0", "--sampling-method", "euler", "--steps", str(steps),
             "-W", str(width), "-H", str(height), "--video-frames", str(frames),
             "--fps", str(FPS), "--flow-shift", "5.0", "-s", str(seed), *decode,
-            # The weights stay in RAM and move to the card when needed: an 8 GB card fits.
-            # Decoding a whole clip at once needs 6.6 GB of the card (measured); in pieces
-            # from the start, instead of failing first and then retrying in pieces.
-            "--offload-to-cpu", "--vae-tiling", "--vae-tile-size", "128", "--temporal-tiling",
+            # One model at a time, read in when its turn comes (as stills do since 3.9.2): the
+            # text encoder runs, its result is kept, and it is released before the video model.
+            # "--offload-to-cpu" held both (6.8 GB) and crashed on shared memory (4.4.1,
+            # 0xC0000409 on an Intel laptop). Measured on an RTX 4060: peak commit 12.1 -> 5.2
+            # GB, RAM in use 8.4 -> 1.9 GB, the same 4.3 GB on the card, identical frames.
+            # Decoding a whole clip at once needs 6.6 GB of the card; in pieces from the start.
+            "--params-backend", "disk", "--vae-tiling", "--vae-tile-size", "128",
+            "--temporal-tiling",
             "--diffusion-fa",
             "-o", out_path]
 
 
+def fit(aspect: str, free: int | None, shared: bool):
+    """(size, frames) the free memory allows, or None for "keep the still picture"."""
+    full = SIZES.get(aspect, SIZES["9:16"]), FRAMES
+    if free is None:
+        return full   # Windows wouldn't say: try, and fall back to the still if it fails
+    if not shared:
+        return full if free >= DEDICATED_MIN else None
+    if free >= SHARED_FULL:
+        return full
+    if free >= SHARED_SMALL:
+        return SMALL_SIZES.get(aspect, SMALL_SIZES["9:16"]), SMALL_FRAMES
+    return None
+
+
+def exit_name(code) -> str:
+    """'exit code 3221226505 (0xC0000409: the engine crashed)' for a Windows crash code."""
+    if code is None:
+        return "no exit code"
+    text = f"exit code {code}"
+    return text + (f" (0x{code & 0xFFFFFFFF:08X}: the engine crashed)"
+                   if code < 0 or code > 255 else "")
+
+
+@dataclass(frozen=True)
+class Moved:
+    seconds: float
+    frames: int
+
+
 def make(picture: str, prompt: str, aspect: str, out_path: str, should_stop=None,
-         launch=imagegen._launch, log=None, seed: int | None = None) -> float:
-    """Animate ``picture`` into ``out_path`` (an .avi). Returns the seconds it took."""
+         launch=imagegen._launch, log=None, seed: int | None = None, shared: bool = False,
+         memory=writer.free_memory) -> Moved:
+    """Animate ``picture`` into ``out_path`` (an .avi). ``shared``: the graphics card uses the
+    PC's own memory (integrated graphics). Raises ImageError when it can't, for any reason,
+    including too little memory; it is then never run again with the same settings."""
     say = log or (lambda _line: None)
     if not installed():
         raise ImageError("Moving pictures are not downloaded. Open the AI images tab.")
-    size = SIZES.get(aspect, SIZES["9:16"])
+    free = memory()
+    fitted = fit(aspect, free, shared)
+    graphics = "integrated graphics, shared memory" if shared else "graphics card"
+    if fitted is None:
+        raise ImageError(f"Not enough free memory to make the picture move "
+                         f"({imagegen._gigabytes(free)} GB free); the still picture is used.")
+    size, frames = fitted
     seed = random.randrange(1, 2**31) if seed is None else seed
     log_path = out_path + ".log"
-    say(f"🎞️ Making the picture move: {size[0]}x{size[1]}, {FRAMES} frames, {STEPS} steps")
+    say(f"🎞️ Moving picture on the {graphics}: {size[0]}x{size[1]}, {frames} frames, "
+        f"{STEPS} steps · memory {imagegen._gigabytes(free)} of "
+        f"{imagegen._gigabytes(writer.total_memory())} GB free"
+        + (" · smaller, to fit the memory" if frames != FRAMES else ""))
     began = time.monotonic()
     if os.path.isfile(out_path):
         os.remove(out_path)
     first = fit_picture(picture, size, out_path + ".first.png")
     args = command(imagegen.program_path() or imagegen.EXE, first,
                    f"{prompt}, gentle natural motion, the camera moves slowly", size, out_path,
-                   seed)
+                   seed, frames)
     code = imagegen._run(args, log_path, should_stop, launch, began, TIMEOUT)
     if code == 0 and os.path.isfile(out_path) and os.path.getsize(out_path):
-        return time.monotonic() - began
+        return Moved(time.monotonic() - began, frames)
     lines = imagegen._output(log_path)
     detail = imagegen._scrub("\n".join(
-        [f"Moving picture failed after {time.monotonic() - began:.0f} s: exit code {code}"]
+        [f"Moving picture failed after {time.monotonic() - began:.0f} s: {exit_name(code)}"]
         + lines[-imagegen.DETAIL_LINES:]))
     for line in detail.split("\n"):
         say("   " + line)
@@ -164,13 +217,13 @@ def fit_picture(picture: str, size, dest: str) -> str:
     return dest
 
 
-def ping_pong(clip_path: str, out_path: str) -> str:
+def ping_pong(clip_path: str, out_path: str, good: int = GOOD_FRAMES) -> str:
     """The clip's good frames forward then backward, so a longer scene can loop it without
     a jump."""
     from . import mastering
 
     mastering.run_ffmpeg(["-y", "-i", clip_path, "-filter_complex",
-                          f"[0:v]trim=end_frame={GOOD_FRAMES},setpts=PTS-STARTPTS,split[a][b];"
+                          f"[0:v]trim=end_frame={good},setpts=PTS-STARTPTS,split[a][b];"
                           "[b]reverse[r];[a][r]concat=n=2:v=1[v]", "-map", "[v]",
                           "-c:v", "libx264", "-crf", "16", "-pix_fmt", "yuv420p", out_path])
     return out_path

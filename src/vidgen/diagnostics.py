@@ -26,6 +26,7 @@ URL_LIMIT = 6000  # GitHub and browsers both cut very long links
 LOG_HEADING = "### Log"
 KEY_REMOVED = "[key removed]"
 USER = "<user>"
+PROFILE = "%USERPROFILE%"   # what a path into the user's own folder becomes
 SCRIPT_REMOVED = "[script text removed]"
 PASTE_BODY = "The report is on my clipboard - pasting it here:\n\n"
 
@@ -56,6 +57,31 @@ class SessionLog:
             pass  # a log that can't be written must not take the app down with it
 
 
+def scrub_user(text: str, user_name: str = "", home: str | None = None) -> str:
+    """``text`` without the user's name, for the Log, Report a problem and saved reports.
+
+    A path into their profile folder becomes %USERPROFILE%; the name itself is replaced only
+    as a whole word, never inside one (4.4.1: the user "Lab" turned "available" into
+    "avai<user>le").
+    """
+    home = os.path.expanduser("~") if home is None else home
+    if len(home) > 3:   # wherever the profile folder is, even outside C:\Users
+        pattern = r"[\\/]+".join(re.escape(part) for part in re.split(r"[\\/]+", home))
+        text = re.sub(rf"(?i){pattern}(?![^\\/\s])", lambda _m: PROFILE, text)
+    # Any other C:\Users\<name> folder, including short names like EXCALI~1. Followed by more
+    # path, the folder name may contain spaces ("Some Body").
+    text = re.sub(r"(?i)\b[a-z]:[\\/]+users[\\/]+[^\\/:*?\"<>|%\r\n]+(?=[\\/])",
+                  lambda _m: PROFILE, text)
+    text = re.sub(r"(?i)\b[a-z]:[\\/]+users[\\/]+[^\\/\s:*?\"<>|%]+", lambda _m: PROFILE, text)
+    text = re.sub(r"(/(?:home|Users)/)[^/\s]+", rf"\1{USER}", text)
+    user_name = (user_name or "").strip()
+    if len(user_name) >= 3:
+        # Exactly as written, as a whole word: a user called "Test" or "Admin" leaves the words
+        # "test" and "admin" alone. Paths, where the name matters most, are handled above.
+        text = re.sub(rf"(?<![\w<%]){re.escape(user_name)}(?![\w>%])", USER, text)
+    return text
+
+
 def redact(text: str, secrets=(), user_name: str = "") -> str:
     """``text`` without API keys, the user's name, or their script's spoken lines."""
     for secret in secrets:
@@ -64,14 +90,7 @@ def redact(text: str, secrets=(), user_name: str = "") -> str:
             text = text.replace(secret, KEY_REMOVED)
     text = re.sub(r"(?i)\b(key|api_key|apikey|token)=[^&\s'\"]+", rf"\1={KEY_REMOVED}", text)
     text = re.sub(r"(?i)(authorization['\"]?\s*[:=]\s*['\"]?)[^\s'\",}]+", rf"\1{KEY_REMOVED}", text)
-    # The profile folder, whatever it is called - including short names like EXCALI~1.
-    # Followed by more path, the folder name may contain spaces ("Some Body").
-    text = re.sub(r"(?i)\b([a-z]:[\\/]+users[\\/]+)[^\\/:*?\"<>|\r\n]+(?=[\\/])", rf"\1{USER}", text)
-    text = re.sub(r"(?i)\b([a-z]:[\\/]+users[\\/]+)[^\\/\s:*?\"<>|]+", rf"\1{USER}", text)
-    text = re.sub(r"(/(?:home|Users)/)[^/\s]+", rf"\1{USER}", text)
-    user_name = (user_name or "").strip()
-    if len(user_name) >= 3:
-        text = re.sub(rf"(?i)(?<![\w<]){re.escape(user_name)}(?![\w>])", USER, text)
+    text = scrub_user(text, user_name)
     # "Generating Guy · Hype Voice: 'the whole spoken line'"
     text = re.sub(r"(Generating [^\n]*?Voice: )'[^\n]*'", rf"\1'{SCRIPT_REMOVED}'", text)
     return text
