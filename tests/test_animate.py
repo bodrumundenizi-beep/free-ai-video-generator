@@ -119,7 +119,7 @@ def test_in_a_render_a_crash_keeps_the_still_and_is_not_tried_again(tmp_path, mo
     monkeypatch.setattr(animate, "make", crash)
     lines = []
     ui = SimpleNamespace(log=lines.append)
-    cfg = {"animate": animate.ALL, "ai_gpu": "integrated"}
+    cfg = {"animate": animate.ALL, "ai_gpu": "dedicated"}
     plans = []
     for n in range(2):
         plan = render._ScenePlan(parse_script(f"Visual: ai: a cat {n}\nVoice: Hi {n}.")[0])
@@ -148,3 +148,35 @@ def test_one_log_line_per_scene_names_what_it_shows():
     assert lines == ["🧩 Scene 1: moving AI picture", "🧩 Scene 2: stock clip (Pixabay)",
                      "🧩 Scene 3: stock clip (Pexels) (AI picture failed, a stock clip is used)",
                      "🧩 Scene 4: your file"]
+
+
+def test_built_in_graphics_keep_the_still_without_trying(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from vidgen import render
+    from vidgen.script import parse_script
+
+    monkeypatch.setattr(animate, "installed", lambda: True)
+    monkeypatch.setattr(animate, "make", lambda *a, **k: pytest.fail("tried on built-in graphics"))
+    lines = []
+    plan = render._ScenePlan(parse_script("Visual: ai: a cat\nVoice: Hi.")[0])
+    plan.sources = [render._Source("pic.png", "image")]
+    render._moving_picture(plan, 0, {"animate": animate.ALL, "ai_gpu": "integrated"}, "9:16",
+                           str(tmp_path), SimpleNamespace(log=lines.append), 1, 0, lambda: False)
+    assert plan.sources[0].kind == "image" and "separate graphics card" in lines[0]
+
+
+def test_a_scene_with_no_stock_clip_left_reuses_an_earlier_one(monkeypatch):
+    from types import SimpleNamespace
+
+    from vidgen import imagegen as ig, render
+    from vidgen.script import parse_script
+
+    monkeypatch.setattr(ig, "ready", lambda: (False, "not installed"))
+    earlier = render._ScenePlan(parse_script("Visual: coffee\nVoice: Hi.")[0])
+    earlier.sources = [render._Source("coffee.mp4", "video")]
+    plan = render._ScenePlan(parse_script("Visual: tiramisu\nVoice: Yum.")[0])
+    lines = []
+    render._stand_in(plan, 1, [earlier], {}, "16:9", "", SimpleNamespace(log=lines.append), 1,
+                     None, lambda: False, render.NoFootage("No usable stock footage"))
+    assert plan.sources[0].path == "coffee.mp4" and "earlier scene" in lines[-1]

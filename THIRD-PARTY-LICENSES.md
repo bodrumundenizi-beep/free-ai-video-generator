@@ -127,3 +127,22 @@ checked by SHA-256, and runs them with the same stable-diffusion.cpp program (MI
 | `umt5-xxl-encoder-Q4_K_M.gguf` | umt5-xxl text encoder by Google, GGUF by city96 | Apache 2.0 | https://huggingface.co/city96/umt5-xxl-encoder-gguf |
 
 Nothing of these is bundled in the installer.
+
+## My voice (optional, beta): KittenTTS 2 (Stellon Labs Community License) and PyTorch (BSD-3)
+
+"Make my voice" installs the voice pack on PCs with an NVIDIA graphics card (6 GB or more).
+Nothing of it is bundled in the installer; everything is pinned and checked by SHA-256
+(`src/vidgen/voicepack.py`, `src/vidgen/voicepack_lock.py`):
+
+| What | Licence | Source |
+|---|---|---|
+| KittenTTS 2 voice model by KittenML (Stellon Labs), revision `1f00fee5` | Stellon Labs Community License: free for research, non-commercial use, and commercial use under USD $1M yearly revenue or total funding; attribution required | https://huggingface.co/KittenML/kitten-tts-2 |
+| Its speaker encoder (`speaker/`) | MIT | same |
+| `kittenml` 0.9.6, the program that runs it | Apache 2.0 | https://pypi.org/project/kittenml/ |
+| chatterbox-turbo s3gen decoder by Resemble AI, revision `749d1c1a` | MIT | https://huggingface.co/ResembleAI/chatterbox-turbo |
+| PyTorch 2.11 (CUDA 12.8) and torchaudio | BSD-3-Clause; the NVIDIA CUDA libraries it ships under NVIDIA's own licence | https://pytorch.org |
+| Python 3.12.10 (embeddable) | PSF License | https://www.python.org |
+| pip 25.2 and the 80-odd libraries listed in `voicepack_lock.py` (numpy, transformers, diffusers, librosa and others) | each under its own open-source licence (MIT, BSD, Apache 2.0, ISC, PSF) | PyPI |
+
+Voices made with it are made from the user's own recording, on their PC; the recording and the
+voice stay there.

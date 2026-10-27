@@ -108,6 +108,12 @@ def speech_bounds(samples: np.ndarray, fps: int):
     return loud[0] / fps, (loud[-1] + 1) / fps
 
 
+def readable(clip):
+    """``clip`` ending a hair early: MoviePy reads one sample past the stated end of some
+    files and fails ("index 0 is out of bounds", the 1.12 s line "Pick Start.", 2026-10-26)."""
+    return clip.subclipped(0, max(clip.duration - 0.02, 0.05))
+
+
 def speech_window(voice, fps: int = 22050):
     """(start, end) seconds of ``voice`` to keep: the speech plus a little air."""
     bounds = speech_bounds(voice.to_soundarray(fps=fps), fps)

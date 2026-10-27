@@ -67,7 +67,7 @@ You can confirm you have the real file by checking its hash against
 `SHA256SUMS.txt` on the release page:
 
 ```powershell
-Get-FileHash .\AIVideoStudio-4.6.0-setup.exe -Algorithm SHA256
+Get-FileHash .\AIVideoStudio-4.7.0-setup.exe -Algorithm SHA256
 ```
 
 ## The quick way
@@ -380,6 +380,44 @@ Measured on an RTX 4060 (8 GB): **about 1.5 minutes per clip**, 6.9 GB of graphi
 It needs a graphics card: on the processor it stays off, and the scene keeps its still
 picture. If a clip can't be made, the still picture is used and the video is made anyway.
 
+### My voice (beta, NVIDIA graphics card only)
+
+**Settings → My voice → Make my voice**: read six sentences out loud, and the app speaks your
+scripts in a voice like yours, made with KittenTTS 2 from about 27 seconds of your recording.
+The first time it installs the **voice pack** (about 7 GB, about 15 minutes here: PyTorch for your graphics card and
+the voice model), which can be stopped and carried on later, and removed again in the same
+window. Then it plays a test line, and **My voice (beta)** appears in the voice list.
+
+Measured on an RTX 4060 (8 GB): about 26 s to load once per video, then **about as long as the
+speech itself** (20.8 s of speech in 20.7 s), 4.9 GB of graphics memory. It needs an NVIDIA card
+with 6 GB or more: on the processor it is about 10 times slower than the video, so on other PCs
+the button explains why it isn't available. In a test it sounded "about 70 percent" like the
+person; a quiet room and your normal reading speed help most. Captions follow the words
+closely but not exactly, because the timings are estimated. If a line can't be made, that line
+uses the normal voice and the video is made anyway. Your recording stays on your PC.
+
+### Show it on my PC (beta)
+
+<p align="center">
+  <img src="docs/tip.gif" width="270" alt="A tech-tip Short made by Show it on my PC: the app opens Settings, searches for Startup apps and points at the switches"><br>
+  <em>A tip video recorded by the app itself: hook, Win + I, search, the page, then back.</em>
+</p>
+
+**Script → Show it on my PC...**: type a Windows tip ("how to turn on night light") and press
+**Record**. The app finds the page itself while it records: Settings' search box (with a
+**Win + I** card), the taskbar's menu for Task Manager, or the Run box (**Win + R**) for
+Control Panel pages and tools. Don't touch the mouse while it does; if you do, it opens the
+page directly instead. A small box, left out of the recording, says what to click.
+
+When the tip is a simple on/off switch (night light, dark mode, Game Mode...), the app asks
+**"OK to change this?"** and only after **Yes** clicks the switch itself, then **switches it back
+right after the recording and checks it**. It writes the switch down before clicking, so if the
+app or the PC stops halfway, the next start puts it back. Switches that could cut you off or
+need a restart (screen, network, mouse, accessibility, updates, accounts...) are never clicked
+by the app: you click those, and the app walks you through switching them back. Your account
+name, email and picture are hidden in the video. Admin pages (firewall, registry...) aren't
+recorded.
+
 ### Your own footage and images
 
 Start a `Visual:` with `local:` to use a file instead of stock footage — a screen
@@ -652,7 +690,7 @@ python -m pytest
 python packaging/make_icon.py
 python packaging/fetch_llama.py
 pyinstaller --noconfirm --clean packaging/ai_video_studio.spec
-"%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe" /DMyAppVersion=4.6.0 packaging\installer.iss
+"%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe" /DMyAppVersion=4.7.0 packaging\installer.iss
 ```
 
 That is where Inno Setup goes when installed for one user; installed for everyone, it is

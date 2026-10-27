@@ -508,7 +508,7 @@ _PERCENT = re.compile(r"\d+(?:\.\d+)?\s?%|\d+(?:\.\d+)? percent")
 _BIG = re.compile(r"\b\d{1,3}(?:,\d{3})+\b|\b\d+(?:\.\d+)? (?:million|billion|trillion)\b")
 
 
-def _key_card(voice: str) -> str | None:
+def key_card(voice: str) -> str | None:
     """"Win + V" for a line that tells the viewer to press keys, else None.
 
     The line has to say press (or hold, hit, tap): "Windows has a tool" and
@@ -540,7 +540,7 @@ def suggest_card(voice: str) -> str | None:
 
     Years and small numbers are left alone; a card is for the one figure worth seeing.
     """
-    keys = _key_card(voice)
+    keys = key_card(voice)
     if keys:
         return keys
     for pattern in (_MONEY, _PERCENT, _BIG):

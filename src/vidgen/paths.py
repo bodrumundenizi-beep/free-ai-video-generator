@@ -114,6 +114,16 @@ def usable_output(path: str, candidates) -> tuple[str, bool]:
     raise SaveError(cannot_save_message(folder))
 
 
+def as_video(path: str) -> str:
+    """``path`` ending in .mp4. Picking OneDrive's "Personal Vault" shortcut in the Save window
+    saved a video as "....lnk", which Windows then treated as a broken shortcut (2026-10-26)."""
+    root, ext = os.path.splitext(path)
+    if ext.lower() == ".mp4":
+        return path
+    # A real ending (".lnk", ".txt") is swapped; "My v1.2 final" only gets one added.
+    return (root if ext and " " not in ext and len(ext) <= 5 else path) + ".mp4"
+
+
 def next_free_path(path: str) -> str:
     """``path`` if nothing is there yet, else the first free "name (2).ext", "name (3).ext"...
 

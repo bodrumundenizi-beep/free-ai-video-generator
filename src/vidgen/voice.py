@@ -144,19 +144,56 @@ def myvoice_ready() -> bool:
     return myvoice.ready()
 
 
+def spread_words(text: str, samples, rate: int):
+    """(start, duration, word) for each word, spread over the spoken part by word length.
+
+    For My voice: KittenTTS gives no word timings. Longer words take longer to say; a short
+    gap is left after each word, so captions follow closely enough to read along.
+    """
+    import numpy as np
+
+    words = text.split()
+    samples = np.abs(np.asarray(samples, dtype=np.float32))
+    if not words or not len(samples):
+        return []
+    loud = np.flatnonzero(samples > max(float(samples.max()) * 0.05, 1e-4))
+    start = loud[0] / rate if len(loud) else 0.0
+    end = (loud[-1] + 1) / rate if len(loud) else len(samples) / rate
+    weights = [len(w.strip(".,!?;:\"'")) + 1 for w in words]
+    unit = (end - start) / sum(weights)
+    timings, at = [], start
+    for word, weight in zip(words, weights):
+        timings.append((round(at, 3), round(unit * (weight - 0.5), 3), word))
+        at += unit * weight
+    return timings
+
+
+def _mine(text, base, log_func):
+    """My voice from the voice pack: (samples at SYNTH_RATE, word timings), or None on failure."""
+    from . import mastering, myvoice
+
+    try:
+        made = base + ".mine.wav"
+        myvoice.speak(text, made)
+        samples = mastering.decode(made, SYNTH_RATE)
+        return samples, spread_words(text, samples, SYNTH_RATE)
+    except Exception as exc:  # noqa: BLE001 - the normal voice is a fine stand-in
+        log_func(f"⚠️ My voice couldn't speak this line ({exc}); using the normal voice.")
+        return None
+
+
 def _local(text, persona, base, log_func):
     """The offline voice: (path written, word timings), through the same studio chain."""
     from . import localvoice, mastering
     from .pacing import rate_factor
 
-    mine = persona.id == voices.MY_VOICE and myvoice_ready()
+    mine = (_mine(text, base, log_func)
+            if persona.id == voices.MY_VOICE and myvoice_ready() else None)
     try:
-        from . import myvoice
-
-        speaker = myvoice.base_speaker() if mine else persona.local
-        samples, words = localvoice.say(text, speaker, rate_factor(persona.rate))
-        if mine:   # the same words and timings, in the user's own voice
-            samples = myvoice.convert(samples)
+        if mine is not None:
+            samples, words = mine
+        else:
+            samples, words = localvoice.say(text, persona.local, rate_factor(persona.rate))
     except localvoice.VoiceError as exc:
         raise Exception(f"Voice generation failed! {exc}") from exc
     wav_path = base + ".wav"

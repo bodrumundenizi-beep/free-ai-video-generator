@@ -185,3 +185,11 @@ def test_version_one_keeps_its_name_and_two_is_labelled():
     assert paths.version_path(r"C:\Videos\clip.mp4", 2) == r"C:\Videos\clip (version 2).mp4"
     assert paths.version_path("take.one.MOV", 2) == "take.one (version 2).MOV"
 
+
+
+def test_a_video_always_ends_in_mp4():
+    assert paths.as_video(r"C:\v\final.mp4") == r"C:\v\final.mp4"
+    assert paths.as_video(r"C:\v\Clip.MP4") == r"C:\v\Clip.MP4"
+    assert paths.as_video(r"C:\v\Kişisel Kasa.lnk") == r"C:\v\Kişisel Kasa.mp4"   # OneDrive vault
+    assert paths.as_video(r"C:\v\final") == r"C:\v\final.mp4"
+    assert paths.as_video(r"C:\v\My v1.2 final") == r"C:\v\My v1.2 final.mp4"

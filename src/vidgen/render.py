@@ -28,7 +28,7 @@ import tempfile
 import time
 from dataclasses import dataclass, field
 
-from . import footage, paths
+from . import footage, paths, voices
 from .formats import BITRATE_MAP, DRAFT, resolve_target
 from .stages import Stages
 from .paths import next_free_path  # noqa: F401 - re-exported for the window and tests
@@ -232,6 +232,9 @@ def render_worker(cfg: dict, ui: UiBridge):
     finally:
         # Close before deleting: an open reader would keep its file locked.
         job.close_all()
+        from . import myvoice
+
+        myvoice.close_speaker()   # My voice's speaker holds ~5 GB of graphics memory
         shutil.rmtree(work_dir, ignore_errors=True)
         ui.busy(False)
 
@@ -288,7 +291,7 @@ def _render(cfg, ui, work_dir, job):
         ui.log(f"⚠️ {warning}")
     scenes, cfg = with_bookends(scenes, cfg, work_dir, resolve_target(ratio, quality)[:2])
 
-    save_path = os.path.abspath(save_path)
+    save_path = paths.as_video(os.path.abspath(save_path))
     # Relative local: files are looked up beside where the user asked to save,
     # even if the video itself ends up somewhere else.
     out_dir = os.path.dirname(save_path)
@@ -383,7 +386,7 @@ def _render(cfg, ui, work_dir, job):
             voice_path, words = _voice(scene.voice, os.path.join(work_dir, f"voice_{i}.mp3"),
                                        cfg, ui)
             # The file is registered for closing; the trimmed copy shares its reader.
-            raw = job.keep(AudioFileClip(voice_path))
+            raw = audio.readable(job.keep(AudioFileClip(voice_path)))
             lead, tail = audio.speech_window(raw)
             plan.voice = raw if (lead, tail) == (0.0, raw.duration) else raw.subclipped(lead, tail)
             plan.voice_path, plan.trim = voice_path, (lead, tail)
@@ -458,7 +461,12 @@ def _voice(text, path, cfg, ui):
 
     store = cache.Cache(cfg.get("cache_root"), "voices")
     online = bool(cfg.get("voice_online"))
-    name = cache.key("voice", text, cfg.get("voice"), online, cfg.get("app_version"))
+    mine = ""
+    if voices.persona(cfg.get("voice")).id == voices.MY_VOICE:
+        from . import myvoice
+
+        mine = myvoice.voice_key()   # My voice made again from a new recording: new lines
+    name = cache.key("voice", text, cfg.get("voice"), online, cfg.get("app_version"), mine)
     kept = store.get_json(name + ".json")
     if kept:
         audio_file = store.get(name + kept["ext"])
@@ -530,14 +538,14 @@ def _retime(plan, tempo, dest, job):
     """Replace a scene's voice with one ``tempo`` times as fast, same pitch."""
     from moviepy import AudioFileClip
 
-    from . import mastering
+    from . import audio, mastering
 
     lead, tail = plan.trim
     mastering.run_ffmpeg([
         "-y", "-ss", f"{lead:.3f}", "-to", f"{tail:.3f}", "-i", plan.voice_path,
         "-filter:a", f"atempo={tempo:.4f}", "-ar", "44100", "-c:a", "pcm_s16le", dest,
     ])
-    plan.voice = job.keep(AudioFileClip(dest))
+    plan.voice = audio.readable(job.keep(AudioFileClip(dest)))
     plan.voice_path, plan.trim = dest, (0.0, float(plan.voice.duration))
     plan.voice_len = float(plan.voice.duration)
     plan.words = [(start / tempo, length / tempo, text) for start, length, text in plan.words]
@@ -590,9 +598,13 @@ def _make_version(cfg, ui, work_dir, job, plans, search, choices, version, save_
             else:
                 plan.parts = _parts(plan)
                 previous, plan.sources = plan.sources, []
-                with spent.time("stock"):
-                    _acquire_stock(plan, i, search, ui, credits, providers_used,
-                                   choices.get(i), previous, stop, stock)
+                try:
+                    with spent.time("stock"):
+                        _acquire_stock(plan, i, search, ui, credits, providers_used,
+                                       choices.get(i), previous, stop, stock)
+                except NoFootage as exc:
+                    _stand_in(plan, i, plans[:i], cfg, ratio, work_dir, ui, version, search,
+                              stop, exc)
             ui.progress(base_progress + span * 0.35 * (i + 1) / total_scenes)
     finally:
         stock.pool.shutdown(wait=True, cancel_futures=True)
@@ -945,6 +957,27 @@ def _minutes(seconds: float) -> str:
     return f"{seconds:.0f} s" if seconds < 90 else f"{seconds / 60:.0f} min"
 
 
+def _stand_in(plan, index, before, cfg, ratio, work_dir, ui, version, search, stop, why):
+    """A scene with no stock clip left still gets a picture, rather than sinking the render
+    (issue #6): an AI picture if they are installed, else a clip from an earlier scene."""
+    from . import imagegen
+
+    ui.log(f"⚠️ Scene {index + 1}: {why}.")
+    if imagegen.ready()[0]:
+        scene = plan.scene
+        plan.scene = _ai_instead(scene)
+        if _ai_picture(plan, index, cfg, ratio, work_dir, ui, version, search, stop):
+            plan.kind = "still AI picture (no stock clip left)"
+            return
+        plan.scene = scene
+    earlier = [p for p in before if p.sources and p.sources[0].kind == "video"]
+    if not earlier:
+        raise Exception(str(why))
+    plan.parts, plan.sources = 1, list(earlier[index % len(earlier)].sources[:1])
+    plan.kind = "stock clip (used again: no other left)"
+    ui.log(f"🔁 Scene {index + 1}: using a clip from an earlier scene again.")
+
+
 def _ai_instead(scene):
     """``scene`` asking for an AI picture in place of stock footage: its Picture: line if it
     has one, else its search words and what is said over them."""
@@ -985,6 +1018,14 @@ def _moving_picture(plan, index, cfg, ratio, work_dir, ui, version, ai_before, s
         return
     if cfg.get("resolution") == DRAFT:
         return   # a draft keeps the still: quick, and the timing is the same
+    if cfg.get("ai_gpu") == "integrated":
+        # Built-in graphics lost the device after 80 s on a laptop (issue #6): the still
+        # stays, without the wait.
+        if not cfg.get("_moving_said"):
+            cfg["_moving_said"] = True
+            ui.log("🎞️ Moving pictures need a separate graphics card; built-in graphics "
+                   "keep the still picture.")
+        return
     if cfg.get("_moving_failed"):
         # It failed earlier in this render: the same settings on the same card would again.
         plan.note = "moving picture skipped: it failed earlier in this video"
@@ -1154,6 +1195,10 @@ class _StockFetch:
         return future.result() if future else self._ready(url)
 
 
+class NoFootage(Exception):
+    """No stock clip is left for a scene (issue #6: "tiramisu")."""
+
+
 def _acquire_stock(plan, index, search, ui, credits, providers_used, preferred, previous,
                    stop, stock):
     """Search and download the clip(s) for one stock scene.
@@ -1193,7 +1238,7 @@ def _acquire_stock(plan, index, search, ui, credits, providers_used, preferred, 
         plan.sources = list(previous)
         ui.log(f"⚠️ No other clip found for '{query}'; this version reuses the same one.")
     if not plan.sources:
-        raise Exception(search.explain_failure(query))
+        raise NoFootage(search.explain_failure(query))
     if len(plan.sources) < wanted:
         ui.log(f"⚠️ Only one clip found for '{query}'; the scene uses it throughout.")
         plan.parts = len(plan.sources)

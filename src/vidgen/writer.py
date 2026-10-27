@@ -617,6 +617,46 @@ def close_all() -> None:
         session.close()
 
 
+_HOOK_PROMPT = (
+    "You write the first line of a short Windows tech-tip video: one sentence that makes "
+    "people keep watching, at most 12 words. Say what the viewer gets, plainly. No numbers, "
+    "no percentages, no promises like 'double your FPS', no emojis. "
+    "Answer as JSON: {\"hook\": \"...\"}."
+)
+
+_TIP_PROMPT = (
+    "You plan a short Windows tech-tip video recorded on the viewer's own PC. You get the tip "
+    "and the Windows page where it is done. The app opens that page itself, so it is already "
+    "on screen: never tell them to click its name or go to it. If the page is the Settings "
+    "search box, also give the few words to type in \"search_words\". Write 2 to 4 steps the "
+    "person recording "
+    "will do on that page: \"guide\" tells them what to click (short), \"voice\" is what the "
+    "narrator says to viewers (one friendly sentence, at most 20 words). Read the tip "
+    "literally: \"apps that start with Windows\" means apps that launch at startup. Only name "
+    "buttons or options you are sure exist on that page; if unsure, say what to look for "
+    "(\"find the switch for ...\") instead of inventing a name. Never use a search box: the "
+    "page is already open. Usually one or two steps are enough: the click that changes the "
+    "setting (a switch or an option), then a short closing line. When the page's buttons are "
+    "listed, set each step's \"target\" to the button it clicks, exactly as listed, and use "
+    "that name in the guide. Set \"changes_setting\" true only on the step where the setting "
+    "itself is switched.")
+
+
+def tip_schema(buttons=()) -> dict:
+    """The answer's shape. With the page's real buttons, each step names one of them (or none)."""
+    properties = {"guide": {"type": "string"}, "voice": {"type": "string"},
+                  "changes_setting": {"type": "boolean"}}
+    required = ["guide", "voice", "changes_setting"]
+    if buttons:
+        properties["target"] = {"enum": [*dict.fromkeys(buttons), ""]}
+        required.append("target")
+    step = {"type": "object", "properties": properties, "required": required}
+    return {"type": "object", "properties": {
+        "search_words": {"type": "string"},
+        "steps": {"type": "array", "items": step, "minItems": 2, "maxItems": 4}},
+        "required": ["search_words", "steps"]}
+
+
 class Session:
     """The model, loaded for as long as this is open. Use as ``with Session() as s:``.
 
@@ -694,6 +734,39 @@ class Session:
                 proc.wait(timeout=10)
             except (OSError, subprocess.SubprocessError):
                 pass
+
+    def tip(self, text: str, place=None, buttons=()) -> dict:
+        """The steps and voice lines for a Windows tip shown on ``place`` (None: Windows search).
+
+        The place comes from the map's own search, which picked better than the model in
+        tests (2026-10-21): the model only writes what happens on that page. ``buttons`` are
+        the page's real controls (uiread); each step's target must be one of them.
+        """
+        where = (f"{place.name} (also known as: {', '.join(place.words[1:8])})" if place
+                 else "the Settings search box, then the page Windows finds")
+        from . import uiread
+
+        buttons = list(buttons)[:60]
+        names = [b.name for b in buttons]
+        listing = ("\nButtons on the page: " + "; ".join(uiread.label(b) for b in buttons)
+                   if buttons else "")
+        content = self._ask(_TIP_PROMPT, [("user", f"Tip: {text}\nPage: {where}{listing}")],
+                            tip_schema(names), 600, 0.3)
+        try:
+            return json.loads(content)
+        except ValueError as exc:
+            raise WriterError("The Smart writer's answer could not be read.") from exc
+
+    def hook(self, text: str) -> str:
+        """One short opening line for a tip video about ``text``, for a tip the map's own
+        lines don't cover (hooks.py checks it before it is used)."""
+        schema = {"type": "object", "properties": {"hook": {"type": "string", "maxLength": 90}},
+                  "required": ["hook"]}
+        content = self._ask(_HOOK_PROMPT, [("user", f"Tip: {text}")], schema, 80, 0.8)
+        try:
+            return str(json.loads(content).get("hook") or "")
+        except ValueError as exc:
+            raise WriterError("The Smart writer's answer could not be read.") from exc
 
     def _ask(self, system: str, turns: list[tuple[str, str]], schema: dict,
              max_tokens: int, temperature: float = 0.6) -> str:
