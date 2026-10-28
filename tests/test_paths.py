@@ -193,3 +193,17 @@ def test_a_video_always_ends_in_mp4():
     assert paths.as_video(r"C:\v\Kişisel Kasa.lnk") == r"C:\v\Kişisel Kasa.mp4"   # OneDrive vault
     assert paths.as_video(r"C:\v\final") == r"C:\v\final.mp4"
     assert paths.as_video(r"C:\v\My v1.2 final") == r"C:\v\My v1.2 final.mp4"
+
+
+def test_recordings_go_where_files_are_allowed(tmp_path, monkeypatch):
+    docs = str(tmp_path / "Documents" / "AI Video Studio" / "Recordings")
+    videos = tmp_path / "Videos"
+    videos.mkdir()
+    monkeypatch.setattr(paths, "known_folder", lambda csidl, fallback: str(videos))
+    assert paths.recordings_dir(docs) == (docs, False)
+    refused = {docs}
+    monkeypatch.setattr(paths, "is_writable", lambda folder: folder not in refused)
+    assert paths.recordings_dir(docs) == (str(videos / "AI Video Studio Recordings"), True)
+    refused.add(str(videos / "AI Video Studio Recordings"))   # issue #7: both protected
+    folder, moved = paths.recordings_dir(docs)
+    assert moved and folder.endswith(os.path.join("AIVideoStudio", "Recordings"))

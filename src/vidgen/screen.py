@@ -89,19 +89,85 @@ def hide_from_capture(hwnd: int) -> None:
         pass   # older Windows: the box is placed beside the recorded window anyway
 
 
-def grab_args(rect, fps=FPS):
+def monitors():
+    """[(left, top, right, bottom)] of every monitor, in Windows' own order, real pixels."""
+    if sys.platform != "win32":
+        return []
+    from ctypes import wintypes
+
+    found = []
+    proc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HMONITOR, wintypes.HDC,
+                              ctypes.POINTER(wintypes.RECT), wintypes.LPARAM)(
+        lambda _m, _dc, r, _l: found.append((r[0].left, r[0].top, r[0].right, r[0].bottom))
+        or True)
+    ctypes.windll.user32.EnumDisplayMonitors(None, None, proc, 0)
+    return found
+
+
+def fit_to_screen(rect, screens=None):
+    """``rect`` cut to the monitor it is mostly on, with even sizes: (rect, monitor index).
+
+    The older screen grab refuses an area that reaches past the screen even by a pixel ("extends
+    outside window area"), and a maximized window's frame does on a laptop (school PC,
+    2026-10-28). Unchanged when the monitors can't be read.
+    """
+    screens = monitors() if screens is None else screens
     left, top, width, height = rect
+    right, bottom = left + width, top + height
+
+    def overlap(m):
+        return max(0, min(right, m[2]) - max(left, m[0])) * max(0, min(bottom, m[3]) - max(top, m[1]))
+
+    if not screens or not any(overlap(m) for m in screens):
+        return rect, 0
+    index = max(range(len(screens)), key=lambda i: overlap(screens[i]))
+    m = screens[index]
+    left, top, right, bottom = max(left, m[0]), max(top, m[1]), min(right, m[2]), min(bottom, m[3])
+    width, height = right - left, bottom - top
+    return (left, top, width - width % 2, height - height % 2), index
+
+
+def grab_args(rect, fps=FPS, method="gdi", screens=None):
+    """ffmpeg input arguments recording ``rect``: "gdi" (gdigrab, the older way) or "dda"
+    (Windows' Desktop Duplication, which also works where the older one is refused)."""
+    left, top, width, height = rect
+    if method == "dda":
+        (left, top, width, height), index = fit_to_screen(rect, screens)
+        screens = monitors() if screens is None else screens
+        m = screens[index] if screens else (0, 0, 0, 0)
+        # Its offsets count from the monitor's own corner. ponytail: assumes Windows lists the
+        # monitors in Desktop Duplication's order (true for one screen; check on two).
+        source = (f"ddagrab=output_idx={index}:framerate={fps}:draw_mouse=1:"
+                  f"offset_x={left - m[0]}:offset_y={top - m[1]}:video_size={width}x{height},"
+                  "hwdownload,format=bgra")
+        return ["-f", "lavfi", "-i", source]
     return ["-f", "gdigrab", "-framerate", str(fps), "-offset_x", str(left), "-offset_y", str(top),
             "-video_size", f"{width}x{height}", "-draw_mouse", "1", "-i", "desktop"]
 
 
-def can_record(rect) -> str:
-    """"" if the screen can be recorded here, else why not (a locked-down PC may refuse)."""
-    try:
-        mastering.run_ffmpeg([*grab_args(rect), "-frames:v", "1", "-f", "null", "-"])
-        return ""
-    except Exception as exc:  # noqa: BLE001 - shown to the user as is
-        return f"This PC doesn't allow recording the screen ({str(exc)[:160]})."
+METHOD = "gdi"        # the way of recording that worked here (can_record sets it)
+LAST_FAILURE = ""     # ffmpeg's full reasons the last time neither way worked, for the Log
+
+
+def can_record(rect, run=None) -> str:
+    """"" if the screen can be recorded here, else why not (a locked-down PC may refuse).
+
+    The older grab is tried first, then Desktop Duplication; the one that works is kept in
+    METHOD for the recording. When neither does, LAST_FAILURE holds both of ffmpeg's reasons.
+    """
+    global METHOD, LAST_FAILURE
+    run = run or mastering.run_ffmpeg
+    reasons = []
+    for method in ("gdi", "dda"):
+        try:
+            run([*grab_args(rect, method=method), "-frames:v", "1", "-f", "null", "-"])
+            METHOD, LAST_FAILURE = method, ""
+            return ""
+        except Exception as exc:  # noqa: BLE001 - kept for the Log
+            reasons.append(f"{method}: {exc}")
+    LAST_FAILURE = " || ".join(reasons)
+    return ("This PC doesn't allow recording the screen. The Log has the reason; the Report a "
+            "problem button sends it.")
 
 
 class Recorder:
@@ -110,7 +176,8 @@ class Recorder:
     def __init__(self, rect, path, popen=subprocess.Popen, clock=time.monotonic):
         self.rect, self.path, self.clock = rect, path, clock
         self.process = popen(
-            [mastering.ffmpeg_exe(), "-hide_banner", "-y", *grab_args(rect), "-c:v", "libx264",
+            [mastering.ffmpeg_exe(), "-hide_banner", "-y", *grab_args(rect, method=METHOD),
+             "-c:v", "libx264",
              "-preset", "ultrafast", "-crf", "18", "-pix_fmt", "yuv420p", path],
             stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             creationflags=0x08000000 if sys.platform == "win32" else 0)

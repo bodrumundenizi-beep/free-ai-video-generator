@@ -98,6 +98,10 @@ def session(monkeypatch, tmp_path):
     # The app finding the page itself has tests of its own below; never the real mouse here.
     monkeypatch.setattr(drive, "route", lambda place: "")
     monkeypatch.setattr(uiread, "recall", lambda store, place_id: [])   # not this PC's cache
+    monkeypatch.setattr(drive, "close", lambda hwnd: None)               # never a real window
+    reports = []
+    monkeypatch.setattr(ai, "report_tip_failure", lambda app, message: reports.append(message))
+    FakeBox.reports = reports
     monkeypatch.setattr(uiread, "read", lambda hwnd: [
         uiread.Control("Night light", "Button", switch["state"], 50, 60, 72, 40)])
     monkeypatch.setattr(ai, "GuideBox", FakeBox)
@@ -113,6 +117,7 @@ def session(monkeypatch, tmp_path):
     released = []
     dialog = SimpleNamespace(app=app, withdraw=on_main, deiconify=on_main, destroy=on_main,
                              winfo_exists=lambda: True, say=on_main, page_hwnd=0, page_states={},
+                             lift=on_main, attributes=on_main, focus_force=on_main,
                              grab_release=lambda: released.append(True))
     app.released = released
     return ai.TipSession(dialog, tip, None, "turn on night light"), app, switch
@@ -206,7 +211,7 @@ def test_settings_search_steps_come_first_in_the_video(session, monkeypatch):
 
     monkeypatch.setattr(drive, "settings_search", search)
     started(s, app)
-    assert s.phase == "auto" and "finding the page" in FakeBox.shown[-1][0]
+    assert s.phase == "auto" and "searches for Night light" in FakeBox.shown[-1][0]
     assert app.run(lambda: s.phase == "record")
     assert s.step == 2 and s.recorder.marks == [1.0, 2.0]   # past the app's own two steps
     to_the_end(s, app, switch)
@@ -386,3 +391,59 @@ def test_the_video_starts_with_a_hook_and_what_is_about_to_happen(session, monke
     assert "intro_hook.png" in first[0] and "Card:" in first[0]
     assert "Right now we're going to turn on Night light" in first[1]
     assert app.script.count("Visual: local:") == 5
+
+
+# --- check first, explain, never fail out of sight (school laptop, 2026-10-28) ---------------
+
+def test_a_pc_that_cannot_record_is_told_before_anything_opens(monkeypatch, tmp_path):
+    monkeypatch.setattr(ai, "RECORDINGS_DIR", str(tmp_path))
+    monkeypatch.setattr(screen, "monitors", lambda: [(0, 0, 1366, 768)])
+    asked = []
+    monkeypatch.setattr(screen, "can_record", lambda rect: asked.append(rect) or "blocked here")
+    monkeypatch.setattr(screen, "LAST_FAILURE", "gdi: refused || dda: refused")
+    monkeypatch.setattr(screen, "open_window", lambda cmd: pytest.fail("opened a window"))
+    app = FakeApp()
+    fake = SimpleNamespace(app=app)
+    assert ai.TipDialog.preflight(fake) == "blocked here"
+    assert asked == [(523, 264, 320, 240)]            # a piece of the middle of the screen
+    app.run(lambda: app.logs)
+    assert "dda: refused" in app.logs[0]
+
+
+def test_a_failure_closes_the_opened_window_and_comes_to_the_front(session, monkeypatch):
+    s, app, _switch = session
+    closed, front = [], []
+    monkeypatch.setattr(drive, "close", lambda hwnd: closed.append(hwnd))
+    s.dialog.lift = lambda: front.append("lift")
+    s.dialog.focus_force = lambda: front.append("focus")
+    started(s, app)
+    s.fail("This PC doesn't allow recording the screen.")
+    assert closed == [99] and front == ["lift", "focus"]
+    assert any("doesn't allow recording" in line for line in app.logs)
+
+
+def test_a_failed_recording_offers_report_this_but_a_cancel_does_not(session):
+    s, app, _switch = session
+    started(s, app)
+    s.cancel()
+    assert FakeBox.reports == []
+    s.phase = "record"
+    s.fail("This PC doesn't allow recording the screen.")
+    assert FakeBox.reports == ["This PC doesn't allow recording the screen."]
+
+
+def test_report_this_sends_the_full_reason(monkeypatch):
+    shown = {}
+
+    class FakeDialog:
+        def __init__(self, app, title, message, ok=True, on_report=None, **_kw):
+            shown.update(title=title, message=message, ok=ok)
+            on_report()
+
+    opened = []
+    app = SimpleNamespace(open_report=lambda error: opened.append(error))
+    monkeypatch.setattr(ai, "Dialog", FakeDialog)
+    monkeypatch.setattr(screen, "LAST_FAILURE", "gdi: refused || dda: refused")
+    ai.report_tip_failure(app, "This PC doesn't allow recording the screen.")
+    assert shown["ok"] is False and "couldn't record" in shown["title"]
+    assert "dda: refused" in opened[0] and opened[0].startswith("This PC doesn't")

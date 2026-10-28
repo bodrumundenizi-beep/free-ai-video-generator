@@ -90,6 +90,17 @@ def safe_folders() -> list[str]:
     return folders
 
 
+def recordings_dir(first: str) -> tuple[str, bool]:
+    """(folder, moved) for Show it on my PC's recordings: ``first`` when it can be written, else
+    Videos, else the temp folder. On school PCs Controlled folder access refuses Documents and
+    says "file not found" (issue #7); moved is True then."""
+    for folder in (first, os.path.join(known_folder(CSIDL_VIDEOS, "Videos"),
+                                       "AI Video Studio Recordings")):
+        if is_writable(folder):
+            return folder, folder != first
+    return os.path.join(tempfile.gettempdir(), "AIVideoStudio", "Recordings"), True
+
+
 def _same(a: str, b: str) -> bool:
     return os.path.normcase(os.path.abspath(a)) == os.path.normcase(os.path.abspath(b))
 

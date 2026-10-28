@@ -158,7 +158,7 @@ from vidgen.voice import generate_voiceover  # noqa: E402
 
 
 APP_NAME = "AI Video Studio"
-APP_VERSION = "4.7.0"
+APP_VERSION = "4.7.1"
 # Must match AppUserModelID in packaging/installer.iss, or a pinned taskbar
 # shortcut will not group with the running window.
 APP_MODEL_ID = "AIVideoStudio.Desktop.3"
@@ -1316,15 +1316,12 @@ TOUR = (
 # Shown once after updating to this version (WhatsNewDialog). Short: the release notes have
 # the whole story.
 WHATS_NEW = (
-    "Show it on my PC (beta): type a Windows tip and the app finds the page itself (Settings "
-    "search, the Run box or the taskbar), records it, zooms onto the button and blurs your "
-    "name. A simple switch it can flip for you after you say yes, and it puts it back.",
-    "Tip videos start with a hook (\"Here's how to make your PC faster in 15 seconds\") and "
-    "shortcut keycaps like Win + I; 192 ready-made tips cover every page the app knows.",
-    "My voice (beta): read six sentences, and scripts are spoken in a voice like yours. "
-    "Needs an NVIDIA graphics card with 6 GB or more and a one-time 7 GB voice pack.",
-    "Fixes: a scene with no stock clip left no longer stops the render, videos always save as "
-    ".mp4, and built-in graphics skip moving pictures instead of crashing after a minute.",
+    "Show it on my PC works on school and work PCs: when Documents is protected, recordings "
+    "are kept in another folder instead of failing.",
+    "Recording works on more laptops: the recorded area stays on the screen, and if Windows "
+    "refuses the usual way, the app records with Windows' Desktop Duplication instead.",
+    "Before anything opens, the app checks that it can record, says what each step is doing, "
+    "and if a tip can't record, shows why in front, with a Report this button.",
 )
 
 
@@ -1332,6 +1329,18 @@ RECORDINGS_DIR = os.path.join(os.path.dirname(MUSIC_DIR), "Recordings")
 # When this copy was built (the exe's date), or "from source": shown where a test build matters.
 BUILD = (time.strftime("build %d %b %H:%M", time.localtime(os.path.getmtime(sys.executable)))
          if getattr(sys, "frozen", False) else "from source")
+
+
+def report_tip_failure(app, message):
+    """The error window a failed render shows, with Report this, for a tip that couldn't record.
+
+    The report gets ffmpeg's full reasons too (screen.LAST_FAILURE): issue #7 came in as a
+    screenshot without them (2026-10-28).
+    """
+    detail = f"{message}\n\nScreen recording: {screen.LAST_FAILURE}" if screen.LAST_FAILURE \
+        else message
+    Dialog(app, "Show it on my PC couldn't record", message, ok=False,
+           on_report=lambda: app.open_report(detail))
 
 
 class FlipDialog(Dialog):
@@ -1499,6 +1508,7 @@ class TipDialog(ctk.CTkToplevel):
         self.preview.pack(anchor="w", padx=18)
         self.planned = None
         self.page_hwnd, self.opened_more, self.page_states = 0, None, {}
+        self.checked = False   # the PC can record (preflight), checked on the first Record
         self.status = ctk.CTkLabel(card, text="", font=app.font_tiny, text_color=TEXT_DIM,
                                    wraplength=440, justify="left")
         self.status.pack(anchor="w", padx=18)
@@ -1512,6 +1522,34 @@ class TipDialog(ctk.CTkToplevel):
 
     def say(self, text, colour=TEXT_DIM):
         self.status.configure(text=text, text_color=colour)
+
+    def preflight(self):
+        """Worker: "" when a recording can be kept and the screen can be recorded, else why."""
+        try:
+            paths.recordings_dir(RECORDINGS_DIR)   # Documents refused: it falls back (Fix 1)
+        except OSError as exc:
+            return f"There's no folder this PC lets the app save recordings in ({exc})."
+        screens = screen.monitors()
+        left, top, right, bottom = screens[0] if screens else (0, 0, 640, 480)
+        middle = ((left + right) // 2 - 160, (top + bottom) // 2 - 120, 320, 240)
+        why = screen.can_record(middle)
+        if why:
+            failure = screen.LAST_FAILURE
+            self.app.call_soon(lambda: self.app.append_log(
+                f"⚠️ Screen recording failed: {failure}"))
+        return why
+
+    def after_check(self, why):
+        if not self.winfo_exists():
+            return
+        self.record_button.configure(state="normal")
+        if why:
+            self.say(why, ERR_COLOR)
+            report_tip_failure(self.app, why)
+            return
+        self.checked = True   # once per window: the PC doesn't change in between
+        self.say("")
+        self.record()
 
     def plan(self, then=None):
         """Find the place in the map of Windows and let the Smart writer write the steps.
@@ -1541,6 +1579,8 @@ class TipDialog(ctk.CTkToplevel):
                     note = (" (Plain steps: Windows doesn't show this page's buttons to the app, "
                             "so it doesn't name them.)")
                 elif writer.installed():
+                    self.app.call_soon(lambda: self.winfo_exists() and self.say(
+                        "Planning the steps..."))
                     with writer.Session() as session:
                         tip = tips.from_answer(text, session.tip(text, place, buttons), place)
                 else:   # no Smart writer: plain steps, or Windows' search when nothing matched
@@ -1581,6 +1621,9 @@ class TipDialog(ctk.CTkToplevel):
             # Task Manager runs with admin rights: it can't be read, nor closed by the app, and
             # left in front it blocks the app's mouse when it finds the page itself.
             return uiread.recall(store, place.id)
+        name = place.name
+        self.app.call_soon(lambda: self.winfo_exists() and self.say(
+            f"Opening {name} to read its buttons. It closes again before the recording."))
         try:
             hwnd = screen.open_window(place.command())
             self.page_hwnd = hwnd   # closed again before the app finds it through the Run box
@@ -1629,6 +1672,18 @@ class TipDialog(ctk.CTkToplevel):
             then()
 
     def record(self):
+        if not self.checked:
+            # Before anything opens: a PC that can't record used to open the page, close it,
+            # open Settings and then fail out of sight (school laptop, 2026-10-28).
+            self.say("Checking that this PC can record the screen...")
+            self.record_button.configure(state="disabled")
+
+            def work():
+                why = self.preflight()
+                self.app.call_soon(lambda: self.after_check(why))
+
+            threading.Thread(target=work, daemon=True).start()
+            return
         tip = self.planned
         typed = " ".join(self.ask.get().split())
         if tip is None and tips.ready_made(typed):
@@ -1703,7 +1758,13 @@ class TipSession:
         self.hwnd, self.rect, self.controls, self.before = 0, None, [], {}
         self.clicks, self.pressed, self.found = [], False, {}
         self.marks, self.length, self.path, self.left = [], 0.0, "", {}
-        self.folder = os.path.join(RECORDINGS_DIR, time.strftime("%Y-%m-%d_%H%M%S"))
+        # Documents may refuse it on school PCs (issue #7): the first folder that takes files.
+        base, moved = paths.recordings_dir(RECORDINGS_DIR)
+        if moved and not getattr(self.app, "_said_recordings", False):
+            self.app._said_recordings = True
+            self.app.append_log(f"ℹ️ Documents is protected on this PC, so recordings are kept "
+                                f"in {base}.")
+        self.folder = os.path.join(base, time.strftime("%Y-%m-%d_%H%M%S"))
         atexit.register(self.restore)   # even if the app is closed mid-recording
 
     def restore(self):
@@ -1841,7 +1902,11 @@ class TipSession:
         intro = {"path": os.path.join(self.folder, "intro.mp4")}
 
         def record(rect):
+            rect, _monitor = screen.fit_to_screen(rect)
             if screen.can_record(rect):
+                failure = screen.LAST_FAILURE
+                self.app.call_soon(lambda: self.app.append_log(
+                    f"⚠️ Screen recording failed: {failure}"))
                 return False
             intro["rect"] = rect
             self.intro_recorder = screen.Recorder(rect, intro["path"])
@@ -1916,8 +1981,12 @@ class TipSession:
             self.fail("The window opened behind other windows, so there is nothing to record. "
                       "Close other windows and press Record again.")
             return
+        # Only what is on the screen: a maximized window reaches past a laptop's edges, and the
+        # screen grab refuses that (school laptop, 2026-10-28).
+        rect, _monitor = screen.fit_to_screen(rect)
         why = screen.can_record(rect)
         if why:
+            self.app.append_log(f"⚠️ Screen recording failed: {screen.LAST_FAILURE}")
             self.fail(why)
             return
         self.rect = rect
@@ -1932,7 +2001,8 @@ class TipSession:
         if self.route == "settings":
             self.phase = "auto"
             self.track_clicks()
-            self.box.show("Watch: the app is finding the page. Don't touch the mouse.", "Next")
+            self.box.show(f"Watch: the app opens Settings and searches for {self.place.name}. "
+                          "Don't touch the mouse.", "Next")
             threading.Thread(target=self.find_in_settings, daemon=True).start()
             return
         self.track_clicks()
@@ -2082,14 +2152,27 @@ class TipSession:
         self.phase = "done"   # also stops the app finding the page (drive checks stopped())
         self._close()
         shutil.rmtree(self.folder, ignore_errors=True)
-        self.dialog.deiconify()
+        self.bring_back()
         self.dialog.say("Cancelled. Nothing was kept, and the setting is as it was.")
 
     def fail(self, message):
         self.phase = "done"
         self._close()
-        self.dialog.deiconify()
+        drive.close(self.hwnd)   # the window this recording opened (never one of the app's)
+        self.app.append_log(f"⚠️ Show it on my PC: {message}")
+        self.bring_back()
         self.dialog.say(message, ERR_COLOR)
+        report_tip_failure(self.app, message)
+
+    def bring_back(self):
+        """The Show it on my PC window, in front of everything and focused: on the school laptop
+        it came back behind Settings, and the error in it was never seen (2026-10-28)."""
+        self.dialog.deiconify()
+        self.dialog.lift()
+        self.dialog.attributes("-topmost", True)
+        self.dialog.focus_force()
+        self.app.after(400, lambda: self.dialog.winfo_exists()
+                       and self.dialog.attributes("-topmost", False))
 
     # -- after recording ------------------------------------------------------------------
     def finish(self):
@@ -2205,8 +2288,9 @@ class TipSession:
                 text = tips.script(self.tip, self.was_on, clips,
                                    self.opening(clips) if self.hook else ())
             except Exception as exc:  # noqa: BLE001
-                message = f"⚠️ Couldn't cut the recording ({exc})."
-                self.app.call_soon(lambda: self.app.append_log(message))
+                message = f"Couldn't cut the recording ({exc})."
+                self.app.call_soon(lambda: (self.app.append_log(f"⚠️ {message}"),
+                                            report_tip_failure(self.app, message)))
                 return
             self.app.call_soon(lambda: self.use(text))
 
