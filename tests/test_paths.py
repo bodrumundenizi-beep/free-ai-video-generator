@@ -91,7 +91,7 @@ def test_nowhere_writable_is_a_clear_error(tmp_path):
     with pytest.raises(SaveError) as error:
         usable_output(os.path.join(folder, "final_video.mp4"), [folder])
     assert str(error.value) == (
-        f"Could not save the video to {folder}. Choose another folder in Settings.")
+        f"Could not save the video to {folder}. Choose another folder in Settings > Video & saving.")
 
 
 # --- delivering the finished file ------------------------------------------------

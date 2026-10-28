@@ -45,6 +45,8 @@ def engine(phonemes=fake_phonemes, session=None):
     ("2000", "two thousand"), ("2005", "two thousand five"), ("2024", "twenty twenty four"),
     ("$100", "100 dollars"), ("$200,000", "200,000 dollars"), ("$5k", "5k dollars"),
     ("don’t", "don't"), ("300", "300"), ("12345", "12345"), ("video", "video"),
+    ("RAM", "ram"), ("NASA", "nasa"), ("GIFs", "gifs"), ("LASERs", "lasers"),
+    ("USB", "USB"), ("GPU", "GPU"), ("Ram", "Ram"),
 ])
 def test_speakable(written, spoken):
     assert speakable(written) == spoken

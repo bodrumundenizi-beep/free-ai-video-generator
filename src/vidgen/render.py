@@ -353,7 +353,7 @@ def _render(cfg, ui, work_dir, job):
     needs_stock = [p.scene for p in plans if not p.scene.is_local and not p.scene.is_ai]
     if needs_stock and not search.providers:
         raise Exception(
-            "Add a stock footage key (Pexels or Pixabay) in Settings "
+            "Add a stock footage key (Pexels or Pixabay) in Settings > Footage keys "
             f"- the scene at line {needs_stock[0].line} needs stock footage."
         )
 
@@ -466,7 +466,10 @@ def _voice(text, path, cfg, ui):
         from . import myvoice
 
         mine = myvoice.voice_key()   # My voice made again from a new recording: new lines
-    name = cache.key("voice", text, cfg.get("voice"), online, cfg.get("app_version"), mine)
+    # How the words are read (RAM as "ram"): a corrected reading makes the line again.
+    from .localvoice import _pieces
+    said = " ".join(piece.spoken for piece in _pieces(text))
+    name = cache.key("voice", text, said, cfg.get("voice"), online, cfg.get("app_version"), mine)
     kept = store.get_json(name + ".json")
     if kept:
         audio_file = store.get(name + kept["ext"])
@@ -739,7 +742,7 @@ def _make_version(cfg, ui, work_dir, job, plans, search, choices, version, save_
         _write_side_files(ui, save_path, credits, providers_used, cues)
 
     with spent.time("thumbnail"):
-        _thumbnail(cfg, ui, save_path, speech)
+        _thumbnail(cfg, ui, save_path, speech, starts)
     return save_path
 
 
@@ -839,7 +842,20 @@ def _write_side_files(ui, save_path, credits, providers_used, cues):
             ui.log(f"⚠️ Couldn't save the subtitle file ({exc}).")
 
 
-def _thumbnail(cfg, ui, save_path, speech):
+def thumbnail_moment(cfg, starts):
+    """The middle of the scene chosen in the Storyboard, in the video's time, or None.
+
+    The channel-name card, when on, comes first and moves every scene up one.
+    """
+    scene = cfg.get("thumbnail_scene")
+    if scene is None:
+        return None
+    first = 1 if cfg.get("intro_on") and (cfg.get("intro_text") or "").strip() else 0
+    at = scene + first
+    return (starts[at] + starts[at + 1]) / 2 if at + 1 < len(starts) else None
+
+
+def _thumbnail(cfg, ui, save_path, speech, starts=()):
     try:
         from . import projects, thumbnail
 
@@ -847,8 +863,8 @@ def _thumbnail(cfg, ui, save_path, speech):
         # Between two spoken lines no caption is on screen: the cleanest frames.
         pauses = [(a_end + b_start) / 2 for (_a, a_end), (b_start, _b) in zip(speech, speech[1:])
                   if b_start - a_end > 0.12]
-        thumbnail.make(save_path, projects.default_title(cfg.get("script") or "", 60), thumb,
-                       pauses)
+        title = cfg.get("thumbnail_title") or projects.default_title(cfg.get("script") or "", 60)
+        thumbnail.make(save_path, title, thumb, pauses, at=thumbnail_moment(cfg, starts))
         ui.log(f"🖼️ Thumbnail saved to {os.path.basename(thumb)}")
     except Exception as exc:  # noqa: BLE001 - the video is saved either way
         ui.log(f"⚠️ Couldn't make the thumbnail ({exc}).")

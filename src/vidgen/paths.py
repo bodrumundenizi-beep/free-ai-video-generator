@@ -29,6 +29,7 @@ import uuid
 CSIDL_DOCUMENTS = 5
 CSIDL_VIDEOS = 14
 CSIDL_DESKTOP = 16
+CSIDL_MYPICTURES = 39
 
 
 class SaveError(Exception):
@@ -106,7 +107,7 @@ def _same(a: str, b: str) -> bool:
 
 
 def cannot_save_message(folder: str) -> str:
-    return f"Could not save the video to {folder}. Choose another folder in Settings."
+    return f"Could not save the video to {folder}. Choose another folder in Settings > Video & saving."
 
 
 def usable_output(path: str, candidates) -> tuple[str, bool]:

@@ -11,9 +11,10 @@ voiceover, and renders a 1080p or 720p MP4 in portrait or landscape.
 </p>
 
 ## Features
-- **Paste text, get a video:** The Home page is one box and one button. Paste an article, a tip or your notes and press **Make my video**.
+- **Paste text, get a video:** On Home, press **Make new video**, paste an article, a tip or your notes and press **Make video**.
 - **Storyboard:** See the video as a card per scene before it is made. Change a line, swap a clip, make another AI picture, reorder scenes, and hear any line read out.
-- **Projects:** Every video you make is kept on the Projects page. Open it again in the Storyboard, change it, make a copy in the other shape or voice, rename it, search. An unfinished Storyboard is kept as a draft.
+- **Dashboard:** How many videos you made and how long they run, a chart of the last 8 weeks, the voice and shape you use most, recent videos, storage, and what's set up.
+- **My videos:** Every video you make is kept on the My videos page. Open it again in the Storyboard, change it, make a copy in the other shape or voice, rename it, search. An unfinished Storyboard is kept as a draft.
 - **Tell it what to change:** Type "make it shorter" or "more exciting start" and the built-in AI rewrites the script; you see what changed before anything is rendered.
 - **Paste any text, get a script:** Paste plain text, say who the video is for and how long it should be, and a built-in open-source AI writes the script. It runs on your PC: no account, no key, nothing sent anywhere.
 - **Automated Stock Footage:** Automatically fetches relevant video clips from Pexels or Pixabay, and picks the one whose description fits the scene best.
@@ -67,28 +68,30 @@ You can confirm you have the real file by checking its hash against
 `SHA256SUMS.txt` on the release page:
 
 ```powershell
-Get-FileHash .\AIVideoStudio-4.7.1-setup.exe -Algorithm SHA256
+Get-FileHash .\AIVideoStudio-4.8.0-setup.exe -Algorithm SHA256
 ```
 
 ## The quick way
 
-1. On **Home**, paste your text into the box and press **Make my video**.
+1. On **Home**, press **Make new video**, paste your text into the **From text** box and press **Make video**.
 2. Check the three answers the app suggests (who it is for, how long, where it will be
    posted) and press **Write script**, then **Use this script**.
 3. The **Storyboard** opens: one card per scene, with its picture and its line. Change what
    you don't like, then press **Make video**.
 
-Tick **Make it straight away** on Home to skip step 3.
+Tick **Make it straight away** next to Make video to skip step 3.
 
 **Templates:** above the box, pick **Tech tip**, **Story**, **Top 5** or **Motivation**
 and the questions in step 2 come already answered (who it is for, how long, captions,
 cards, the music's mood). **Top 5** also writes the video as a countdown.
 
-**Make several:** paste one text or topic per block, with an empty line between them, and
+**Several at once** (on the Make new video page): paste one text or topic per block, with an empty line between them, and
 press **Start**. Each becomes its own script and video, one after another, and its own card
-on the Projects page. Up to 20 at a time.
+on the My videos page. Up to 20 at a time.
 
 ![Home](docs/home.png)
+
+![Dashboard](docs/dashboard.png)
 
 ## Storyboard
 
@@ -127,17 +130,17 @@ nothing is rendered until you press **Make video**. Scenes that did not change k
 clips and pictures.
 
 It changes the script only: not the voice, the captions or the music, which you set on the
-Script page. It needs the Smart writer download, and it is a small AI model: if it changes
+Storyboard. It needs the Smart writer download, and it is a small AI model: if it changes
 nothing, or the wrong thing, say it another way or edit the card yourself. Ctrl+Z on the
-Script page brings the old lines back.
+Script editor brings the old lines back.
 
-## Projects
+## My videos
 
 Every video you make is saved as a project: its script, its settings (shape, voice,
-captions, look, length, music) and its AI pictures. The **Projects** page shows them as
+captions, look, length, music) and its AI pictures. The **My videos** page shows them as
 cards, newest first, with a search box for titles and scripts.
 
-![Projects](docs/projects.png)
+![My videos](docs/projects.png)
 
 | On each card | What it does |
 |---|---|
@@ -154,14 +157,14 @@ Videos made with versions before 4.2 are not listed: their scripts were not save
 ## First run
 
 The very first time, a short four-screen tour shows how the app is used. It is not shown
-again after an update; **Feedback → Show the tour** brings it back.
+again after an update; **Settings → Help & about → Show the tour** brings it back.
 
 The app needs **one free stock footage key**, from either
 [Pixabay](https://pixabay.com/api/docs/) or [Pexels](https://www.pexels.com/api/).
 Neither is required: one of the two is enough. The first time you open the app,
 a **Welcome** window walks you through it: choose Pixabay or Pexels, open its
 page, copy your key, paste it in, and press **Test key** to check it works. You
-can reopen the window later from **Feedback → Setup guide**, or paste a key into
+can reopen the window later from **Settings → Help & about → Setup guide**, or paste a key into
 **Settings**.
 
 With both keys set, the app searches Pexels first and falls back to Pixabay when
@@ -179,8 +182,8 @@ Keys are stored in plain text in `%APPDATA%\AIVideoStudio\settings.json`.
 
 ## New from text
 
-You don't have to write the script format by hand. Paste your text on **Home**, or press
-**New from text** on the Script page:
+You don't have to write the script format by hand. Paste your text in **Make new video**, or press
+**New from text** on the Script editor (Settings → Advanced):
 
 **An idea works too.** Type a short request instead of a text, such as "write a scary story
 about being followed at night" or "make a video about black holes", and the Smart writer
@@ -306,12 +309,12 @@ turns this off.
 ### AI pictures (optional)
 
 Stock sites have no clip of a clipboard history window or a robot holding your
-product. The **AI images** tab can download an open-source image model
+product. The **AI pictures** tab in Settings can download an open-source image model
 ([Z-Image Turbo](https://huggingface.co/Tongyi-MAI/Z-Image-Turbo)) that draws those
 pictures on your own PC. Nothing is sent anywhere, and nothing is installed unless you
 press **Download** there.
 
-![The AI images tab](docs/aiimages.png)
+![The AI pictures tab](docs/aiimages.png)
 
 - **It needs a graphics card with about 8 GB of video memory.** A picture takes around
   20 seconds on an RTX 4060. If the graphics card can't make the picture, the app tries
@@ -333,7 +336,7 @@ press **Download** there.
 - If a picture can't be made (not enough free memory, for example), that scene uses stock
   footage instead and the Log says why.
 
-**Speed.** The **Speed** row in the AI images tab chooses the picture size: **Fast**
+**Speed.** The **Speed** row in the AI pictures tab chooses the picture size: **Fast**
 (384 x 672), **Balanced** (480 x 848) or **Best** (576 x 1024). Smaller pictures are made much
 faster and enlarged to the video's size once, carefully, before the slow zoom. On a PC without
 a graphics card the app starts on Fast, never goes above it on the processor, gives only the
@@ -349,7 +352,7 @@ You are responsible for what you ask it to draw and for how you use the pictures
 
 ### Drawn styles: Blackboard and Drawing
 
-**Style** (on Home next to the templates, and in Settings): **Blackboard** turns every scene
+**Style** (next to the templates in Make new video, and in the Storyboard's **This video** box): **Blackboard** turns every scene
 into white chalk lines on a dark board, like a teacher explaining; **Drawing** turns it into a
 simple drawing with flat colours and dark outlines. Each scene draws itself on screen in its
 first two seconds, then stays. The **Explainer** template uses Blackboard.
@@ -370,7 +373,7 @@ turns it off.
 
 ### Moving pictures (beta, graphics card only)
 
-In the **AI images** tab, **Make AI pictures move** downloads Wan 2.2 TI2V 5B (8.5 GB, Apache
+In the **AI pictures** tab in Settings, **Make AI pictures move** downloads Wan 2.2 TI2V 5B (8.5 GB, Apache
 2.0), and **Which pictures move** turns an AI picture into a short moving clip instead of a
 still with a slow zoom: the first AI scene of each video, or every AI scene. The picture is the
 clip's first frame, so the scene still shows what you saw in the Storyboard; the clip plays
@@ -403,7 +406,7 @@ uses the normal voice and the video is made anyway. Your recording stays on your
   <em>A tip video recorded by the app itself: hook, Win + I, search, the page, then back.</em>
 </p>
 
-**Script → Show it on my PC...**: type a Windows tip ("how to turn on night light") and press
+**Make new video → Windows tip**: type a Windows tip ("how to turn on night light") and press
 **Record**. The app finds the page itself while it records: Settings' search box (with a
 **Win + I** card), the taskbar's menu for Task Manager, or the Run box (**Win + R**) for
 Control Panel pages and tools. Don't touch the mouse while it does; if you do, it opens the
@@ -497,7 +500,7 @@ project. AI pictures are made again for the second shape.
 
 ### Voices
 
-Pick a voice on the **Script** page and press **▶ Preview Voice** to hear it
+Pick a voice on the **Storyboard** and press **▶ Preview Voice** to hear it
 before rendering. All voices are free — no account or key needed.
 
 The voices are spoken on your PC by [Kokoro](https://huggingface.co/hexgrad/Kokoro-82M),
@@ -530,8 +533,8 @@ versions take well under twice as long as one.
 
 ### Video length
 
-The Script page shows about how long your script will be, and updates as you
-type. It is an estimate: the voice paces every line a little differently.
+The Storyboard shows about how long your script will be next to **Length**, and updates as you
+change it. It is an estimate: the voice paces every line a little differently.
 
 Set **Length** to `15 s`, `30 s` or `60 s` to fit the video to that length. The
 app adjusts the pauses between scenes first. If that is not enough, it speeds
@@ -549,8 +552,7 @@ stops within a second or two and leaves no unfinished file behind.
 
 Captions are on by default: the words appear on screen as they are spoken, timed
 from the voice itself, so they stay in sync without any setup. Change how they
-look, or turn them off, in the **Captions** row on the Script page or under
-**Settings → Captions**. Scenes without a `Voice:`
+look, or turn them off, in the **Captions** row on the Storyboard. Scenes without a `Voice:`
 line have no captions.
 
 The `.srt` file saved next to the video can be uploaded to YouTube as real
@@ -565,6 +567,9 @@ description.
 ![Script](docs/create.png)
 
 ## Options
+
+Shape (aspect ratio), voice, length, captions and the AI picture look are set per video
+on the **Storyboard**; the rest are in **Settings**.
 
 | Setting | Choices |
 |---|---|
@@ -587,7 +592,7 @@ Output size follows both settings: 9:16 at 1080p is 1080×1920, 16:9 at 720p is
 | | |
 |---|---|
 | Settings | `%APPDATA%\AIVideoStudio\settings.json` |
-| Projects | `%APPDATA%\AIVideoStudio\projects`: script, settings, thumbnail and AI pictures of each video (about 1 MB a picture). The videos themselves stay where you saved them |
+| My videos | `%APPDATA%\AIVideoStudio\projects`: script, settings, thumbnail and AI pictures of each video (about 1 MB a picture). The videos themselves stay where you saved them |
 | Rendered video | Wherever you choose in the Save window; it opens in your Videos folder the first time. An existing video is only replaced if you confirm it |
 | Footage credits | `<video name>.credits.txt`, next to the video |
 | Subtitles | `<video name>.srt`, next to the video (when captions are on) |
@@ -613,7 +618,7 @@ Downloads or another folder works, or an administrator can allow the app under
 ## Reporting a problem
 
 When a render fails, the error window has a **Report this** button, and
-**Feedback → Report a problem** works at any time. Both open a report you can
+**Settings → Help & about → Report a problem** works at any time. Both open a report you can
 read and edit before anything happens: the app version, your Windows version,
 a few settings, the error, and the last lines of the log. API keys, your Windows
 user name and the spoken lines of your script are removed first.
@@ -659,7 +664,7 @@ You can use ChatGPT, Claude, or Gemini to automatically write scripts formatted 
 ### How to use:
 1. Replace `[INSERT TOPIC HERE]` with your video idea (e.g., *'3 hidden iPhone camera features'* or *'How to clear cache on Windows'*).
 2. Copy the AI's exact text output.
-3. Paste it directly into the **Script** page's box and click **Render Video**!
+3. Paste it directly into the **Script editor**'s box (Settings → Advanced) and click **Make video**!
 
 ## Run from source
 
@@ -690,7 +695,7 @@ python -m pytest
 python packaging/make_icon.py
 python packaging/fetch_llama.py
 pyinstaller --noconfirm --clean packaging/ai_video_studio.spec
-"%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe" /DMyAppVersion=4.7.1 packaging\installer.iss
+"%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe" /DMyAppVersion=4.8.0 packaging\installer.iss
 ```
 
 That is where Inno Setup goes when installed for one user; installed for everyone, it is

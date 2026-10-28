@@ -368,7 +368,7 @@ def test_remove_keeps_the_smart_writer(home, monkeypatch):
 
 
 def test_ready_explains_what_is_missing(home, monkeypatch):
-    assert "AI images tab" in imagegen.ready()[1]
+    assert "Settings > AI pictures" in imagegen.ready()[1]
     monkeypatch.setattr(imagegen, "installed", lambda: True)
     assert "Smart writer's file" in imagegen.ready()[1]
     monkeypatch.setattr(writer, "installed", lambda model=None: True)
@@ -383,7 +383,7 @@ def test_download_failure_speaks_of_ai_images(home, monkeypatch):
         raise writer.WriterError("The Smart writer could not be downloaded.")
 
     monkeypatch.setattr(writer, "download", failing)
-    with pytest.raises(ImageError, match="AI images could not be downloaded"):
+    with pytest.raises(ImageError, match="AI pictures could not be downloaded"):
         imagegen.download()
 
 

@@ -157,7 +157,7 @@ def _unpack() -> None:
             with archive.open(member) as source, open(os.path.join(target, name), "wb") as out:
                 shutil.copyfileobj(source, out)
     if not os.path.isfile(os.path.join(target, EXE)):
-        raise ImageError("The AI images download did not contain its program.")
+        raise ImageError("The AI pictures download did not contain its program.")
     with open(os.path.join(target, ".version"), "w", encoding="utf-8") as fh:
         fh.write(PROGRAM.sha256)
 
@@ -178,13 +178,13 @@ def download(progress=None, should_stop=None, session=None) -> None:
         try:
             writer.download(report, should_stop, session, model)
         except writer.WriterError as exc:
-            raise ImageError(str(exc).replace("The Smart writer", "AI images")) from exc
+            raise ImageError(str(exc).replace("The Smart writer", "AI pictures")) from exc
         before += model.size
     if program_path() is None:
         try:
             _unpack()
         except (OSError, zipfile.BadZipFile) as exc:
-            raise ImageError(f"AI images could not be unpacked: {exc}") from exc
+            raise ImageError(f"AI pictures could not be unpacked: {exc}") from exc
 
 
 def remove() -> None:
@@ -197,9 +197,9 @@ def remove() -> None:
 def ready(memory=writer.free_memory) -> tuple[bool, str]:
     """(whether a picture can be made now, and if not, why - in words for the user)."""
     if not installed():
-        return False, "AI images are not downloaded yet. Open the AI images tab to get them."
+        return False, "AI pictures are not downloaded yet. Open Settings > AI pictures to get them."
     if not writer.installed():
-        return False, ("AI images need the Smart writer's file, which is missing. "
+        return False, ("AI pictures need the Smart writer's file, which is missing. "
                        "Download it in Settings.")
     free = memory()
     if free is not None and free < SMALL_MEMORY:
@@ -461,7 +461,7 @@ def _run(args, log_path, should_stop, launch, began, timeout: float | None = Non
     try:
         process = launch(args, log_path)
     except OSError as exc:
-        raise ImageError(f"The AI images program could not start ({exc}).") from exc
+        raise ImageError(f"The AI pictures program could not start ({exc}).") from exc
     try:
         while process.poll() is None:
             if should_stop is not None and should_stop():
@@ -538,8 +538,8 @@ def make(prompt: str, size, out_path: str, look: str = DEFAULT_LOOK, seed: int |
     if ran:
         bad = verify(should_stop)
         if bad:
-            raise ImageError(f"An AI images file was damaged and has been removed "
-                             f"({', '.join(bad)}). Download it again in the AI images tab.",
+            raise ImageError(f"An AI pictures file was damaged and has been removed "
+                             f"({', '.join(bad)}). Download it again in Settings > AI pictures.",
                              failure.detail)
     raise failure
 

@@ -174,7 +174,7 @@ def make(picture: str, prompt: str, aspect: str, out_path: str, should_stop=None
     including too little memory; it is then never run again with the same settings."""
     say = log or (lambda _line: None)
     if not installed():
-        raise ImageError("Moving pictures are not downloaded. Open the AI images tab.")
+        raise ImageError("Moving pictures are not downloaded. Open Settings > AI pictures.")
     free = memory()
     fitted = fit(aspect, free, shared)
     graphics = "integrated graphics, shared memory" if shared else "graphics card"

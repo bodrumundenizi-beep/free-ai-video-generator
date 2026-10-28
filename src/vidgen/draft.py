@@ -148,7 +148,7 @@ def batch_texts(text: str) -> list[str]:
 
 @dataclass(frozen=True)
 class Template:
-    """A starting point on Home: the answers New from text would ask for, and the look."""
+    """A starting point in Make new video > From text: the answers New from text would ask for, and the look."""
     audience: Audience
     length: str
     cards: bool

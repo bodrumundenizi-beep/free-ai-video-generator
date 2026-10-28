@@ -9,7 +9,7 @@ This file is the interface - settings, pages, window effects. The engine
 ``vidgen`` package beside it.
 
   * Fluent-style shell: near-black sidebar, lighter content area, rounded cards.
-  * Pages: Home / Create / Log / Feedback / Settings.
+  * Pages: Home / My videos / Storyboard / Settings (tabs, incl. AI pictures, Help, Advanced).
   * Settings are persisted to a small JSON file, including the API keys, which
     are never in the source.
   * Mica / acrylic translucency + dark title bar on Windows 11.
@@ -31,6 +31,7 @@ from __future__ import annotations
 import collections
 import atexit
 import dataclasses
+import datetime
 import ctypes
 import itertools
 import json
@@ -141,7 +142,7 @@ from vidgen.render import (  # noqa: E402
     UiBridge, next_free_path, render_worker, sweep_old_work_dirs,
 )
 from vidgen.script import (  # noqa: E402
-    ScriptError, count_scenes, looks_like_plain_text, parse_script,
+    ScriptError, looks_like_plain_text, parse_script,
 )
 from vidgen import voices  # noqa: E402
 from vidgen.render import TEMP_ROOT  # noqa: E402
@@ -152,13 +153,13 @@ from vidgen import (  # noqa: E402
 from vidgen import board as boards  # noqa: E402
 from vidgen import (  # noqa: E402
     animate, drawn, drive, hooks, imagegen, localvoice, mastering, myvoice, putback, screen,
-    tiplist, tips, uiread, voicepack, winmap,
+    started, tiplist, tips, uiread, voicepack, winmap,
 )
 from vidgen.voice import generate_voiceover  # noqa: E402
 
 
 APP_NAME = "AI Video Studio"
-APP_VERSION = "4.7.1"
+APP_VERSION = "4.8.0"
 # Must match AppUserModelID in packaging/installer.iss, or a pinned taskbar
 # shortcut will not group with the running window.
 APP_MODEL_ID = "AIVideoStudio.Desktop.3"
@@ -190,6 +191,22 @@ SEARCH_CACHE_DIR = os.path.join(CACHE_ROOT, "search")
 # Stays on this PC. Only a report the user sends themselves ever quotes from it.
 LOG_DIR = os.path.join(SETTINGS_DIR, "logs")
 LOG_FILE = os.path.join(LOG_DIR, "app.log")
+# Page keys that are Settings tabs since 4.8: key -> (tab, Advanced view or None).
+SETTINGS_PAGES = {"images": "images", "feedback": "help", "create": "advanced"}
+BOARD_VIEWS = ("Setup", "Log")
+# The line at the top of each Settings tab: what it is for.
+TAB_INTROS = {
+    "footage": "A free Pexels or Pixabay key lets the app download stock video clips. "
+               "One is enough.",
+    "video": "Where videos are saved, their quality, and the cards before and after each video.",
+    "voice": "The voices that read your scripts, and the music and sounds under them.",
+    "writer": "The Smart writer turns your text into a script, on this PC.",
+    "images": "AI pictures for the scenes stock footage can't show, made on this PC.",
+    "app": "How the app looks, and how it stays up to date.",
+    "help": "The version, shortcuts, and a way to report a problem.",
+    "advanced": "The script behind the Storyboard as plain text, for editing by hand.",
+}
+SETTINGS_WIDTH = 900   # wide windows: rows stop here instead of stretching   # the Storyboard's tabs; a render shows the Log
 PADDING_OPTIONS = {"0s": 0.0, "0.25s": 0.25, "0.5s": 0.5, "1s": 1.0}
 DEFAULT_PADDING = 0.25
 
@@ -258,7 +275,7 @@ AUDIENCE_SETTINGS = (
 
 # Which scenes New from text gives an AI picture, once AI images are downloaded.
 AI_IMAGES_FOR = ("Scenes stock can't show", "Every scene", "Only ai: lines")
-# What each choice in the AI images tab means, shown under the row when it is picked.
+# What each choice in Settings > AI pictures means, shown under the row when it is picked.
 AI_FOR_HINTS = {
     AI_IMAGES_FOR[0]: "Most scenes keep their stock clips. A scene gets an AI picture only when "
                       "it is about something on a screen (an app, a menu, a setting), which no "
@@ -319,6 +336,7 @@ def default_settings() -> dict:
         "ask_save": True,
         "welcome_seen": False,
         "tour_seen": False,
+        "started": {},             # Home's Get started list (vidgen.started)
         "whats_new_seen": "",      # the last version whose What's new was shown
         "whats_new_off": False,    # "Don't show again" was ticked
         "check_updates": True,
@@ -364,6 +382,9 @@ def default_settings() -> dict:
         "caption_position": captions.DEFAULT_POSITION,
         "theme": "dark",
         "translucent": True,
+        "window": "zoomed",        # maximized, or the size it was closed at ("1180x780")
+        "features_hidden": False,  # Home's "What this app can do" folded to one line
+        "version_since": {},       # {"version", "at"}: when this version first started
         "script": DEFAULT_SCRIPT,
     }
 
@@ -399,6 +420,12 @@ def load_settings() -> dict:
     data["ask_save"] = bool(data["ask_save"])
     data["welcome_seen"] = bool(data["welcome_seen"])
     data["tour_seen"] = bool(data["tour_seen"])
+    data["started"] = started.state(data["started"])
+    if not re.fullmatch(r"zoomed|\d{3,5}x\d{3,5}", str(data["window"])):
+        data["window"] = "zoomed"
+    data["features_hidden"] = bool(data["features_hidden"])
+    if not isinstance(data["version_since"], dict):
+        data["version_since"] = {}
     data["check_updates"] = bool(data["check_updates"])
     data["versions"] = 2 if str(data["versions"]) == "2" else 1
     if data["target_length"] not in pacing.TARGETS:
@@ -595,8 +622,8 @@ CARD_HOVER = ("#F4F4F4", "#353535")
 NAV_SELECTED = ("#E4E4E4", "#2D2D2D")
 NAV_HOVER = ("#EAEAEA", "#292929")
 TEXT = ("#1A1A1A", "#FFFFFF")
-TEXT_MUTED = ("#5E5E5E", "#9D9D9D")
-TEXT_DIM = ("#767676", "#7A7A7A")
+TEXT_MUTED = ("#5A5A5A", "#B4B4B4")
+TEXT_DIM = ("#6B6B6B", "#A3A3A3")   # 4.7:1 or more
 ACCENT = ("#005FB8", "#60CDFF")
 ACCENT_HOVER = ("#00509E", "#7FD7FF")
 ACCENT_TEXT = ("#FFFFFF", "#0B0B0B")
@@ -637,6 +664,8 @@ SCROLLBAR_THUMB = ("#D2D2D2", "#3F3F3F")
 SCROLLBAR_THUMB_HOVER = ("#BDBDBD", "#4E4E4E")
 
 PAD = 8          # gap between cards
+WIDE = 1400      # window width (at 100% scaling) from which the side panels show
+SIDE = 380       # their width
 EDGE = 18        # page margin
 SIDEBAR_WIDTH = 175
 SIDEBAR_COLLAPSED = 48
@@ -674,6 +703,9 @@ GLYPHS = {
     "position": ("\ue8cb", "\u2195"),
     "projects": ("\ue8f1", "▦"),
     "eye": ("", "◉"),
+    "add": ("\ue710", "+"),
+    "edit": ("\ue70f", "\u270e"),
+    "chart": ("\ue9d2", "\u25a5"),
 }
 
 
@@ -1001,65 +1033,6 @@ class InfoRow(Card):
         self.value_label.configure(text=value, text_color=color or TEXT_MUTED)
 
 
-class ActionRow(Card):
-    """Info row with a round accent button on the right (the 'flame' card)."""
-
-    def __init__(self, master, app, glyph, label, value, button_glyph, command):
-        super().__init__(master, height=56)
-        self.grid_propagate(False)
-        self.grid_columnconfigure(2, weight=1)
-        self.grid_rowconfigure(0, weight=1)
-
-        ctk.CTkLabel(self, text=glyph, font=app.font_icon, text_color=TEXT_MUTED,
-                     width=20).grid(row=0, column=0, padx=(16, 12))
-        ctk.CTkLabel(self, text=label, font=app.font_body, text_color=TEXT,
-                     anchor="w", width=104).grid(row=0, column=1, sticky="w")
-        self.value_label = ctk.CTkLabel(self, text=value, font=app.font_body,
-                                        text_color=TEXT_MUTED, anchor="w")
-        self.value_label.grid(row=0, column=2, sticky="w", padx=(8, 8))
-
-        self.button = ctk.CTkButton(
-            self, text=button_glyph, font=app.font_icon, width=34, height=28,
-            corner_radius=4, fg_color=FIELD_BG, hover_color=CARD_HOVER,
-            border_width=1, border_color=FIELD_BORDER,
-            text_color=ACCENT, command=command,
-        )
-        self.button.grid(row=0, column=3, padx=(0, 12))
-
-    def set_value(self, value, color=None):
-        self.value_label.configure(text=value, text_color=color or TEXT_MUTED)
-
-
-class Tile(Card):
-    """Square-ish card: icon top-left, label bottom-left, value bottom-right."""
-
-    def __init__(self, master, app, glyph, label, value="", corner=""):
-        super().__init__(master, height=112)
-        self.grid_propagate(False)
-        self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(1, weight=1)
-
-        ctk.CTkLabel(self, text=glyph, font=app.font_icon_lg,
-                     text_color=TEXT_MUTED).grid(row=0, column=0, sticky="w",
-                                                 padx=(16, 0), pady=(14, 0))
-        self.corner_label = ctk.CTkLabel(self, text=corner, font=app.font_tiny,
-                                         text_color=TEXT_DIM)
-        self.corner_label.grid(row=0, column=1, sticky="e", padx=(0, 16), pady=(14, 0))
-
-        ctk.CTkLabel(self, text=label, font=app.font_body, text_color=TEXT,
-                     anchor="w").grid(row=2, column=0, sticky="w",
-                                      padx=(16, 0), pady=(0, 14))
-        self.value_label = ctk.CTkLabel(self, text=value, font=app.font_value,
-                                        text_color=TEXT, anchor="e")
-        self.value_label.grid(row=2, column=1, sticky="e", padx=(0, 16), pady=(0, 14))
-
-    def set_value(self, value, color=None):
-        self.value_label.configure(text=value, text_color=color or TEXT)
-
-    def set_corner(self, text):
-        self.corner_label.configure(text=text)
-
-
 class SettingRow(Card):
     """Windows-11-Settings style row: icon, title/subtitle, control on the right."""
 
@@ -1288,7 +1261,7 @@ class WelcomeDialog(ctk.CTkToplevel):
         self.app.welcome_seen = True
         # Saves the settings through the variable's trace.
         getattr(self.app, KEY_PROVIDERS[name]["setting"]).set(key)
-        self.app.select_page("create")
+        self.app.select_page("home")
         self.destroy()
 
     def skip(self):
@@ -1299,8 +1272,9 @@ class WelcomeDialog(ctk.CTkToplevel):
 
 TOUR = (
     ("home", "Paste your text",
-     "Put any text in the box on Home: an article, a tip, your notes. Press Make my video and "
-     "the app writes the script, finds the pictures, reads it out and adds captions."),
+     "On Home, press Make new video and put any text in the box: an article, a tip, your notes. "
+     "Press Make video and the app writes the script, finds the pictures, reads it out and adds "
+     "captions."),
     ("scenes", "Look before it is made",
      "The Storyboard shows every scene with its picture and its line. Change a line, swap a "
      "clip, or move scenes around. When it looks right, press Make video."),
@@ -1316,12 +1290,12 @@ TOUR = (
 # Shown once after updating to this version (WhatsNewDialog). Short: the release notes have
 # the whole story.
 WHATS_NEW = (
-    "Show it on my PC works on school and work PCs: when Documents is protected, recordings "
-    "are kept in another folder instead of failing.",
-    "Recording works on more laptops: the recorded area stays on the screen, and if Windows "
-    "refuses the usual way, the app records with Windows' Desktop Duplication instead.",
-    "Before anything opens, the app checks that it can record, says what each step is doing, "
-    "and if a tip can't record, shows why in front, with a Report this button.",
+    "A simpler app: Home has Make new video and Edit a video, tip ideas and a Get started list; "
+    "the new Dashboard shows your numbers, and Settings is split into tabs.",
+    "Everything about a video is in one place on the Storyboard, with a preview of the "
+    "selected scene, a live caption sample, and a thumbnail you can pick before making it.",
+    "The app opens maximized and uses the room: side panels on wide screens, the simple "
+    "layout on small laptops. Capitals like RAM and NASA are read as words.",
 )
 
 
@@ -1469,7 +1443,7 @@ class TipDialog(ctk.CTkToplevel):
     already on is left on.
     """
 
-    def __init__(self, app):
+    def __init__(self, app, ask=""):
         super().__init__(app)
         self.app = app
         self.title(f"Show it on my PC · {BUILD}")   # which copy is being tested
@@ -1491,6 +1465,8 @@ class TipDialog(ctk.CTkToplevel):
                      ).pack(anchor="w", padx=18, pady=(12, 2))
         self.ask = ctk.CTkEntry(card, width=440, font=app.font_body)
         self.ask.pack(anchor="w", padx=18)
+        if ask:   # a tip idea from Home
+            self.ask.insert(0, ask)
         self.ask.bind("<Return>", lambda _e: self.record())
         # A changed tip needs a new plan; Record then plans it by itself.
         self.ask.bind("<KeyRelease>", lambda e: e.keysym != "Return" and self._forget_plan())
@@ -2334,6 +2310,7 @@ class TipSession:
         self.app.script_box.delete("1.0", "end")
         self.app.script_box.insert("1.0", text)
         self.app._commit_script()
+        self.app._tip_pending = True
         self.app.append_log("🎬 The recording is in the Storyboard: check it, then Make video.")
         self.app.select_page("board")
 
@@ -2384,7 +2361,7 @@ class TourDialog(ctk.CTkToplevel):
     """First run only: four short screens on how the app is used.
 
     Never shown after an update (load_settings marks it seen when a settings
-    file already exists). Feedback > Show the tour brings it back.
+    file already exists). Settings > Help & about > Show the tour brings it back.
     """
 
     def __init__(self, app):
@@ -2828,6 +2805,54 @@ class TranslateDialog(ctk.CTkToplevel):
             app.board_status.configure(
                 text=f"Translated into {language} by the Smart writer. Read the lines and fix "
                      "any mistakes, then press Make video.", text_color=WARN_COLOR)
+
+
+class ThumbDialog(ctk.CTkToplevel):
+    """Edit thumbnail: which scene's picture, and the words on it. 4.9 brings a real editor."""
+
+    def __init__(self, app):
+        super().__init__(app)
+        self.app = app
+        self.title("Edit thumbnail")
+        self.resizable(False, False)
+        self.configure(fg_color=MAIN_BG)
+        self.transient(app)
+        card = Card(self)
+        card.pack(fill="both", expand=True, padx=14, pady=14)
+        ctk.CTkLabel(card, text="Edit thumbnail", font=app.font_title,
+                     text_color=TEXT).pack(anchor="w", padx=18, pady=(16, 8))
+        found = app._thumb_scenes()
+        if not found:
+            ctk.CTkLabel(card, text="The scenes have no pictures yet. Wait for them to load, or "
+                                    "make the AI pictures first.", font=app.font_body,
+                         text_color=TEXT_MUTED, wraplength=360, justify="left").pack(
+                anchor="w", padx=18, pady=(0, 16))
+            return
+        self.names = {f"Scene {i + 1}": i for i in found}
+        now = app._thumb_scene()
+        self.var_scene = tk.StringVar(value=f"Scene {now + 1}")
+        ctk.CTkLabel(card, text="Picture from", font=app.font_body,
+                     text_color=TEXT).pack(anchor="w", padx=18)
+        app._menu(card, list(self.names), self.var_scene, 200).pack(anchor="w", padx=18,
+                                                                     pady=(4, 10))
+        ctk.CTkLabel(card, text="Words on it", font=app.font_body,
+                     text_color=TEXT).pack(anchor="w", padx=18)
+        self.entry = focus_accent(ctk.CTkEntry(card, width=360, height=32, corner_radius=4,
+                                               font=app.font_body, fg_color=FIELD_BG,
+                                               border_color=FIELD_BORDER, text_color=TEXT))
+        self.entry.insert(0, app.thumb_title())
+        self.entry.pack(anchor="w", padx=18, pady=(4, 14))
+        ctk.CTkButton(card, text="Save", width=110, height=34, corner_radius=4,
+                      font=app.font_bold, fg_color=ACCENT, hover_color=ACCENT_HOVER,
+                      text_color=ACCENT_TEXT, command=self.save).pack(anchor="e", padx=18,
+                                                                      pady=(0, 16))
+        self.after(50, self.grab_set)
+
+    def save(self):
+        self.app.thumb = {"scene": self.names.get(self.var_scene.get()),
+                          "title": self.entry.get().strip()}
+        self.app._refresh_thumb()
+        self.destroy()
 
 
 class CopyDialog(ctk.CTkToplevel):
@@ -3853,14 +3878,15 @@ class App(ctk.CTk):
             except Exception:
                 pass
         self.geometry("1180x780")
-        self.minsize(980, 640)
+        # Fits a 1366x768 laptop at 125% (1093x614 left for the window).
+        self.minsize(900, 560)
+        self.wide = None   # extra panels on (WIDE or more), set by _on_resize
         self.configure(fg_color=MAIN_BG)
 
         self._queue: queue.Queue = queue.Queue()
         self.ui = UiBridge(self._queue)
         self.is_rendering = False
         self._previewing = False
-        self.last_render = "Never"
         self.sidebar_collapsed = False
         self.effect_note = ""
         self._refresh_job = None
@@ -3876,6 +3902,9 @@ class App(ctk.CTk):
         self.board_marked = set()  # scenes the last "Change it" rewrote
         self.board_history, self.board_future = [], []   # Storyboard Undo / Redo
         self.board_cards, self.board_images = [], {}
+        self.board_paths = {}      # scene index -> the picture its card shows (for the panel)
+        self.thumb = {"scene": None, "title": ""}   # the thumbnail: which scene, which words
+        self._thumb_job, self._thumb_image, self._timeline_pictures = None, None, {}
         self.board_gen = 0         # goes up on every rebuild; late worker news is dropped
         self._revising = False
         self.source_text = ""      # the text the script in the editor was written from
@@ -3897,10 +3926,69 @@ class App(ctk.CTk):
         self._build_shell()
         self._build_pages()
         self.select_page("home")
+        self._set_wide(False)
+        self.bind("<Configure>", self._on_resize, add="+")
+        self._restore_window(self.settings["window"])
 
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self.after(120, self._post_init)
         self.after(60, self._drain_queue)
+
+    # -- window size: maximized by default, extra panels when wide -----------
+    def _restore_window(self, saved):
+        if saved == "zoomed":
+            self.after(0, lambda: self.state("zoomed"))
+        else:
+            self.geometry(saved)
+
+    def _window_now(self) -> str:
+        """"zoomed", or the window's size in the units geometry() takes."""
+        try:
+            if self.state() == "zoomed":
+                return "zoomed"
+            scale = ctk.ScalingTracker.get_window_scaling(self)
+            return f"{round(self.winfo_width() / scale)}x{round(self.winfo_height() / scale)}"
+        except tk.TclError:
+            return self.settings.get("window", "zoomed")
+
+    def _on_resize(self, event):
+        if event.widget is not self:
+            return
+        size = (event.width, event.height)
+        if size == getattr(self, "_last_size", None):
+            return
+        first = getattr(self, "_last_size", None) is None
+        self._last_size = size
+        if first or self.current_page is None:
+            return
+        # customtkinter redraws every rounded widget on each step of a drag (CTk issue #2617):
+        # the pages are taken off screen behind a plain panel until the drag stops.
+        if getattr(self, "_resize_job", None):
+            self.after_cancel(self._resize_job)
+        elif self.content.winfo_manager():
+            self.content.grid_remove()
+            self._resize_cover.configure(bg=theme_color(MAIN_BG))
+            self._resize_cover.grid(row=1, column=1, sticky="nsew")
+        self._resize_job = self.after(150, self._resized)
+
+    def _resized(self):
+        self._resize_job = None
+        self._resize_cover.grid_remove()
+        self.content.grid()
+        scale = ctk.ScalingTracker.get_window_scaling(self)
+        self._set_wide(self.winfo_width() / scale >= WIDE)
+
+    def _set_wide(self, wide):
+        """Lay the pages out for a wide window (side panels) or a narrow one (one column)."""
+        if wide == self.wide:
+            return
+        self.wide = wide
+        self._layout_board()
+        self._layout_settings()
+        if self.current_page == "home":
+            self._fill_home()
+        if self.current_page == "projects":
+            self.refresh_projects()
 
     # -- fonts & icons -------------------------------------------------------
     def _build_fonts(self):
@@ -3944,6 +4032,11 @@ class App(ctk.CTk):
         self.var_ask_save = tk.BooleanVar(value=s["ask_save"])
         self.welcome_seen = s["welcome_seen"]
         self.tour_seen = s["tour_seen"]
+        self.started = s["started"]
+        self.features_hidden = s["features_hidden"]
+        self.version_since = s["version_since"]
+        self._tip_pending = False   # the next render is a Show it on my PC video
+        self._render_info = None    # {"at", "ai", "tip"} of the render running now
         self.var_check_updates = tk.BooleanVar(value=s["check_updates"])
         self.var_versions = tk.StringVar(value=str(s["versions"]))
         self.var_target = tk.StringVar(value=s["target_length"])
@@ -4011,6 +4104,7 @@ class App(ctk.CTk):
             "ask_save": bool(self.var_ask_save.get()),
             "welcome_seen": self.welcome_seen,
             "tour_seen": self.tour_seen,
+            "started": self.started,
             "check_updates": bool(self.var_check_updates.get()),
             "versions": 2 if self.var_versions.get() == "2" else 1,
             "target_length": self.var_target.get(),
@@ -4051,6 +4145,9 @@ class App(ctk.CTk):
             **{key: var.get() for key, var in self.caption_vars.items()},
             "theme": self.var_theme.get(),
             "translucent": bool(self.var_translucent.get()),
+            "window": self._window_now(),
+            "features_hidden": self.features_hidden,
+            "version_since": self.version_since,
             "script": self.script_box.get("1.0", "end").strip()
             if hasattr(self, "script_box") else self.settings["script"],
         }
@@ -4083,11 +4180,9 @@ class App(ctk.CTk):
         self.nav_items = {}
         for key, glyph, label in (
             ("home", "home", "Home"),
-            ("projects", "projects", "Projects"),
+            ("dashboard", "chart", "Dashboard"),
+            ("projects", "projects", "My videos"),
             ("board", "scenes", "Storyboard"),
-            ("create", "create", "Script"),
-            ("images", "images", "AI images"),
-            ("log", "log", "Log"),
         ):
             item = NavItem(self.sidebar, self, key, self.icon(glyph), label,
                            self.select_page)
@@ -4095,11 +4190,10 @@ class App(ctk.CTk):
             self.nav_items[key] = item
 
         bottom = ctk.CTkFrame(self.sidebar, fg_color="transparent",
-                              width=SIDEBAR_WIDTH, height=84)
+                              width=SIDEBAR_WIDTH, height=46)
         bottom.pack(side="bottom", fill="x", pady=(0, 10))
         bottom.pack_propagate(False)
         for key, glyph, label in (
-            ("feedback", "feedback", "Feedback"),
             ("settings", "settings", "Settings"),
         ):
             item = NavItem(bottom, self, key, self.icon(glyph), label,
@@ -4139,6 +4233,8 @@ class App(ctk.CTk):
 
         self.content = ctk.CTkFrame(self, fg_color="transparent")
         self.content.grid(row=1, column=1, sticky="nsew")
+        # Stands in for the pages while the window is dragged bigger or smaller (_on_resize).
+        self._resize_cover = tk.Frame(self, bg=theme_color(MAIN_BG), highlightthickness=0, bd=0)
         self.content.grid_rowconfigure(0, weight=1)
         self.content.grid_columnconfigure(0, weight=1)
 
@@ -4154,21 +4250,39 @@ class App(ctk.CTk):
         self.update_idletasks()
 
     def select_page(self, key: str):
+        if key in SETTINGS_PAGES:   # moved into Settings in 4.8; the old keys still work
+            self.open_settings(SETTINGS_PAGES[key])
+            return
+        if key in ("board", "log"):   # the Log is the Storyboard's second tab
+            self.var_board_view.set("Log" if key == "log" else "Setup")
+            key = "board"
         if self.current_page == "board" and key != "board":
             self.save_project()   # a Storyboard left without a video is kept as a draft
         if key != self.current_page:
             self._show_page(key)
 
+        self._show_board_nav()
         for name, item in self.nav_items.items():
-            item.set_selected(name == key)
+            item.set_selected(name == ("home" if key == "new" else key))
         if key == "home":
             self.refresh_home()
         elif key == "board":
             self.refresh_board()
         elif key == "projects":
             self.refresh_projects()
+        elif key == "dashboard":
+            self.refresh_dashboard()
         elif key == "settings":
             self._refresh_tracks()
+
+    def _show_board_nav(self):
+        """Storyboard is in the sidebar while there is a video (a script) or it is open."""
+        item = self.nav_items["board"]
+        if self.script_box.get("1.0", "end").strip() or self.current_page == "board":
+            if not item.winfo_manager():
+                item.pack(fill="x", padx=6, pady=1, after=self.nav_items["projects"])
+        else:
+            item.pack_forget()
 
     def _show_page(self, key):
         if self._page_anim:
@@ -4218,9 +4332,9 @@ class App(ctk.CTk):
         self._page_anim = Animation(self, ANIM_PAGE, step, done)
 
     # -- page scaffolding ----------------------------------------------------
-    def _scroll_page(self):
+    def _scroll_page(self, parent=None):
         return ctk.CTkScrollableFrame(
-            self.content, fg_color="transparent",
+            parent or self.content, fg_color="transparent",
             scrollbar_fg_color=SCROLLBAR_BG,
             scrollbar_button_color=SCROLLBAR_THUMB,
             scrollbar_button_hover_color=SCROLLBAR_THUMB_HOVER,
@@ -4236,25 +4350,47 @@ class App(ctk.CTk):
     def _build_pages(self):
         self.pages = {
             "home": self._build_home(),
+            "new": self._build_new(),
+            "dashboard": self._build_dashboard(),
             "projects": self._build_projects(),
             "board": self._build_board(),
-            "create": self._build_create(),
-            "images": self._build_images(),
-            "log": self._build_log(),
-            "feedback": self._build_feedback(),
             "settings": self._build_settings(),
         }
 
     # ---------------------------------------------------------------- HOME --
     def _build_home(self):
+        """Two doors (make a new video, edit one) above the dashboard (_fill_home)."""
         page = self._scroll_page()
-        page.grid_columnconfigure((0, 1, 2, 3), weight=1, uniform="cards")
+        page.grid_columnconfigure((0, 1), weight=1, uniform="doors")
+        hello = ctk.CTkFrame(page, fg_color="transparent")
+        hello.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(4, 12))
+        self.home_hello = ctk.CTkLabel(hello, text="", font=ctk.CTkFont(
+            family=self.ui_family, size=24, weight="bold"), text_color=TEXT, anchor="w")
+        self.home_hello.pack(anchor="w", padx=2)
+        self.home_status = ctk.CTkLabel(hello, text="", font=self.font_body,
+                                        text_color=TEXT_MUTED, anchor="w")
+        self.home_status.pack(anchor="w", padx=2)
+        self._door(page, self.icon("add"), "Make new video", "From text, a Windows tip, or several at once",
+                   lambda: self.select_page("new"), True).grid(
+            row=1, column=0, sticky="nsew", padx=(0, PAD // 2), pady=(0, PAD))
+        self._door(page, self.icon("edit"), "Edit a video", "Open one of your videos in the Storyboard",
+                   lambda: self.select_page("projects"), False).grid(
+            row=1, column=1, sticky="nsew", padx=(PAD // 2, 0), pady=(0, PAD))
+        self.home_body = ctk.CTkFrame(page, fg_color="transparent")
+        self.home_body.grid(row=2, column=0, columnspan=2, sticky="ew")
+        self.home_body.grid_columnconfigure(0, weight=1)
+        return page
 
-        # The front door: most people arrive with text, not with a script (issues #2, #3).
+    def _build_new(self):
+        """Make new video: from text (the big one), a Windows tip, or several at once."""
+        page = self._scroll_page()
+        page.grid_columnconfigure((0, 1), weight=1, uniform="doors")
+        self._caption(page, "Make new video", 0, pady=(0, 6))
+        # From text: most people arrive with text, not with a script (issues #2, #3).
         door = Card(page)
-        door.grid(row=0, column=0, columnspan=4, sticky="ew", pady=(0, PAD))
+        door.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, PAD))
         door.grid_columnconfigure(0, weight=1)
-        ctk.CTkLabel(door, text="Paste your text or describe your video", font=self.font_title,
+        ctk.CTkLabel(door, text="From text: paste it or describe your video", font=self.font_title,
                      text_color=TEXT, anchor="w").grid(row=0, column=0, columnspan=3, sticky="w",
                                                        padx=16, pady=(14, 2))
         ctk.CTkLabel(door, text="An article, a tip, a story, notes. The app writes the script, "
@@ -4279,78 +4415,53 @@ class App(ctk.CTk):
             button_color=FIELD_BG, button_hover_color=CARD_HOVER, text_color=TEXT,
             dropdown_fg_color=CARD_BG, dropdown_text_color=TEXT, dropdown_hover_color=CARD_HOVER,
             dropdown_font=self.font_body, dynamic_resizing=False).pack(side="left")
-        ctk.CTkButton(template_bar, text="Make several...", width=120, height=30,
-                      corner_radius=4, font=self.font_body, fg_color=FIELD_BG,
-                      hover_color=CARD_HOVER, border_width=1, border_color=FIELD_BORDER,
-                      text_color=TEXT, command=lambda: BatchDialog(self),
-                      ).pack(side="left", padx=(12, 0))
-        ctk.CTkButton(template_bar, text="Show it on my PC...", width=150, height=30,
-                      corner_radius=4, font=self.font_body, fg_color=FIELD_BG,
-                      hover_color=CARD_HOVER, border_width=1, border_color=FIELD_BORDER,
-                      text_color=TEXT, command=lambda: TipDialog(self),
-                      ).pack(side="left", padx=(8, 0))
         self.door_box.grid(row=3, column=0, columnspan=3, sticky="ew", padx=14, pady=(8, 8))
         self.door_status = ctk.CTkLabel(door, text="", font=self.font_tiny, text_color=TEXT_DIM,
                                         anchor="w")
-        self._look_bar(door).grid(row=4, column=0, columnspan=3, sticky="w", padx=16,
-                                  pady=(0, 10))
         self.door_status.grid(row=5, column=0, sticky="w", padx=16, pady=(0, 14))
         self.var_straight = tk.BooleanVar(value=False)
         ctk.CTkCheckBox(door, text="Make it straight away", variable=self.var_straight,
                         font=self.font_body, text_color=TEXT_MUTED, checkbox_width=18,
                         checkbox_height=18, border_width=1,
                         ).grid(row=5, column=1, sticky="e", padx=(0, 14), pady=(0, 14))
-        ctk.CTkButton(door, text=f"{self.icon('play')}   Make my video", width=170, height=36,
+        ctk.CTkButton(door, text=f"{self.icon('play')}   Make video", width=170, height=36,
                       corner_radius=4, font=self.font_bold, fg_color=ACCENT,
                       hover_color=ACCENT_HOVER, text_color=ACCENT_TEXT,
                       command=self.make_from_text).grid(row=5, column=2, sticky="e",
                                                         padx=(0, 14), pady=(0, 14))
 
-        self.row_aspect = InfoRow(page, self, self.icon("aspect"), "Aspect Ratio")
-        self.row_aspect.grid(row=1, column=0, columnspan=2, sticky="ew",
-                             padx=(0, PAD // 2), pady=PAD // 2)
-
-        self.row_resolution = InfoRow(page, self, self.icon("resolution"), "Resolution")
-        self.row_resolution.grid(row=1, column=2, columnspan=2, sticky="ew",
-                                 padx=(PAD // 2, 0), pady=PAD // 2)
-
-        self.row_voice = InfoRow(page, self, self.icon("voice"), "Voice")
-        self.row_voice.grid(row=2, column=0, columnspan=2, sticky="ew",
-                            padx=(0, PAD // 2), pady=PAD // 2)
-
-        self.row_bitrate = InfoRow(page, self, self.icon("bitrate"), "Bitrate")
-        self.row_bitrate.grid(row=2, column=2, columnspan=2, sticky="ew",
-                              padx=(PAD // 2, 0), pady=PAD // 2)
-
-        self.row_output = InfoRow(page, self, self.icon("folder"), "Output path")
-        self.row_output.grid(row=3, column=0, columnspan=2, sticky="ew",
-                             padx=(0, PAD // 2), pady=PAD // 2)
-
-        self.row_render = ActionRow(page, self, self.icon("play"), "Render",
-                                    "Idle", self.icon("play"), self.start_render)
-        self.row_render.grid(row=3, column=2, columnspan=2, sticky="ew",
-                             padx=(PAD // 2, 0), pady=PAD // 2)
-
-        self.tile_scenes = Tile(page, self, self.icon("scenes"), "Scenes", "0")
-        self.tile_scenes.grid(row=4, column=0, sticky="ew",
-                              padx=(0, PAD // 2), pady=(PAD, PAD // 2))
-
-        self.tile_last = Tile(page, self, self.icon("status"), "Last render", "Never")
-        self.tile_last.grid(row=4, column=1, sticky="ew",
-                            padx=PAD // 2, pady=(PAD, PAD // 2))
-
-        self.tile_size = Tile(page, self, self.icon("resolution"), "Video",
-                              "1080x1920", corner="1080p")
-        self.tile_size.grid(row=4, column=2, sticky="ew",
-                            padx=PAD // 2, pady=(PAD, PAD // 2))
-
-        self.tile_key = Tile(page, self, self.icon("key"), "Footage key", "Missing")
-        self.tile_key.grid(row=4, column=3, sticky="ew",
-                           padx=(PAD // 2, 0), pady=(PAD, PAD // 2))
+        self._door(page, self.icon("play"), "Windows tip", "Show it on my PC: the app opens the setting, "
+                   "records it and explains each step", lambda: TipDialog(self), False).grid(
+            row=2, column=0, sticky="nsew", padx=(0, PAD // 2))
+        self._door(page, self.icon("scenes"), "Several at once", "Paste several texts and make a video of each, "
+                   "one after another", lambda: BatchDialog(self), False).grid(
+            row=2, column=1, sticky="nsew", padx=(PAD // 2, 0))
         return page
 
+    def _door(self, parent, glyph, title, line, command, accent):
+        """A big clickable card: a glyph, a title and one line under it."""
+        fg, hover = (ACCENT, ACCENT_HOVER) if accent else (CARD_BG, CARD_HOVER)
+        text, dim = (ACCENT_TEXT, ACCENT_TEXT) if accent else (TEXT, TEXT_MUTED)
+        card = ctk.CTkFrame(parent, fg_color=fg, corner_radius=8, height=104)
+        card.grid_propagate(False)
+        card.grid_columnconfigure(1, weight=1)
+        card.grid_rowconfigure((0, 1), weight=1)
+        parts = (ctk.CTkLabel(card, text=glyph, font=self.font_icon_lg, text_color=text, width=36),
+                 ctk.CTkLabel(card, text=title, font=self.font_title, text_color=text, anchor="sw"),
+                 ctk.CTkLabel(card, text=line, font=self.font_body, text_color=dim, anchor="nw",
+                              justify="left", wraplength=420))
+        parts[0].grid(row=0, column=0, rowspan=2, padx=(20, 12))
+        parts[1].grid(row=0, column=1, sticky="sw", padx=(0, 16))
+        parts[2].grid(row=1, column=1, sticky="nw", padx=(0, 16))
+        for widget in (card, *parts):
+            widget.bind("<Button-1>", lambda _e: command())
+            widget.bind("<Enter>", lambda _e: card.configure(fg_color=hover))
+            widget.bind("<Leave>", lambda _e: card.configure(fg_color=fg))
+            widget.configure(cursor="hand2")
+        return card
+
     def make_from_text(self):
-        """The front door's button: write a script from the pasted text, then show it."""
+        """From text's Make video: write a script from the pasted text, then show it."""
         text = self.door_box.get("1.0", "end").strip()
         if self.is_rendering:
             return
@@ -4380,41 +4491,471 @@ class App(ctk.CTk):
                                        f"The {name} template. Change any answer if you like."))
 
     def refresh_home(self):
-        if not hasattr(self, "row_aspect"):
-            return
-        aspect = self.var_aspect.get()
-        quality = self.var_resolution.get()
-        w, h, _orientation, bitrate = resolve_target(aspect, quality)
-
-        label = "9:16 (Shorts / TikTok)" if aspect == "9:16" else "16:9 (Landscape)"
-        self.row_aspect.set_value(label)
-        self.row_resolution.set_value(f"{w}x{h}  ·  {quality}")
-        self.row_voice.set_value(voices.persona(self.var_voice.get()).short)
-        self.row_bitrate.set_value(bitrate)
-        self.row_output.set_value(ellipsize(self.var_output.get() or "Not set"))
-        self.row_render.set_value("Rendering..." if self.is_rendering else "Idle")
-
-        scenes = count_scenes(
-            self.script_box.get("1.0", "end") if hasattr(self, "script_box") else ""
-        )
-        if scenes is None:
-            self.tile_scenes.set_value("!", ERR_COLOR)
-        else:
-            self.tile_scenes.set_value(str(scenes))
-
-        color = None
-        if self.last_render.startswith("Success"):
-            color = OK_COLOR
-        elif self.last_render.startswith("Failed"):
-            color = ERR_COLOR
-        self.tile_last.set_value(self.last_render, color)
-
-        self.tile_size.set_value(f"{w}x{h}")
-        self.tile_size.set_corner(quality)
-        has_key = self._has_footage_key()   # Pexels or Pixabay: either is enough
-        self.tile_key.set_value("Set" if has_key else "Missing",
-                                OK_COLOR if has_key else ERR_COLOR)
         self.refresh_estimate()
+        if self.current_page == "home" and hasattr(self, "home_body"):
+            self._fill_home()
+
+    def _fill_home(self):
+        """Home: greeting, then Continue, Tip ideas, Get started, What's new and the features.
+        Wide: two columns; narrow: one, in that order. Your videos are on the Dashboard."""
+        for child in self.home_body.winfo_children():
+            child.destroy()
+        self.home_images = []
+        every = projects.all_projects()
+        now = time.time()
+        numbers = started.summary(every, now)
+        self.home_hello.configure(text=started.greeting(time.localtime(now).tm_hour))
+        self.home_status.configure(text=started.status_line(numbers, now))
+        body = self.home_body
+        body.grid_columnconfigure((0, 1), weight=0, uniform="")
+        left = [self._continue_card(every[0], body) if every else None,
+                self._ideas_card(every, body)]
+        right = [None if self.started["hidden"] else self._started_card(numbers, body),
+                 self._news_card(body) if started.whats_new_due(
+                     self.version_since, APP_VERSION, now) else None]
+        below = [self._features_card(body)]
+        if not self.wide:
+            body.grid_columnconfigure(0, weight=1)
+            for row, card in enumerate(c for c in left + right + below if c is not None):
+                card.grid(row=row, column=0, columnspan=2, sticky="ew", pady=(0, PAD))
+            return
+        body.grid_columnconfigure((0, 1), weight=1, uniform="home")
+        for column, cards in ((0, left), (1, right)):
+            stack = ctk.CTkFrame(body, fg_color="transparent")
+            stack.grid(row=0, column=column, sticky="new",
+                       padx=(0, PAD // 2) if column == 0 else (PAD // 2, 0))
+            stack.grid_columnconfigure(0, weight=1)
+            for row, card in enumerate(c for c in cards if c is not None):
+                card.grid(in_=stack, row=row, column=0, sticky="ew", pady=(0, PAD))
+                card.lift(stack)
+        below[0].grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, PAD))
+
+    # ----------------------------------------------------------- DASHBOARD --
+    def _build_dashboard(self):
+        page = self._scroll_page()
+        page.grid_columnconfigure(0, weight=1)
+        self._caption(page, "Dashboard", 0, pady=(0, 6))
+        self.dash_body = ctk.CTkFrame(page, fg_color="transparent")
+        self.dash_body.grid(row=1, column=0, sticky="ew")
+        return page
+
+    def refresh_dashboard(self):
+        """Your numbers, a chart of the last 8 weeks, what you use most, recent videos,
+        storage and setup. With no videos yet, one box that says how to start."""
+        body = self.dash_body
+        for child in body.winfo_children():
+            child.destroy()
+        self.home_images = []
+        every = projects.all_projects()
+        now = time.time()
+        numbers = started.summary(every, now)
+        body.grid_columnconfigure((0, 1), weight=1, uniform="dash")
+        row = itertools.count()
+        if not numbers["made"]:
+            card, inner = self._home_card("Your numbers appear here after your first video",
+                                          parent=body)
+            ctk.CTkButton(inner, text="Make your first video", width=180, height=32,
+                          corner_radius=4, font=self.font_body, fg_color=ACCENT,
+                          hover_color=ACCENT_HOVER, text_color=ACCENT_TEXT,
+                          command=lambda: self.select_page("new")).grid(row=0, column=0,
+                                                                        sticky="w")
+            card.grid(row=next(row), column=0, columnspan=2, sticky="ew", pady=(0, PAD))
+        else:
+            tiles = ctk.CTkFrame(body, fg_color="transparent")
+            tiles.grid(row=next(row), column=0, columnspan=2, sticky="ew", pady=(0, PAD))
+            tiles.grid_columnconfigure((0, 1, 2, 3), weight=1, uniform="tiles")
+            usual = numbers["usual"]
+            for at, (value, label) in enumerate((
+                    (numbers["made"], "videos made"),
+                    (f"{started.minutes(every):.1f}", "minutes of video"),
+                    (numbers["week"], "made this week"),
+                    (f"{usual} s" if usual else "–", "usual make time"))):
+                tile = Card(tiles)
+                tile.grid(row=0, column=at, sticky="nsew", padx=(0 if at == 0 else PAD, 0))
+                ctk.CTkLabel(tile, text=str(value), font=ctk.CTkFont(
+                    family=self.ui_family, size=28, weight="bold"), text_color=TEXT,
+                    anchor="w").pack(anchor="w", padx=16, pady=(14, 0))
+                ctk.CTkLabel(tile, text=label, font=self.font_body, text_color=TEXT_MUTED,
+                             anchor="w").pack(anchor="w", padx=16, pady=(0, 14))
+            at = next(row)
+            self._chart_card(every, now, body).grid(row=at, column=0, sticky="nsew",
+                                                    padx=(0, PAD // 2), pady=(0, PAD))
+            self._most_used_card(every, body).grid(row=at, column=1, sticky="nsew",
+                                                   padx=(PAD // 2, 0), pady=(0, PAD))
+            self._recent_card(every[:6], body).grid(row=next(row), column=0, columnspan=2,
+                                                    sticky="ew", pady=(0, PAD))
+        at = next(row)
+        self._storage_card(body).grid(row=at, column=0, sticky="nsew", padx=(0, PAD // 2))
+        self._setup_card(body).grid(row=at, column=1, sticky="nsew", padx=(PAD // 2, 0))
+
+    def _chart_card(self, every, now, parent):
+        """Videos per week, the last 8 weeks, as bars."""
+        card, body = self._home_card("Videos per week", parent=parent)
+        counts = started.per_week(every, now)
+        canvas = tk.Canvas(body, height=150, highlightthickness=0, bd=0,
+                           bg=theme_color(CARD_BG))
+        canvas.grid(row=0, column=0, columnspan=2, sticky="ew")
+
+        def draw(_event=None):
+            canvas.delete("all")
+            width, height, top = max(canvas.winfo_width(), 200), 150, max(max(counts), 1)
+            step = width / len(counts)
+            for i, count in enumerate(counts):
+                bar = (height - 48) * count / top   # room for its number above
+                x0, x1 = i * step + step * 0.2, (i + 1) * step - step * 0.2
+                canvas.create_rectangle(x0, height - 20 - bar, x1, height - 20, outline="",
+                                        fill=theme_color(ACCENT if i == len(counts) - 1
+                                                         else FIELD_BORDER))
+                if count:
+                    canvas.create_text((x0 + x1) / 2, height - 26 - bar, text=str(count),
+                                       anchor="s", font=self.font_tiny, fill=theme_color(TEXT))
+                week = "this week" if i == len(counts) - 1 else f"{len(counts) - 1 - i} wk ago"
+                canvas.create_text((x0 + x1) / 2, height - 4, text=week, anchor="s",
+                                   font=self.font_tiny, fill=theme_color(TEXT_DIM))
+
+        canvas.bind("<Configure>", draw)
+        return card
+
+    def _most_used_card(self, every, parent):
+        card, body = self._home_card("What you use most", parent=parent)
+        voice = started.most_used(every, "voice")
+        found = (("Voice", voices.persona(voice).short if voice else None),
+                 ("Shape", started.most_used(every, "aspect")),
+                 ("Style", started.most_used(every, "style")),
+                 ("Captions", started.most_used(every, "caption_style")))
+        for at, (label, value) in enumerate(found):
+            ctk.CTkLabel(body, text=label, font=self.font_body, text_color=TEXT_MUTED,
+                         anchor="w", width=90).grid(row=at, column=0, sticky="w", pady=3)
+            ctk.CTkLabel(body, text=value or "–", font=self.font_bold, text_color=TEXT,
+                         anchor="w").grid(row=at, column=1, sticky="w", pady=3)
+        return card
+
+    def _storage_card(self, parent):
+        card, body = self._home_card("Storage", parent=parent)
+        for at, (label, folder) in enumerate((
+                ("Kept clips and voices", CACHE_ROOT),
+                ("Your videos' AI pictures and scripts", projects.ROOT),
+                ("Show it on my PC recordings", RECORDINGS_DIR))):
+            size = cache.size(folder) if os.path.isdir(folder) else 0
+            ctk.CTkLabel(body, text=label, font=self.font_body, text_color=TEXT_MUTED,
+                         anchor="w").grid(row=at, column=0, sticky="w", pady=3)
+            ctk.CTkLabel(body, text=f"{size / 1e6:.0f} MB", font=self.font_bold,
+                         text_color=TEXT, anchor="e").grid(row=at, column=1, sticky="e", pady=3)
+        ctk.CTkButton(body, text="Clear kept clips and voices", width=200, height=28,
+                      corner_radius=4, font=self.font_body, fg_color=FIELD_BG,
+                      hover_color=CARD_HOVER, border_width=1, border_color=FIELD_BORDER,
+                      text_color=TEXT, command=lambda: (self.clear_cache(),
+                                                        self.refresh_dashboard())).grid(
+            row=3, column=0, sticky="w", pady=(8, 0))
+        return card
+
+    def _setup_card(self, parent):
+        card, body = self._home_card("Setup", parent=parent)
+        found = [("Footage key", self._has_footage_key(), "Add key",
+                  lambda: self.open_settings("footage")),
+                 ("Smart writer", writer.installed(), "Set up",
+                  lambda: self.open_settings("writer")),
+                 ("AI pictures", imagegen.installed(), "Get them",
+                  lambda: self.open_settings("images"))]
+        if not myvoice.available():
+            found.append(("My voice", myvoice.installed(), "Make it",
+                          lambda: MyVoiceDialog(self)))
+        for at, (label, ready, button, command) in enumerate(found):
+            ctk.CTkLabel(body, text="✓" if ready else "○", font=self.font_bold, width=22,
+                         text_color=OK_COLOR if ready else TEXT_DIM).grid(row=at, column=0)
+            ctk.CTkLabel(body, text=label, font=self.font_body, text_color=TEXT,
+                         anchor="w").grid(row=at, column=1, sticky="w", pady=3)
+            if not ready:
+                ctk.CTkButton(body, text=button, width=100, height=28, corner_radius=4,
+                              font=self.font_body, fg_color=FIELD_BG, hover_color=CARD_HOVER,
+                              border_width=1, border_color=FIELD_BORDER, text_color=TEXT,
+                              command=command).grid(row=at, column=2, padx=(8, 0), pady=3)
+        return card
+
+    def _continue_card(self, project, parent):
+        """Continue where you left off: the newest video or draft."""
+        card, body = self._home_card("Continue where you left off", parent=parent)
+        pid, now = project["id"], time.time()
+        box = (54, 96) if (project.get("settings") or {}).get("aspect", "9:16") == "9:16" \
+            else (128, 72)
+        picture = ctk.CTkLabel(body, text=self.icon("projects"), font=self.font_icon,
+                               text_color=TEXT_DIM, width=box[0], height=box[1],
+                               fg_color=FIELD_BG, corner_radius=4)
+        photo = self._project_thumb_image(pid, box)
+        if photo is not None:
+            self.home_images.append(photo)
+            picture.configure(image=photo, text="")
+        picture.grid(row=0, column=0, rowspan=3, padx=(0, 12))
+        ctk.CTkLabel(body, text=project.get("title") or "Untitled video", font=self.font_bold,
+                     text_color=TEXT, anchor="w", justify="left", wraplength=320).grid(
+            row=0, column=1, sticky="w")
+        when = started.ago(project.get("updated") or now, now)
+        ctk.CTkLabel(body, text=f"Draft, changed {when}" if projects.is_draft(project) else
+                     f"Made {when}", font=self.font_tiny, text_color=TEXT_DIM,
+                     anchor="w").grid(row=1, column=1, sticky="w")
+        ctk.CTkButton(body, text="Open in Storyboard", width=150, height=30, corner_radius=4,
+                      font=self.font_body, fg_color=ACCENT, hover_color=ACCENT_HOVER,
+                      text_color=ACCENT_TEXT, command=lambda: self.open_project(pid)).grid(
+            row=2, column=1, sticky="w", pady=(8, 0))
+        return card
+
+    def _ideas_card(self, every, parent):
+        """Three ready-made Windows tips for today, none the user has made already."""
+        card, body = self._home_card("Tip ideas for today", parent=parent)
+        made = " ".join(f"{p.get('title', '')} {p.get('script', '')}" for p in every).lower()
+        ideas = started.tip_ideas(tiplist.TIPS, made, datetime.date.today().toordinal())
+        if not ideas:
+            ctk.CTkLabel(body, text="You have made every ready-made tip. Type your own in Show "
+                                    "it on my PC.", font=self.font_body, text_color=TEXT_MUTED,
+                         anchor="w").grid(row=0, column=0, columnspan=3, sticky="w")
+            return card
+        for row, (text, _place) in enumerate(ideas):
+            ctk.CTkLabel(body, text=self.icon("play"), font=self.font_icon, text_color=ACCENT,
+                         width=22).grid(row=row, column=0, sticky="w")
+            ctk.CTkLabel(body, text=text, font=self.font_body, text_color=TEXT, anchor="w").grid(
+                row=row, column=1, sticky="w", pady=3)
+            ctk.CTkButton(body, text="Make it", width=90, height=28, corner_radius=4,
+                          font=self.font_body, fg_color=FIELD_BG, hover_color=CARD_HOVER,
+                          border_width=1, border_color=FIELD_BORDER, text_color=TEXT,
+                          command=lambda t=text: TipDialog(self, ask=t)).grid(
+                row=row, column=2, padx=(8, 0), pady=3)
+        return card
+
+    def _news_card(self, parent):
+        """What's new in this version: its first line, for a week after an update."""
+        card, body = self._home_card(
+            f"What's new in {APP_VERSION}",
+            lambda head: self._link(head, "See all", lambda: WhatsNewDialog(self)).pack(
+                side="right"), parent)
+        ctk.CTkLabel(body, text=WHATS_NEW[0], font=self.font_body, text_color=TEXT_MUTED,
+                     anchor="w", justify="left", wraplength=520).grid(row=0, column=0,
+                                                                      columnspan=2, sticky="w")
+        return card
+
+    def _home_card(self, title, right=None, parent=None):
+        """A dashboard card with its title; returns (card, body)."""
+        card = Card(parent or self.home_body)
+        card.grid_columnconfigure(0, weight=1)
+        head = ctk.CTkFrame(card, fg_color="transparent")
+        head.grid(row=0, column=0, sticky="ew", padx=16, pady=(14, 6))
+        ctk.CTkLabel(head, text=title, font=self.font_bold, text_color=TEXT).pack(side="left")
+        if right:
+            right(head)
+        body = ctk.CTkFrame(card, fg_color="transparent")
+        body.grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 14))
+        body.grid_columnconfigure(1, weight=1)
+        return card, body
+
+    def _link(self, parent, text, command):
+        return ctk.CTkButton(parent, text=text, width=10, height=26, corner_radius=4,
+                             font=self.font_tiny, fg_color="transparent", hover_color=CARD_HOVER,
+                             text_color=TEXT_MUTED, command=command)
+
+    def _started_card(self, numbers, parent=None):
+        saved = self.started
+        facts = {"key": self._has_footage_key(), "first": numbers["made"] > 0,
+                 "myvoice": myvoice.installed()}
+        shown = started.steps(not myvoice.available())
+        finished = started.finished(saved, facts)
+        count, total = started.progress(saved, facts, shown)
+        actions = {
+            "key": ("Add key", lambda: self.open_settings("footage")),
+            "first": ("Make video", lambda: self.select_page("new")),
+            "ai": ("Get AI pictures", lambda: self.open_settings("images")),
+            "tip": ("Make a tip", lambda: TipDialog(self)),
+            "rewrite": ("Open My videos", lambda: self.select_page("projects")),
+            "myvoice": ("Make my voice", lambda: MyVoiceDialog(self)),
+        }
+
+        def right(head):
+            self._link(head, "Hide this list", self.hide_started).pack(side="right")
+            ctk.CTkLabel(head, text=f"{count} of {total} done", font=self.font_tiny,
+                         text_color=TEXT_MUTED).pack(side="right", padx=(0, 10))
+
+        card, body = self._home_card("Get started", right, parent)
+        self.started_box = card
+        if count == total:
+            ctk.CTkLabel(body, text="All done. Nice work!", font=self.font_body,
+                         text_color=OK_COLOR, anchor="w").grid(row=0, column=0, sticky="w")
+            return card
+        for at, (key, label) in enumerate(shown):
+            if key in saved["skipped"]:
+                continue
+            done = key in finished
+            ctk.CTkLabel(body, text="✓" if done else "○", font=self.font_bold, width=22,
+                         text_color=OK_COLOR if done else TEXT_DIM).grid(row=at, column=0)
+            ctk.CTkLabel(body, text=label, font=self.font_body, anchor="w",
+                         text_color=TEXT_MUTED if done else TEXT).grid(row=at, column=1,
+                                                                       sticky="w", pady=3)
+            if done:
+                continue
+            text, command = actions[key]
+            ctk.CTkButton(body, text=text, width=130, height=28, corner_radius=4,
+                          font=self.font_body, fg_color=FIELD_BG, hover_color=CARD_HOVER,
+                          border_width=1, border_color=FIELD_BORDER, text_color=TEXT,
+                          command=command).grid(row=at, column=2, padx=(8, 4), pady=3)
+            self._link(body, "Not for me", lambda k=key: self.skip_started(k)).grid(
+                row=at, column=3, pady=3)
+        return card
+
+    def _recent_card(self, recent, parent=None):
+        card, body = self._home_card(
+            "Recent videos",
+            lambda head: self._link(head, "All videos", lambda: self.select_page("projects"),
+                                    ).pack(side="right"), parent)
+        if not recent:
+            ctk.CTkLabel(body, text="Nothing yet. Your videos appear here.", font=self.font_body,
+                         text_color=TEXT_MUTED, anchor="w").grid(row=0, column=0, columnspan=2,
+                                                                 sticky="w")
+            ctk.CTkButton(body, text="Make your first video", width=170, height=30,
+                          corner_radius=4, font=self.font_body, fg_color=ACCENT,
+                          hover_color=ACCENT_HOVER, text_color=ACCENT_TEXT,
+                          command=lambda: self.select_page("new")).grid(
+                row=1, column=0, columnspan=2, sticky="w", pady=(8, 0))
+            return card
+        body.grid_columnconfigure((0, 1, 2), weight=1, uniform="recent")
+        now = time.time()
+        for at, project in enumerate(recent):
+            pid = project["id"]
+            item = ctk.CTkFrame(body, fg_color=FIELD_BG, corner_radius=6)
+            item.grid(row=at // 3, column=at % 3, sticky="nsew",
+                      padx=(0 if at % 3 == 0 else 4, 0), pady=(0, 4))
+            box = (54, 96) if (project.get("settings") or {}).get("aspect", "9:16") == "9:16" \
+                else (128, 72)
+            picture = ctk.CTkLabel(item, text=self.icon("projects"), font=self.font_icon,
+                                   text_color=TEXT_DIM, width=box[0], height=box[1])
+            photo = self._project_thumb_image(pid, box)
+            if photo is not None:
+                self.home_images.append(photo)
+                picture.configure(image=photo, text="")
+            picture.pack(side="left", padx=10, pady=10)
+            words = ctk.CTkFrame(item, fg_color="transparent")
+            words.pack(side="left", fill="x", expand=True, padx=(0, 10))
+            ctk.CTkLabel(words, text=project.get("title") or "Untitled video",
+                         font=self.font_body, text_color=TEXT, anchor="w", justify="left",
+                         wraplength=180).pack(anchor="w")
+            when = started.ago(project.get("updated") or now, now)
+            length = project.get("length") or 0
+            shape = (project.get("settings") or {}).get("aspect", "9:16")
+            info = f"Draft · {when}" if projects.is_draft(project) else \
+                f"{int(length // 60)}:{int(length % 60):02d} · {shape} · {when}"
+            if project.get("took") and not projects.is_draft(project):
+                info += f"\ntook {project['took']} s to make"
+            ctk.CTkLabel(words, text=info, font=self.font_tiny, text_color=TEXT_DIM,
+                         anchor="w").pack(anchor="w")
+            for widget in (item, picture, words, *words.winfo_children()):
+                widget.bind("<Button-1>", lambda _e, p=pid: self.open_project(p))
+                widget.configure(cursor="hand2")
+            videos = [v for v in project.get("videos") or [] if os.path.isfile(v)]
+            actions = ctk.CTkFrame(words, fg_color="transparent")
+            actions.pack(anchor="w", pady=(6, 0))
+            for text, command, usable in (
+                    ("Open", lambda p=pid: self.open_project(p), True),
+                    ("Play", lambda v=videos: os.startfile(v[0]), bool(videos)),
+                    ("Show in folder", lambda v=videos: subprocess.Popen(
+                        ["explorer", "/select,", os.path.normpath(v[0])]), bool(videos))):
+                ctk.CTkButton(actions, text=text, width=10, height=24, corner_radius=4,
+                              font=self.font_tiny, fg_color=CARD_BG, hover_color=CARD_HOVER,
+                              border_width=1, border_color=FIELD_BORDER, text_color=TEXT,
+                              state="normal" if usable else "disabled",
+                              command=command).pack(side="left", padx=(0, 4))
+        return card
+
+    def _numbers_card(self, numbers, parent=None):
+        card, body = self._home_card("Your videos", parent=parent)
+        lines = [f"{numbers['made']} made · {numbers['week']} this week"]
+        if numbers["last"]:
+            last = numbers["last"]
+            lines.append(f"Last: \"{last.get('title') or 'Untitled video'}\", "
+                         f"{started.ago(last.get('updated') or time.time(), time.time())}")
+        if numbers["usual"]:
+            usual = numbers["usual"]
+            lines.append("Usually takes " + (f"{usual} s" if usual < 90 else
+                                             f"about {round(usual / 60)} min") + " on this PC")
+        for at, line in enumerate(lines):
+            ctk.CTkLabel(body, text=line, font=self.font_body,
+                         text_color=TEXT if at == 0 else TEXT_MUTED, anchor="w").grid(
+                row=at, column=0, columnspan=2, sticky="w", pady=1)
+        return card
+
+    def _features(self):
+        """Home's "What this app can do": (glyph, title, line, button, action)."""
+        found = [
+            ("create", "Text to video", "Paste any text: the app writes the script, finds the "
+             "pictures, reads it out and adds captions", "Make one",
+             lambda: self.select_page("new")),
+            ("play", "Show it on my PC", "Type a Windows tip: the app opens the setting and "
+             "records each step for you", "Make a tip", lambda: TipDialog(self)),
+            ("images", "AI pictures", "Pictures made on your PC for the scenes no stock clip "
+             "can show", "Open", lambda: self.open_settings("images")),
+            ("voice", "My voice", "Record six sentences, and your videos are read in a voice "
+             "like yours", "Make my voice", lambda: MyVoiceDialog(self)),
+            ("script", "Smart writer", "Writes the script from your text, offline: nothing is "
+             "sent anywhere", "Open", lambda: self.open_settings("writer")),
+            ("aspect", "Both shapes at once", "The same video as a Short and as a YouTube video, "
+             "from the Storyboard", "Open My videos", lambda: self.select_page("projects")),
+        ]
+        return [f for f in found if f[1] != "My voice" or not myvoice.available()]
+
+    def _features_card(self, parent):
+        def right(head):
+            self._link(head, "Show" if self.features_hidden else "Hide",
+                       self.toggle_features).pack(side="right")
+
+        card, body = self._home_card("What this app can do", right, parent)
+        if self.features_hidden:
+            body.grid_forget()   # folded to its title line
+            return card
+        features = self._features()
+        # All in one row only when each card still has room for its text.
+        roomy = self.winfo_width() / ctk.ScalingTracker.get_window_scaling(self) >= 1800
+        per_row = len(features) if roomy else 3
+        body.grid_columnconfigure(tuple(range(per_row)), weight=1, uniform="features")
+        for at, (glyph, title, line, button, action) in enumerate(features):
+            tile = ctk.CTkFrame(body, fg_color=FIELD_BG, corner_radius=6)
+            tile.grid(row=at // per_row, column=at % per_row, sticky="nsew",
+                      padx=(0 if at % per_row == 0 else 6, 0), pady=(0, 6))
+            ctk.CTkLabel(tile, text=self.icon(glyph), font=self.font_icon_lg,
+                         text_color=ACCENT).pack(anchor="w", padx=12, pady=(12, 4))
+            ctk.CTkLabel(tile, text=title, font=self.font_bold, text_color=TEXT,
+                         anchor="w").pack(fill="x", padx=12)
+            ctk.CTkLabel(tile, text=line, font=self.font_tiny, text_color=TEXT_MUTED, anchor="w",
+                         justify="left", wraplength=230).pack(
+                fill="x", padx=12, pady=(2, 8))
+            ctk.CTkButton(tile, text=button, height=28, corner_radius=4, font=self.font_tiny,
+                          fg_color=CARD_BG, hover_color=CARD_HOVER, border_width=1,
+                          border_color=FIELD_BORDER, text_color=TEXT,
+                          command=action).pack(anchor="w", padx=12, pady=(0, 12))
+        return card
+
+    def toggle_features(self):
+        self.features_hidden = not self.features_hidden
+        save_settings(self._collect_settings())
+        self.refresh_home()
+
+    def mark_started(self, name):
+        """A Get started step happened (a tip video made, a rewrite used)."""
+        if name not in self.started["done"]:
+            self.started["done"].append(name)
+            save_settings(self._collect_settings())
+
+    def skip_started(self, name):
+        if name not in self.started["skipped"]:
+            self.started["skipped"].append(name)
+        save_settings(self._collect_settings())
+        self.refresh_home()
+
+    def hide_started(self):
+        self.started["hidden"] = True
+        save_settings(self._collect_settings())
+        self.refresh_home()
+
+    def show_started(self):
+        """Help & about: bring the Get started list back, skipped steps included."""
+        self.started.update(hidden=False, skipped=[])
+        self.features_hidden = False
+        save_settings(self._collect_settings())
+        self.select_page("home")
 
     def refresh_estimate(self):
         """About how long the script is, and whether a chosen length is in reach."""
@@ -4439,12 +4980,12 @@ class App(ctk.CTk):
                                       text_color=WARN_COLOR if warning else TEXT_MUTED)
 
     # -------------------------------------------------------------- CREATE --
-    def _build_create(self):
-        page = ctk.CTkFrame(self.content, fg_color="transparent")
+    def _build_create(self, parent):
+        page = ctk.CTkFrame(parent, fg_color="transparent")
         page.grid_columnconfigure(0, weight=1)
         page.grid_rowconfigure(1, weight=1)
 
-        self._caption(page, "SCRIPT", 0, pady=(0, 6))
+        self._caption(page, "Script", 0, pady=(0, 6))
 
         editor_card = Card(page)
         editor_card.grid(row=1, column=0, sticky="nsew", pady=(0, PAD))
@@ -4473,64 +5014,6 @@ class App(ctk.CTk):
         control_card.grid(row=2, column=0, sticky="ew")
         control_card.grid_columnconfigure(0, weight=1)
 
-        # Same variable as the Settings dropdown, so the two stay in step.
-        voice_bar = ctk.CTkFrame(control_card, fg_color="transparent")
-        voice_bar.grid(row=0, column=0, sticky="ew", padx=16, pady=(14, 0))
-        ctk.CTkLabel(voice_bar, text=self.icon("voice"), font=self.font_icon,
-                     text_color=TEXT_MUTED).pack(side="left", padx=(0, 10))
-        ctk.CTkLabel(voice_bar, text="Voice", font=self.font_body,
-                     text_color=TEXT).pack(side="left", padx=(0, 12))
-        self.voice_menus.append(ctk.CTkOptionMenu(
-            voice_bar, values=VOICE_OPTIONS, variable=self.var_voice,
-            width=360, height=32, corner_radius=4, font=self.font_body,
-            fg_color=FIELD_BG, button_color=FIELD_BG, button_hover_color=CARD_HOVER,
-            text_color=TEXT, dropdown_fg_color=CARD_BG, dropdown_text_color=TEXT,
-            dropdown_hover_color=CARD_HOVER, dropdown_font=self.font_body,
-            dynamic_resizing=False,
-        ))
-        self.voice_menus[-1].pack(side="left")
-        self.preview_button = ctk.CTkButton(
-            voice_bar, text=f"{self.icon('play')}  Preview Voice", width=150,
-            height=32, corner_radius=4, font=self.font_body, fg_color=FIELD_BG,
-            hover_color=CARD_HOVER, border_width=1, border_color=FIELD_BORDER,
-            text_color=TEXT, command=self.preview_voice,
-        )
-        self.preview_button.pack(side="left", padx=(8, 0))
-
-        self._look_bar(control_card, shape=False).grid(row=1, column=0, sticky="ew", padx=16,
-                                                       pady=(10, 0))
-
-        # Length and versions, with a running estimate of how long the script is.
-        pace_bar = ctk.CTkFrame(control_card, fg_color="transparent")
-        pace_bar.grid(row=2, column=0, sticky="ew", padx=16, pady=(10, 0))
-        ctk.CTkLabel(pace_bar, text=self.icon("timer"), font=self.font_icon,
-                     text_color=TEXT_MUTED).pack(side="left", padx=(0, 10))
-        ctk.CTkLabel(pace_bar, text="Length", font=self.font_body,
-                     text_color=TEXT).pack(side="left", padx=(0, 12))
-        FluentSegmented(pace_bar, self, list(pacing.TARGETS), self.var_target, 232).pack(side="left")
-        ctk.CTkLabel(pace_bar, text="Versions", font=self.font_body,
-                     text_color=TEXT).pack(side="left", padx=(18, 12))
-        FluentSegmented(pace_bar, self, list(VERSION_OPTIONS), self.var_versions, 84).pack(side="left")
-        self.estimate_label = ctk.CTkLabel(pace_bar, text="", font=self.font_tiny,
-                                           text_color=TEXT_MUTED, anchor="e")
-        self.estimate_label.pack(side="right")
-
-        # The look of AI pictures: only there once AI images are downloaded.
-        self.look_bar = ctk.CTkFrame(control_card, fg_color="transparent")
-        ctk.CTkLabel(self.look_bar, text=self.icon("images"), font=self.font_icon,
-                     text_color=TEXT_MUTED).pack(side="left", padx=(0, 10))
-        ctk.CTkLabel(self.look_bar, text="AI pictures", font=self.font_body,
-                     text_color=TEXT).pack(side="left", padx=(0, 12))
-        FluentSegmented(self.look_bar, self, list(imagegen.LOOKS), self.var_ai_look,
-                        340).pack(side="left")
-        look_hint = ctk.CTkLabel(self.look_bar, text=AI_LOOK_HINTS.get(self.var_ai_look.get(), ""),
-                                 font=self.font_tiny, text_color=TEXT_MUTED, anchor="w",
-                                 justify="left", wraplength=420)
-        look_hint.pack(side="left", padx=(14, 0))
-        self.var_ai_look.trace_add("write", lambda *_args: look_hint.configure(
-            text=AI_LOOK_HINTS.get(self.var_ai_look.get(), "")))
-        self._sync_look_bar()
-
         top = ctk.CTkFrame(control_card, fg_color="transparent")
         top.grid(row=4, column=0, sticky="ew", padx=16, pady=(12, 8))
         top.grid_columnconfigure(0, weight=1)
@@ -4544,7 +5027,7 @@ class App(ctk.CTk):
                      anchor="w").grid(row=1, column=0, sticky="w")
 
         self.render_button = ctk.CTkButton(
-            top, text=f"{self.icon('play')}   Render Video", font=self.font_bold,
+            top, text=f"{self.icon('play')}   Make video", font=self.font_bold,
             width=190, height=38, corner_radius=4, fg_color=ACCENT,
             hover_color=ACCENT_HOVER, text_color=ACCENT_TEXT,
             command=self.start_render,
@@ -4572,49 +5055,6 @@ class App(ctk.CTk):
         self.progress.grid_remove()
         return page
 
-    def _look_bar(self, parent, shape=True):
-        """One row for how the video looks: its shape and its captions.
-
-        The same variables as Settings, so every copy of this row (Home, Storyboard,
-        Script) shows and changes the same choices.
-        """
-        bar = ctk.CTkFrame(parent, fg_color="transparent")
-        if shape:
-            ctk.CTkLabel(bar, text=self.icon("aspect"), font=self.font_icon,
-                         text_color=TEXT_MUTED).pack(side="left", padx=(0, 10))
-            ctk.CTkLabel(bar, text="Shape", font=self.font_body,
-                         text_color=TEXT).pack(side="left", padx=(0, 10))
-            FluentSegmented(bar, self, RATIO_OPTIONS, self.var_aspect, 150).pack(
-                side="left", padx=(0, 18))
-        ctk.CTkLabel(bar, text=self.icon("captions"), font=self.font_icon,
-                     text_color=TEXT_MUTED).pack(side="left", padx=(0, 10))
-        ctk.CTkLabel(bar, text="Captions", font=self.font_body,
-                     text_color=TEXT).pack(side="left", padx=(0, 12))
-        ctk.CTkSwitch(
-            bar, text="", width=44, variable=self.var_captions,
-            onvalue=True, offvalue=False, progress_color=ACCENT,
-        ).pack(side="left", padx=(0, 6))
-        first = not hasattr(self, "caption_menus")
-        if first:
-            self.caption_menus = []
-        for key, allowed, _default in CAPTION_SETTINGS:
-            menu = ctk.CTkOptionMenu(
-                bar, values=list(allowed), variable=self.caption_vars[key],
-                width=116 if not shape else 106, height=32, corner_radius=4,
-                font=self.font_body,
-                fg_color=FIELD_BG, button_color=FIELD_BG, button_hover_color=CARD_HOVER,
-                text_color=TEXT, text_color_disabled=TEXT_DIM, dropdown_fg_color=CARD_BG,
-                dropdown_text_color=TEXT, dropdown_hover_color=CARD_HOVER,
-                dropdown_font=self.font_body, dynamic_resizing=False,
-            )
-            menu.pack(side="left", padx=(6, 0))
-            self.caption_menus.append(menu)
-        if first:
-            self.var_captions.trace_add("write", self._sync_caption_controls)
-            self.var_aspect.trace_add("write", self._shape_changed)
-        self._sync_caption_controls()
-        return bar
-
     def _shape_changed(self, *_args):
         """Another shape means other clips and other picture sizes: the Storyboard starts over."""
         self.board_clips, self.board_pos, self.board_text = {}, {}, None
@@ -4622,19 +5062,52 @@ class App(ctk.CTk):
             self.refresh_board(force=True)
 
     def _sync_look_bar(self):
-        """Show the AI pictures row on Create only while AI images are installed."""
+        """Show the Storyboard's AI pictures row only while AI pictures are installed."""
         if not hasattr(self, "look_bar"):
             return
         if imagegen.installed():
-            self.look_bar.grid(row=3, column=0, sticky="ew", padx=16, pady=(10, 0))
+            if not self.look_bar.winfo_manager():
+                self.look_bar.pack(fill="x", padx=12, pady=(0, 8), before=self.style_card)
         else:
-            self.look_bar.grid_remove()
+            self.look_bar.pack_forget()
 
     def _sync_caption_controls(self, *_args):
         """The caption choices only matter while captions are on."""
         state = "normal" if self.var_captions.get() else "disabled"
         for menu in self.caption_menus:
             menu.configure(state=state)
+        self._draw_caption_sample()
+
+    def _draw_caption_sample(self):
+        """A few words drawn the way the captions will look: style, size, colour, place."""
+        sample = getattr(self, "caption_sample", None)
+        if sample is None:
+            return
+        if self._caption_words is not None:
+            self._caption_words.destroy()
+        self._caption_words = row = ctk.CTkFrame(sample, fg_color="transparent")
+        if not self.var_captions.get():
+            ctk.CTkLabel(row, text="Captions are off", font=self.font_tiny,
+                         text_color="#8A8A8A").pack()
+            row.place(relx=0.5, rely=0.5, anchor="center")
+            return
+        style = self.caption_vars["caption_style"].get()
+        size = captions.SIZES.get(self.caption_vars["caption_size"].get(), 1.0)
+        color = captions.COLORS.get(self.caption_vars["caption_color"].get())
+        font = ctk.CTkFont(family=self.ui_family, size=round(15 * size), weight="bold")
+        words = ("appear",) if style == "One word" else ("Words", "appear", "here")
+        for word in words:
+            lit = word == "appear" and style != "Plain" and color is not None
+            fg, text = ("transparent", "#FFFFFF")
+            if lit:   # Black is a black word on a white stroke: shown as a white pill
+                fg, text = (color.stroke, color.fill) if color.fill == "#000000" else \
+                    ("transparent", color.fill)
+            elif color is not None and style == "Highlight":
+                text = color.others
+            ctk.CTkLabel(row, text=word.upper(), font=font, text_color=text, fg_color=fg,
+                         corner_radius=3).pack(side="left", padx=3)
+        where = captions.POSITIONS.get(self.caption_vars["caption_position"].get(), 0.72)
+        row.place(relx=0.5, rely=min(max(where, 0.22), 0.78), anchor="center")
 
     def _on_script_changed(self, _event=None):
         if self._refresh_job:
@@ -4649,14 +5122,15 @@ class App(ctk.CTk):
         self.settings = self._collect_settings()
         save_settings(self.settings)
         self.refresh_home()
+        self._show_board_nav()
 
     # ----------------------------------------------------------------- LOG --
-    def _build_log(self):
-        page = ctk.CTkFrame(self.content, fg_color="transparent")
+    def _build_log(self, parent):
+        page = ctk.CTkFrame(parent, fg_color="transparent")
         page.grid_columnconfigure(0, weight=1)
         page.grid_rowconfigure(1, weight=1)
 
-        self._caption(page, "EVENT LOG", 0, pady=(0, 6))
+        self._caption(page, "Event log", 0, pady=(0, 6))
 
         card = Card(page)
         card.grid(row=1, column=0, sticky="nsew")
@@ -4743,11 +5217,11 @@ class App(ctk.CTk):
         self.log_empty.place(relx=0.5, rely=0.55, anchor="center")
 
     # ------------------------------------------------------------ FEEDBACK --
-    def _build_feedback(self):
-        page = self._scroll_page()
+    def _build_feedback(self, parent):
+        page = self._scroll_page(parent)
         page.grid_columnconfigure(0, weight=1)
 
-        self._caption(page, "ABOUT", 0, pady=(0, 6))
+        self._caption(page, "About", 0, pady=(0, 6))
 
         card = Card(page)
         card.grid(row=1, column=0, sticky="ew", pady=(0, PAD))
@@ -4771,7 +5245,7 @@ class App(ctk.CTk):
                                           text_color=TEXT_MUTED, anchor="w")
         self.update_status.pack(side="left", padx=(12, 0))
 
-        self._caption(page, "SYSTEM", 2)
+        self._caption(page, "System", 2)
 
         self.row_effect = InfoRow(page, self, self.icon("glass"), "Transparency", "-")
         self.row_effect.grid(row=3, column=0, sticky="ew", pady=PAD // 2)
@@ -4788,7 +5262,7 @@ class App(ctk.CTk):
                           ellipsize(SETTINGS_FILE, 54))
         row_cfg.grid(row=6, column=0, sticky="ew", pady=PAD // 2)
 
-        self._caption(page, "SHORTCUTS", 7)
+        self._caption(page, "Shortcuts", 7)
 
         actions = Card(page)
         actions.grid(row=8, column=0, sticky="ew", pady=PAD // 2)
@@ -4814,6 +5288,11 @@ class App(ctk.CTk):
                       fg_color=FIELD_BG, hover_color=CARD_HOVER,
                       border_width=1, border_color=FIELD_BORDER, text_color=TEXT,
                       command=lambda: TourDialog(self)).pack(side="left", padx=(8, 0))
+        ctk.CTkButton(bar, text=f"{self.icon('status')}  Show the Get started list",
+                      height=32, corner_radius=4, font=self.font_body,
+                      fg_color=FIELD_BG, hover_color=CARD_HOVER,
+                      border_width=1, border_color=FIELD_BORDER, text_color=TEXT,
+                      command=self.show_started).pack(side="left", padx=(8, 0))
         help_bar = ctk.CTkFrame(actions, fg_color="transparent")
         help_bar.pack(fill="x", padx=14, pady=(0, 14))
         ctk.CTkButton(help_bar, text=f"{self.icon('feedback')}  Report a problem",
@@ -4854,7 +5333,7 @@ class App(ctk.CTk):
         self._unexpected(trace)
 
     def _unexpected(self, trace: str):
-        """Main thread. Put an already-logged trace on the Log page and into reports."""
+        """Main thread. Put an already-logged trace in the Log (Storyboard > Log) and into reports."""
         try:
             self.recent_lines.extend(trace.rstrip().split("\n"))
             last = trace.strip().splitlines()[-1] if trace.strip() else "unknown"
@@ -4911,11 +5390,24 @@ class App(ctk.CTk):
 
     # ------------------------------------------------------------ SETTINGS --
     def _build_settings(self):
-        page = self._scroll_page()
-        page.grid_columnconfigure(0, weight=1)
-        rows = itertools.count()   # sections and cards, top to bottom
+        """Settings in vertical tabs: a tab list on the left, one page per tab."""
+        outer = ctk.CTkFrame(self.content, fg_color="transparent")
+        outer.grid_columnconfigure(1, weight=1)
+        outer.grid_rowconfigure(0, weight=1)
+        self.settings_nav = ctk.CTkFrame(outer, fg_color="transparent")
+        self.settings_nav.grid(row=0, column=0, sticky="ns", padx=(0, 16))
+        self.settings_body = ctk.CTkFrame(outer, fg_color="transparent")
+        self.settings_body.grid(row=0, column=1, sticky="nsew")
+        self.settings_body.grid_rowconfigure(1, weight=1)
+        self.settings_intro = ctk.CTkLabel(self.settings_body, text="", font=self.font_body,
+                                           text_color=TEXT_MUTED, anchor="w", justify="left")
+        self.settings_intro.grid(row=0, column=0, sticky="ew", padx=4, pady=(0, 10))
+        self.settings_body.grid_columnconfigure(0, weight=1)
+        self.settings_tabs, self.settings_tab_items = {}, {}
+        self.settings_tab = "footage"   # the last tab shown, kept while the app runs
 
-        self._caption(page, "STOCK FOOTAGE", next(rows), pady=(0, 6))
+        page, rows = self._settings_tab("footage", "key", "Footage keys"), itertools.count()
+        self._caption(page, "Stock footage", next(rows), pady=(0, 6))
         self.api_entry = self._key_row(
             page, next(rows), "Pexels", "Pexels API key",
             "One footage key is enough. Stored locally in settings.json",
@@ -4927,7 +5419,8 @@ class App(ctk.CTk):
             self.var_pixabay, "Paste your Pixabay API key",
         )
 
-        self._caption(page, "OUTPUT", next(rows))
+        page, rows = self._settings_tab("video", "resolution", "Video & saving"), itertools.count()
+        self._caption(page, "Output", next(rows), pady=(0, 6))
 
         path_row = SettingRow(page, self, self.icon("folder"), "Save video to",
                               "Default folder and name for new videos")
@@ -4953,12 +5446,7 @@ class App(ctk.CTk):
             onvalue=True, offvalue=False, progress_color=ACCENT,
         ).pack(side="left")
 
-        self._caption(page, "VIDEO", next(rows))
-
-        ratio_row = SettingRow(page, self, self.icon("aspect"), "Aspect ratio",
-                               "Portrait for Shorts / TikTok, landscape for YouTube")
-        ratio_row.grid(row=next(rows), column=0, sticky="ew", pady=PAD // 2)
-        self._segmented(ratio_row.control, RATIO_OPTIONS, self.var_aspect, 170)
+        self._caption(page, "Video", next(rows))
 
         res_row = SettingRow(page, self, self.icon("resolution"), "Resolution",
                              "1080p renders at 8000k, 720p at 5000k")
@@ -4970,53 +5458,33 @@ class App(ctk.CTk):
         padding_row.grid(row=next(rows), column=0, sticky="ew", pady=PAD // 2)
         self._segmented(padding_row.control, list(PADDING_OPTIONS), self.var_padding, 260)
 
-        voice_row = SettingRow(page, self, self.icon("voice"), "Voice engine",
-                               "Microsoft Edge neural text-to-speech")
-        voice_row.grid(row=next(rows), column=0, sticky="ew", pady=PAD // 2)
-        self.voice_menus.append(ctk.CTkOptionMenu(
-            voice_row.control, values=VOICE_OPTIONS, variable=self.var_voice,
-            width=360, dynamic_resizing=False, height=32, corner_radius=4, font=self.font_body,
-            fg_color=FIELD_BG, button_color=FIELD_BG, button_hover_color=CARD_HOVER,
-            text_color=TEXT, dropdown_fg_color=CARD_BG, dropdown_text_color=TEXT,
-            dropdown_hover_color=CARD_HOVER, dropdown_font=self.font_body,
-        ))
-        self.voice_menus[-1].pack(side="left")
-        why_not = myvoice.available()   # an NVIDIA card with 6 GB or more (checked once)
-        mine_row = SettingRow(page, self, self.icon("voice"), "My voice (beta)",
-                              why_not or "Record six sentences, and scripts are read in a voice "
-                                         "like yours. Needs the voice pack (about 7 GB)")
-        mine_row.grid(row=next(rows), column=0, sticky="ew", pady=PAD // 2)
-        ctk.CTkButton(mine_row.control, text="Make my voice", width=130, height=32,
-                      corner_radius=4, font=self.font_body, fg_color=FIELD_BG,
-                      hover_color=CARD_HOVER, border_width=1, border_color=FIELD_BORDER,
-                      text_color=TEXT, command=lambda: MyVoiceDialog(self),
-                      state="disabled" if why_not else "normal").pack(side="left")
-
-        self._caption(page, "CAPTIONS", next(rows))
-
-        captions_row = SettingRow(page, self, self.icon("captions"), "Captions",
-                                  "Burns the spoken words into the video and saves an .srt file")
-        captions_row.grid(row=next(rows), column=0, sticky="ew", pady=PAD // 2)
-        ctk.CTkSwitch(
-            captions_row.control, text="", width=44, variable=self.var_captions,
-            onvalue=True, offvalue=False, progress_color=ACCENT,
+        motion_row = SettingRow(page, self, self.icon("scenes"), "Cuts on the beat, smart framing",
+                                "Scene changes land on the music's beats; the picture moves "
+                                "toward where the detail is")
+        motion_row.grid(row=next(rows), column=0, sticky="ew", pady=PAD // 2)
+        ctk.CTkSwitch(motion_row.control, text="", width=44, variable=self.var_smart_motion,
+                      onvalue=True, offvalue=False, progress_color=ACCENT).pack(side="left")
+        qsv_row = SettingRow(page, self, self.icon("scenes"), "Encode on the Intel graphics chip",
+                             "Quick Sync: faster on Intel laptops. Falls back to the normal "
+                             "encoder by itself where it isn't there or fails")
+        qsv_row.grid(row=next(rows), column=0, sticky="ew", pady=PAD // 2)
+        ctk.CTkSwitch(qsv_row.control, text="", width=44, variable=self.var_quick_sync,
+                      onvalue=True, offvalue=False, progress_color=ACCENT).pack(side="left")
+        cache_row = SettingRow(page, self, self.icon("folder"), "Kept clips and voices",
+                               "Re-renders reuse downloaded clips and spoken lines. "
+                               f"Limit {cache.LIMIT_BYTES // 1024 ** 3} GB; oldest go first")
+        cache_row.grid(row=next(rows), column=0, sticky="ew", pady=PAD // 2)
+        self.cache_label = ctk.CTkLabel(cache_row.control, text="", font=self.font_body,
+                                        text_color=TEXT_MUTED)
+        ctk.CTkButton(
+            cache_row.control, text="Clear cache", width=110, height=32, corner_radius=4,
+            font=self.font_body, fg_color=FIELD_BG, hover_color=CARD_HOVER, border_width=1,
+            border_color=FIELD_BORDER, text_color=TEXT, command=self.clear_cache,
         ).pack(side="left")
+        self.cache_label.pack(side="left", padx=(10, 0))
+        self._show_cache_size()
 
-        for key, glyph, title, subtitle, width in (
-            ("caption_style", "script", "Style",
-             "Highlight the spoken word, show one word at a time, or plain text", 300),
-            ("caption_size", "font_size", "Size", "How big the caption text is", 260),
-            ("caption_color", "color", "Highlight colour",
-             "How the word being spoken stands out", 400),
-            ("caption_position", "position", "Position",
-             "Where the captions sit on the video", 260),
-        ):
-            allowed = next(a for k, a, _d in CAPTION_SETTINGS if k == key)
-            option_row = SettingRow(page, self, self.icon(glyph), title, subtitle)
-            option_row.grid(row=next(rows), column=0, sticky="ew", pady=PAD // 2)
-            self._segmented(option_row.control, list(allowed), self.caption_vars[key], width)
-
-        self._caption(page, "START AND END CARDS", next(rows))
+        self._caption(page, "Start and end cards", next(rows))
         for var_on, var_text, title, subtitle, hint in (
                 (self.var_intro_on, self.var_intro_text, "Channel name card",
                  "A 2-second card before every video", "Your channel name"),
@@ -5033,7 +5501,46 @@ class App(ctk.CTk):
                 border_color=FIELD_BORDER, text_color=TEXT, placeholder_text=hint,
             )).pack(side="left")
 
-        self._caption(page, "AUDIO", next(rows))
+        page, rows = self._settings_tab("voice", "voice", "Voice & music"), itertools.count()
+        self._caption(page, "Voice", next(rows), pady=(0, 6))
+        why_not = myvoice.available()   # an NVIDIA card with 6 GB or more (checked once)
+        mine_row = SettingRow(page, self, self.icon("voice"), "My voice (beta)",
+                              why_not or "Record six sentences, and scripts are read in a voice "
+                                         "like yours. Needs the voice pack (about 7 GB)")
+        mine_row.grid(row=next(rows), column=0, sticky="ew", pady=PAD // 2)
+        ctk.CTkButton(mine_row.control, text="Make my voice", width=130, height=32,
+                      corner_radius=4, font=self.font_body, fg_color=FIELD_BG,
+                      hover_color=CARD_HOVER, border_width=1, border_color=FIELD_BORDER,
+                      text_color=TEXT, command=lambda: MyVoiceDialog(self),
+                      state="disabled" if why_not else "normal").pack(side="left")
+
+        voice_row = SettingRow(
+            page, self, self.icon("voice"), "Offline voice",
+            f"{localvoice.MODEL.name}, an open-source voice that speaks on this PC. "
+            "No internet needed once it is downloaded")
+        voice_row.grid(row=next(rows), column=0, sticky="ew", pady=PAD // 2)
+        self.voice_state = ctk.CTkLabel(voice_row.control, text="", font=self.font_body,
+                                        text_color=TEXT_MUTED)
+        self.voice_state.pack(side="left", padx=(0, 12))
+        self.voice_button = ctk.CTkButton(
+            voice_row.control, text="Download", width=96, height=32, corner_radius=4,
+            font=self.font_body, fg_color=FIELD_BG, hover_color=CARD_HOVER,
+            border_width=1, border_color=FIELD_BORDER, text_color=TEXT,
+            command=self.start_voice_download)
+        self.voice_button.pack(side="left")
+        self._voice_row_changed()
+
+        online_row = SettingRow(
+            page, self, self.icon("info"), "Use Microsoft's online voices",
+            "The voices the app used before 3.8. Microsoft's service stopped answering in "
+            "October 2026, so leave this off unless it works again")
+        online_row.grid(row=next(rows), column=0, sticky="ew", pady=PAD // 2)
+        ctk.CTkSwitch(
+            online_row.control, text="", width=44, variable=self.var_voice_online,
+            onvalue=True, offvalue=False, progress_color=ACCENT,
+        ).pack(side="left")
+
+        self._caption(page, "Music and sound", next(rows))
 
         music_row = SettingRow(page, self, self.icon("music"), "Background music",
                                "Plays under the video and ducks while the voice speaks")
@@ -5070,58 +5577,9 @@ class App(ctk.CTk):
         sfx_row.grid(row=next(rows), column=0, sticky="ew", pady=PAD // 2)
         ctk.CTkSwitch(sfx_row.control, text="", width=44, variable=self.var_sfx, onvalue=True,
                       offvalue=False, progress_color=ACCENT).pack(side="left")
-        motion_row = SettingRow(page, self, self.icon("scenes"), "Cuts on the beat, smart framing",
-                                "Scene changes land on the music's beats; the picture moves "
-                                "toward where the detail is")
-        motion_row.grid(row=next(rows), column=0, sticky="ew", pady=PAD // 2)
-        style_row = SettingRow(page, self, self.icon("script"), "Style",
-                               "Normal footage, or every scene drawn on screen: chalk on a "
-                               "blackboard, or a flat-colour drawing. Fast on any PC")
-        style_row.grid(row=next(rows), column=0, sticky="ew", pady=PAD // 2)
-        self._segmented(style_row.control, list(drawn.STYLES), self.var_style, 330)
-        ctk.CTkSwitch(motion_row.control, text="", width=44, variable=self.var_smart_motion,
-                      onvalue=True, offvalue=False, progress_color=ACCENT).pack(side="left")
-        qsv_row = SettingRow(page, self, self.icon("scenes"), "Encode on the Intel graphics chip",
-                             "Quick Sync: faster on Intel laptops. Falls back to the normal "
-                             "encoder by itself where it isn't there or fails")
-        qsv_row.grid(row=next(rows), column=0, sticky="ew", pady=PAD // 2)
-        ctk.CTkSwitch(qsv_row.control, text="", width=44, variable=self.var_quick_sync,
-                      onvalue=True, offvalue=False, progress_color=ACCENT).pack(side="left")
-        cache_row = SettingRow(page, self, self.icon("folder"), "Kept clips and voices",
-                               "Re-renders reuse downloaded clips and spoken lines. "
-                               f"Limit {cache.LIMIT_BYTES // 1024 ** 3} GB; oldest go first")
-        cache_row.grid(row=next(rows), column=0, sticky="ew", pady=PAD // 2)
-        self.cache_label = ctk.CTkLabel(cache_row.control, text="", font=self.font_body,
-                                        text_color=TEXT_MUTED)
-        ctk.CTkButton(
-            cache_row.control, text="Clear cache", width=110, height=32, corner_radius=4,
-            font=self.font_body, fg_color=FIELD_BG, hover_color=CARD_HOVER, border_width=1,
-            border_color=FIELD_BORDER, text_color=TEXT, command=self.clear_cache,
-        ).pack(side="left")
-        self.cache_label.pack(side="left", padx=(10, 0))
-        self._show_cache_size()
 
-        self._caption(page, "APPEARANCE", next(rows))
-
-        theme_row = SettingRow(page, self, self.icon("theme"), "Dark theme",
-                               "Switches the whole app between dark and light")
-        theme_row.grid(row=next(rows), column=0, sticky="ew", pady=PAD // 2)
-        ctk.CTkSwitch(
-            theme_row.control, text="", width=44, variable=self.var_theme,
-            onvalue="dark", offvalue="light", progress_color=ACCENT,
-            command=self.apply_theme,
-        ).pack(side="left")
-
-        glass_row = SettingRow(page, self, self.icon("glass"), "Window translucency",
-                               "Mica / acrylic where supported, alpha elsewhere")
-        glass_row.grid(row=next(rows), column=0, sticky="ew", pady=PAD // 2)
-        ctk.CTkSwitch(
-            glass_row.control, text="", width=44, variable=self.var_translucent,
-            onvalue=True, offvalue=False, progress_color=ACCENT,
-            command=self.apply_effects,
-        ).pack(side="left")
-
-        self._caption(page, "SCRIPT WRITER", next(rows))
+        page, rows = self._settings_tab("writer", "script", "Smart writer"), itertools.count()
+        self._caption(page, "Script writer", next(rows), pady=(0, 6))
         web_row = SettingRow(page, self, self.icon("info"), "Look facts up on Wikipedia",
                              "For an idea that asks for facts (top 5, latest, fastest...), the "
                              "Smart writer reads Wikipedia first. Only the search words are sent")
@@ -5145,20 +5603,6 @@ class App(ctk.CTk):
         self.writer_listeners.append(self._writer_row_changed)
         self._writer_row_changed()
 
-        threads_row = SettingRow(
-            page, self, self.icon("timer"), "AI picture threads",
-            "How many processor threads make an AI picture when there is no graphics card. "
-            "Auto uses the result of Test speed in the AI images tab")
-        threads_row.grid(row=next(rows), column=0, sticky="ew", pady=PAD // 2)
-        ctk.CTkOptionMenu(
-            threads_row.control, values=list(AI_THREAD_OPTIONS), variable=self.var_ai_threads,
-            width=110, height=32, corner_radius=4, font=self.font_body, fg_color=FIELD_BG,
-            button_color=FIELD_BG, button_hover_color=CARD_HOVER, text_color=TEXT,
-            dropdown_fg_color=CARD_BG, dropdown_text_color=TEXT, dropdown_hover_color=CARD_HOVER,
-            dropdown_font=self.font_body, dynamic_resizing=False,
-            command=lambda _value: save_settings(self._collect_settings()),
-        ).pack(side="left")
-
         gpu_row = SettingRow(
             page, self, self.icon("resolution"), "Use the graphics card",
             "Faster on PCs with a dedicated graphics card. Turn it off if the Smart "
@@ -5179,35 +5623,30 @@ class App(ctk.CTk):
             onvalue=True, offvalue=False, progress_color=ACCENT,
         ).pack(side="left")
 
-        self._caption(page, "VOICE", next(rows))
+        self._settings_tab("images", "images", "AI pictures",
+                           self._build_images(self.settings_body))
+        page, rows = self._settings_tab("app", "theme", "App & updates"), itertools.count()
+        self._caption(page, "Appearance", next(rows), pady=(0, 6))
 
-        voice_row = SettingRow(
-            page, self, self.icon("voice"), "Offline voice",
-            f"{localvoice.MODEL.name}, an open-source voice that speaks on this PC. "
-            "No internet needed once it is downloaded")
-        voice_row.grid(row=next(rows), column=0, sticky="ew", pady=PAD // 2)
-        self.voice_state = ctk.CTkLabel(voice_row.control, text="", font=self.font_body,
-                                        text_color=TEXT_MUTED)
-        self.voice_state.pack(side="left", padx=(0, 12))
-        self.voice_button = ctk.CTkButton(
-            voice_row.control, text="Download", width=96, height=32, corner_radius=4,
-            font=self.font_body, fg_color=FIELD_BG, hover_color=CARD_HOVER,
-            border_width=1, border_color=FIELD_BORDER, text_color=TEXT,
-            command=self.start_voice_download)
-        self.voice_button.pack(side="left")
-        self._voice_row_changed()
-
-        online_row = SettingRow(
-            page, self, self.icon("info"), "Use Microsoft's online voices",
-            "The voices the app used before 3.8. Microsoft's service stopped answering in "
-            "October 2026, so leave this off unless it works again")
-        online_row.grid(row=next(rows), column=0, sticky="ew", pady=PAD // 2)
+        theme_row = SettingRow(page, self, self.icon("theme"), "Dark theme",
+                               "Switches the whole app between dark and light")
+        theme_row.grid(row=next(rows), column=0, sticky="ew", pady=PAD // 2)
         ctk.CTkSwitch(
-            online_row.control, text="", width=44, variable=self.var_voice_online,
-            onvalue=True, offvalue=False, progress_color=ACCENT,
+            theme_row.control, text="", width=44, variable=self.var_theme,
+            onvalue="dark", offvalue="light", progress_color=ACCENT,
+            command=self.apply_theme,
         ).pack(side="left")
 
-        self._caption(page, "UPDATES", next(rows))
+        glass_row = SettingRow(page, self, self.icon("glass"), "Window translucency",
+                               "Mica / acrylic where supported, alpha elsewhere")
+        glass_row.grid(row=next(rows), column=0, sticky="ew", pady=PAD // 2)
+        ctk.CTkSwitch(
+            glass_row.control, text="", width=44, variable=self.var_translucent,
+            onvalue=True, offvalue=False, progress_color=ACCENT,
+            command=self.apply_effects,
+        ).pack(side="left")
+
+        self._caption(page, "Updates", next(rows))
 
         updates_row = SettingRow(page, self, self.icon("info"), "Check for updates on startup",
                                  "Asks GitHub for the latest version number. Nothing is "
@@ -5217,7 +5656,46 @@ class App(ctk.CTk):
             updates_row.control, text="", width=44, variable=self.var_check_updates,
             onvalue=True, offvalue=False, progress_color=ACCENT,
         ).pack(side="left")
+        self._settings_tab("help", "feedback", "Help & about",
+                           self._build_feedback(self.settings_body))
+        self.script_editor = self._build_create(self.settings_body)
+        self._settings_tab("advanced", "create", "Advanced", self.script_editor)
+        self._show_settings_tab(self.settings_tab)
+        return outer
+
+    def _settings_tab(self, key, glyph, text, page=None):
+        """A Settings tab: its entry in the tab list and its own page (scrolling by default)."""
+        if page is None:
+            page = self._scroll_page(self.settings_body)
+            page.grid_columnconfigure(0, weight=1)
+        if isinstance(page, ctk.CTkScrollableFrame):
+            page.configure(width=SETTINGS_WIDTH)
+        self.settings_tabs[key] = page
+        item = NavItem(self.settings_nav, self, key, self.icon(glyph), text,
+                       self._show_settings_tab)
+        item.pack(fill="x", pady=1)
+        self.settings_tab_items[key] = item
         return page
+
+    def _show_settings_tab(self, key):
+        for name, page in self.settings_tabs.items():
+            if name == key:
+                capped = self.wide and isinstance(page, ctk.CTkScrollableFrame)
+                page.grid(row=1, column=0, sticky="nsw" if capped else "nsew")
+            else:
+                page.grid_remove()
+            self.settings_tab_items[name].set_selected(name == key)
+        self.settings_tab = key
+        self.settings_intro.configure(text=TAB_INTROS.get(key, ""))
+
+    def _layout_settings(self):
+        if hasattr(self, "settings_tabs"):
+            self._show_settings_tab(self.settings_tab)
+
+    def open_settings(self, tab):
+        """Settings, opened on one tab (e.g. from a Home setup button)."""
+        self.select_page("settings")
+        self._show_settings_tab(tab)
 
     def _key_row(self, page, row, provider, title, subtitle, variable, placeholder):
         """A masked API-key entry with reveal and test buttons. Returns the entry."""
@@ -5421,12 +5899,18 @@ class App(ctk.CTk):
             self.append_log(
                 "🎨 No stock footage key: every scene will get an AI picture."
                 if imagegen.installed() else
-                "⚠️ No footage API key yet - add a Pexels or Pixabay key in Settings.")
+                "⚠️ No footage API key yet - add a Pexels or Pixabay key in Settings > Footage keys.")
         self.refresh_home()
         threading.Thread(target=self._warm_moviepy, daemon=True).start()
         left = putback.read(SETTINGS_DIR)
         if left:   # the app closed while a switch it flipped for a video was still flipped
             threading.Thread(target=self._put_back_left, args=(left,), daemon=True).start()
+        if self.version_since.get("version") != APP_VERSION:
+            # A first install has nothing "new": its What's new line never shows.
+            self.version_since = {"version": APP_VERSION,
+                                  "at": time.time() if self.tour_seen else 0}
+            save_settings(self._collect_settings())
+            self.refresh_home()
         if not self.tour_seen:
             self.whats_new_seen = APP_VERSION   # a first install: nothing is "new" yet
             self.after(300, lambda: TourDialog(self))   # it leads into the key setup itself
@@ -5674,7 +6158,6 @@ class App(ctk.CTk):
                     if self._both:
                         self._shape_back(self._both)
                         self._both = None
-                    self.last_render = "Cancelled"
                     self.refresh_home()
                 elif kind == "board":
                     self._board_event(payload)
@@ -5728,10 +6211,13 @@ class App(ctk.CTk):
                         except tk.TclError:
                             pass   # its window was closed meanwhile
                 elif kind == "finished":
-                    self.last_render = "Success" if payload["ok"] else "Failed"
-                    self.refresh_home()
                     made = [p for p in (payload.get("paths") or [payload.get("path")])
                             if p and os.path.isfile(p)]
+                    info = self._render_info or {}
+                    if payload["ok"] and made:
+                        for step in ("ai", "tip"):
+                            if info.get(step):
+                                self.mark_started(step)
                     if self._batch:
                         b = self._batch
                         self.save_project(videos=made)
@@ -5781,11 +6267,10 @@ class App(ctk.CTk):
             self.log_cancel.pack(side="right", padx=(0, 8))
         else:
             self.render_button.configure(state="normal", command=self.start_render,
-                                         text=f"{self.icon('play')}   Render Video")
+                                         text=f"{self.icon('play')}   Make video")
             self.log_cancel.pack_forget()
         self.scenes_button.configure(state="disabled" if busy else "normal")
         self.draft_button.configure(state="disabled" if busy else "normal")
-        self.row_render.button.configure(state="disabled" if busy else "normal")
         for bar in self._progress_bars():
             if busy:
                 bar.grid()
@@ -5823,7 +6308,7 @@ class App(ctk.CTk):
         if self.is_rendering:
             return
         script = self.script_box.get("1.0", "end")
-        if looks_like_plain_text(script):   # as Render Video does: it wants New from text
+        if looks_like_plain_text(script):   # as Make video does: it wants New from text
             DraftDialog(self).prefill(script.strip())
             return
         self.select_page("board")
@@ -5843,6 +6328,7 @@ class App(ctk.CTk):
         script = result.script
         self.save_project()
         self.project = None   # a new video: its own project from the first save
+        self.thumb = {"scene": None, "title": ""}
         self.board_history, self.board_future = [], []
         if self.ai_slow() and self._has_footage_key():
             # Each picture takes minutes here: keep the first few, stock for the rest.
@@ -5968,7 +6454,7 @@ class App(ctk.CTk):
         page = ctk.CTkFrame(self.content, fg_color="transparent")
         page.grid_columnconfigure(0, weight=1)
         page.grid_rowconfigure(2, weight=1)
-        self._caption(page, "PROJECTS", 0, pady=(0, 6))
+        self._caption(page, "My videos", 0, pady=(0, 6))
         top = ctk.CTkFrame(page, fg_color="transparent")
         top.grid(row=1, column=0, sticky="ew", pady=(0, PAD // 2))
         top.grid_columnconfigure(0, weight=1)
@@ -5986,8 +6472,11 @@ class App(ctk.CTk):
             scrollbar_button_color=SCROLLBAR_THUMB,
             scrollbar_button_hover_color=SCROLLBAR_THUMB_HOVER)
         self.projects_list.grid(row=2, column=0, sticky="nsew")
-        self.projects_list.grid_columnconfigure((0, 1, 2), weight=1, uniform="projects")
         self.project_images = []   # kept so Tk doesn't drop the thumbnails
+        # Wide windows: the selected video's details and actions, beside the grid.
+        self.project_side = Card(page, width=SIDE)
+        self.project_side.grid_columnconfigure((0, 1), weight=1)
+        self.project_selected = None
         return page
 
     def refresh_projects(self):
@@ -5996,9 +6485,22 @@ class App(ctk.CTk):
         self.project_images = []
         every = projects.all_projects()
         shown = [p for p in every if projects.matches(p, self.project_search.get())]
-        count = f"{len(every)} project{'s' if len(every) != 1 else ''}"
+        count = f"{len(every)} video{'s' if len(every) != 1 else ''}"
         self.projects_count.configure(
             text=count if len(shown) == len(every) else f"{len(shown)} of {count}")
+        self.project_columns = (5 if self.winfo_width() / ctk.ScalingTracker.get_window_scaling(
+            self) >= 1800 else 4) if self.wide else 3
+        for column in range(5):
+            self.projects_list.grid_columnconfigure(
+                column, weight=1 if column < self.project_columns else 0,
+                uniform="projects" if column < self.project_columns else "")
+        if self.wide and shown:
+            ids = [p["id"] for p in shown]
+            self._fill_project_side(shown[ids.index(self.project_selected)]
+                                    if self.project_selected in ids else shown[0])
+            self.project_side.grid(row=2, column=1, sticky="nsew", padx=(PAD, 0))
+        else:
+            self.project_side.grid_remove()
         if not shown:
             hint = ("Nothing matches that search." if every else
                     "Videos you make appear here, so you can open them again in the Storyboard "
@@ -6006,39 +6508,76 @@ class App(ctk.CTk):
                     "here too, as a draft.")
             ctk.CTkLabel(self.projects_list, text=hint, font=self.font_body,
                          text_color=TEXT_MUTED, justify="left", anchor="w", wraplength=640,
-                         ).grid(row=0, column=0, columnspan=3, sticky="w", padx=8, pady=20)
+                         ).grid(row=0, column=0, columnspan=3, sticky="w", padx=8, pady=(20, 8))
+            if not every:
+                ctk.CTkButton(self.projects_list, text="Make your first video", width=170,
+                              height=32, corner_radius=4, font=self.font_body, fg_color=ACCENT,
+                              hover_color=ACCENT_HOVER, text_color=ACCENT_TEXT,
+                              command=lambda: self.select_page("new")).grid(
+                    row=1, column=0, sticky="w", padx=8)
         for index, project in enumerate(shown):
             self._project_card(project, index)
 
-    def _project_card(self, project, index):
+    @staticmethod
+    def _project_thumb_image(pid, box):
+        """A project's thumbnail fitted in ``box``, or None (no picture yet: the icon stays)."""
         from PIL import Image
 
+        thumb = os.path.join(projects.folder(pid), projects.THUMB)
+        if not os.path.isfile(thumb):
+            return None
+        try:
+            with Image.open(thumb) as image:
+                image = image.convert("RGB")
+        except OSError:
+            return None
+        image.thumbnail(box)
+        return ctk.CTkImage(light_image=image, dark_image=image, size=image.size)
+
+    def _project_card(self, project, index):
+        pid = project["id"]
+        card = Card(self.projects_list)
+        card.grid(row=index // self.project_columns, column=index % self.project_columns,
+                  sticky="nsew", padx=4, pady=4)
+        card.grid_columnconfigure((0, 1), weight=1)
+        if not self.wide:
+            self._project_body(card, project)
+            return
+        # Wide: the side panel has the rest; a click picks the video for it.
+        card.configure(border_width=2 if pid == self.project_selected else 0,
+                       border_color=ACCENT)
+        for widget in (card, *self._project_body(card, project, keep=("Open", "Play"))):
+            widget.bind("<Button-1>", lambda _e, p=project: self._select_project(p))
+
+    def _select_project(self, project):
+        self.project_selected = project["id"]
+        self.refresh_projects()
+
+    def _fill_project_side(self, project):
+        for child in self.project_side.winfo_children():
+            child.destroy()
+        self.project_selected = project["id"]
+        self._project_body(self.project_side, project, big=True)
+
+    def _project_body(self, holder, project, big=False, keep=None):
+        """A video's picture, title, details and actions, in a card or the side panel."""
         pid, settings = project["id"], project.get("settings") or {}
         videos = [v for v in project.get("videos") or [] if os.path.isfile(v)]
-        card = Card(self.projects_list)
-        card.grid(row=index // 3, column=index % 3, sticky="nsew", padx=4, pady=4)
-        card.grid_columnconfigure((0, 1), weight=1)
-
-        box = (101, 180) if settings.get("aspect", "9:16") == "9:16" else (240, 135)
-        picture = ctk.CTkLabel(card, text=self.icon("projects"), font=self.font_icon_lg,
+        box = ((101, 180) if settings.get("aspect", "9:16") == "9:16" else (240, 135)) \
+            if not big else ((180, 320) if settings.get("aspect", "9:16") == "9:16"
+                             else (SIDE - 40, 191))
+        picture = ctk.CTkLabel(holder, text=self.icon("projects"), font=self.font_icon_lg,
                                text_color=TEXT_DIM, width=box[0], height=box[1],
                                fg_color=FIELD_BG, corner_radius=4)
         picture.grid(row=0, column=0, columnspan=2, pady=(12, 6))
-        thumb = os.path.join(projects.folder(pid), projects.THUMB)
-        if os.path.isfile(thumb):
-            try:
-                with Image.open(thumb) as image:
-                    image = image.convert("RGB")
-                image.thumbnail(box)
-                photo = ctk.CTkImage(light_image=image, dark_image=image, size=image.size)
-                self.project_images.append(photo)
-                picture.configure(image=photo, text="")
-            except OSError:
-                pass   # no picture: the icon stays
+        photo = self._project_thumb_image(pid, box)
+        if photo is not None:
+            self.project_images.append(photo)
+            picture.configure(image=photo, text="")
 
-        title = ctk.CTkLabel(card, text=project.get("title") or "Untitled video",
+        title = ctk.CTkLabel(holder, text=project.get("title") or "Untitled video",
                              font=self.font_bold, text_color=TEXT, anchor="w", justify="left",
-                             wraplength=240)
+                             wraplength=SIDE - 40 if big else 240)
         title.grid(row=1, column=0, columnspan=2, sticky="ew", padx=12)
         when = time.strftime("%d %b %Y", time.localtime(project.get("updated") or 0))
         if projects.is_draft(project):
@@ -6050,13 +6589,13 @@ class App(ctk.CTk):
             info = f"{when} · {int(length // 60)}:{int(length % 60):02d} · " \
                    f"{settings.get('aspect', '9:16')}"
             color = TEXT_DIM
-        ctk.CTkLabel(card, text=info, font=self.font_tiny, text_color=color, anchor="w",
+        ctk.CTkLabel(holder, text=info, font=self.font_tiny, text_color=color, anchor="w",
                      ).grid(row=2, column=0, columnspan=2, sticky="ew", padx=12, pady=(0, 6))
 
         def rename():
             title.grid_remove()
             entry = focus_accent(ctk.CTkEntry(
-                card, height=30, corner_radius=4, font=self.font_body, fg_color=FIELD_BG,
+                holder, height=30, corner_radius=4, font=self.font_body, fg_color=FIELD_BG,
                 border_color=FIELD_BORDER, text_color=TEXT))
             entry.insert(0, project.get("title") or "")
             entry.grid(row=1, column=0, columnspan=2, sticky="ew", padx=12)
@@ -6080,7 +6619,7 @@ class App(ctk.CTk):
                 self.refresh_projects()
 
             Dialog(self, "Delete this project?",
-                   f"\"{project.get('title')}\" is removed from Projects, with its saved "
+                   f"\"{project.get('title')}\" is removed from My videos, with its saved "
                    "AI pictures. Your video file is kept.", ok=False,
                    confirm=really, confirm_text="Delete")
 
@@ -6100,9 +6639,11 @@ class App(ctk.CTk):
                    ("Translate", lambda: TranslateDialog(self, project), True),
                    ("Rename", rename, True),
                    ("Delete", delete, True))
+        if keep:
+            buttons = tuple(b for b in buttons if b[0] in keep)
         for at, (text, command, usable) in enumerate(buttons):
             ctk.CTkButton(
-                card, text=text, height=28, corner_radius=4, font=self.font_tiny,
+                holder, text=text, height=28, corner_radius=4, font=self.font_tiny,
                 fg_color=ACCENT if at == 0 else FIELD_BG,
                 hover_color=ACCENT_HOVER if at == 0 else CARD_HOVER,
                 text_color=ACCENT_TEXT if at == 0 else TEXT, border_width=0 if at == 0 else 1,
@@ -6110,7 +6651,8 @@ class App(ctk.CTk):
                 command=command,
             ).grid(row=3 + at // 2, column=at % 2, sticky="ew",
                    padx=(12 if at % 2 == 0 else 3, 3 if at % 2 == 0 else 12), pady=3)
-        ctk.CTkFrame(card, fg_color="transparent", height=8).grid(row=8, column=0)
+        ctk.CTkFrame(holder, fg_color="transparent", height=8).grid(row=8, column=0)
+        return picture, title
 
     def save_project(self, videos=None):
         """Keep the script, its settings and AI pictures as a project.
@@ -6148,9 +6690,11 @@ class App(ctk.CTk):
                 first = keep
         s = self._collect_settings()
         data = dict(old or {}, script=script, settings={k: s[k] for k in projects.KEYS},
-                    clip_pos=dict(self.board_pos))
+                    clip_pos=dict(self.board_pos), thumbnail=dict(self.thumb))
         if videos:
             data["videos"] = list(videos)
+            if self._render_info:   # how long this PC took, for Home's "Usually takes"
+                data["took"] = round(time.time() - self._render_info["at"])
         projects.save(self.project, data)
         save_settings(s)
         if videos or first:
@@ -6195,7 +6739,7 @@ class App(ctk.CTk):
         use instead of the saved ones (Make a copy)."""
         if self.is_rendering:
             Dialog(self, "A video is being made",
-                   "Wait until it is done, or cancel it on the Log page, then open the project.",
+                   "Wait until it is done, or cancel it in the Log, then open the project.",
                    ok=False)
             return False
         data = projects.load(pid)
@@ -6229,6 +6773,7 @@ class App(ctk.CTk):
         if snap.get("aspect") != (data.get("settings") or {}).get("aspect"):
             data["clip_pos"] = {}   # clip picks belong to the other shape's search
         self.project = pid
+        self.thumb = dict({"scene": None, "title": ""}, **(data.get("thumbnail") or {}))
         if changes:
             projects.save(pid, dict(data, settings=snap))
         self.script_box.delete("1.0", "end")
@@ -6254,10 +6799,22 @@ class App(ctk.CTk):
     # The script as a card per scene. vidgen.board holds the scenes and every edit
     # is written straight back to the script editor, so the two never disagree.
     def _build_board(self):
-        page = ctk.CTkFrame(self.content, fg_color="transparent")
+        """The Storyboard: tabs Setup (scenes, timeline, this video's choices) and Log."""
+        outer = ctk.CTkFrame(self.content, fg_color="transparent")
+        outer.grid_columnconfigure(0, weight=1)
+        outer.grid_rowconfigure(1, weight=1)
+        head = ctk.CTkFrame(outer, fg_color="transparent")
+        head.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        ctk.CTkLabel(head, text="Storyboard", font=self.font_caption,
+                     text_color=TEXT_MUTED).pack(side="left", padx=(2, 14))
+        self.var_board_view = tk.StringVar(value=BOARD_VIEWS[0])
+        self._segmented(head, list(BOARD_VIEWS), self.var_board_view, 200)
+        page = ctk.CTkFrame(outer, fg_color="transparent")
         page.grid_columnconfigure(0, weight=1)
         page.grid_rowconfigure(1, weight=1)
-        self._caption(page, "STORYBOARD", 0, pady=(0, 6))
+        self.board_page = page
+        self.board_views = {"Setup": page, "Log": self._build_log(outer)}
+        self.var_board_view.trace_add("write", lambda *_a: self._show_board_view())
         self.board_list = ctk.CTkScrollableFrame(
             page, fg_color="transparent", scrollbar_fg_color=SCROLLBAR_BG,
             scrollbar_button_color=SCROLLBAR_THUMB,
@@ -6286,22 +6843,28 @@ class App(ctk.CTk):
         bar.grid(row=3, column=0, sticky="ew", pady=(PAD // 2, 0))
         bar.grid_columnconfigure(0, weight=1)
         steps = ctk.CTkFrame(bar, fg_color="transparent")
-        steps.grid(row=2, column=3, sticky="e", padx=14, pady=(0, 10))
-        for text, redo in (("Undo", False), ("Redo", True)):
-            ctk.CTkButton(steps, text=text, width=64, height=28, corner_radius=4,
-                          font=self.font_tiny, fg_color=FIELD_BG, hover_color=CARD_HOVER,
-                          border_width=1, border_color=FIELD_BORDER, text_color=TEXT,
-                          command=lambda r=redo: self.board_undo(r)).pack(side="left", padx=(4, 0))
+        steps.grid(row=1, column=3, sticky="e", padx=14, pady=(0, 10))
+        # Narrow window: the side panel opens over the scenes from here.
+        self.options_button = ctk.CTkButton(
+            steps, text="Video options", width=110, height=28, corner_radius=4,
+            font=self.font_tiny, fg_color=FIELD_BG, hover_color=CARD_HOVER, border_width=1,
+            border_color=FIELD_BORDER, text_color=TEXT, command=self._toggle_video_options)
+        undo = [ctk.CTkButton(steps, text=text, width=64, height=28, corner_radius=4,
+                              font=self.font_tiny, fg_color=FIELD_BG, hover_color=CARD_HOVER,
+                              border_width=1, border_color=FIELD_BORDER, text_color=TEXT,
+                              command=lambda r=redo: self.board_undo(r))
+                for text, redo in (("Undo", False), ("Redo", True))]
+        for button in undo:
+            button.pack(side="left", padx=(4, 0))
+        self._first_step = undo[0]
         self.bind_all("<Control-z>", lambda _e: self._undo_key(False), add="+")
         self.bind_all("<Control-y>", lambda _e: self._undo_key(True), add="+")
-        self._look_bar(bar).grid(row=0, column=0, columnspan=4, sticky="w", padx=14,
-                                 pady=(12, 0))
         self.board_comment = focus_accent(ctk.CTkEntry(
             bar, height=34, corner_radius=4, font=self.font_body, fg_color=FIELD_BG,
             border_color=FIELD_BORDER, text_color=TEXT,
             placeholder_text="Say what to change: make it shorter, more exciting start, "
                              "remove the part about..."))
-        self.board_comment.grid(row=1, column=0, sticky="ew", padx=(14, 8), pady=(10, 4))
+        self.board_comment.grid(row=0, column=0, sticky="ew", padx=(14, 8), pady=(12, 4))
         self.board_comment.bind(
             "<Return>", lambda _event: self.revise_script(self.board_comment.get()))
         self.board_change = ctk.CTkButton(
@@ -6309,21 +6872,248 @@ class App(ctk.CTk):
             fg_color=FIELD_BG, hover_color=CARD_HOVER, border_width=1,
             border_color=FIELD_BORDER, text_color=TEXT,
             command=lambda: self.revise_script(self.board_comment.get()))
-        self.board_change.grid(row=1, column=1, padx=(0, 8), pady=(10, 4))
+        self.board_change.grid(row=0, column=1, padx=(0, 8), pady=(12, 4))
         ctk.CTkButton(
             bar, text="Make both shapes", width=140, height=34, corner_radius=4,
             font=self.font_body, fg_color=FIELD_BG, hover_color=CARD_HOVER, border_width=1,
             border_color=FIELD_BORDER, text_color=TEXT, command=self.make_both_shapes,
-        ).grid(row=1, column=2, padx=(0, 8), pady=(10, 4))
+        ).grid(row=0, column=2, padx=(0, 8), pady=(12, 4))
         ctk.CTkButton(
             bar, text=f"{self.icon('play')}   Make video", width=150, height=34,
             corner_radius=4, font=self.font_bold, fg_color=ACCENT, hover_color=ACCENT_HOVER,
             text_color=ACCENT_TEXT, command=self.start_render,
-        ).grid(row=1, column=3, padx=(0, 14), pady=(10, 4))
+        ).grid(row=0, column=3, padx=(0, 14), pady=(12, 4))
         self.board_status = ctk.CTkLabel(bar, text="", font=self.font_tiny, text_color=TEXT_DIM,
                                          anchor="w", justify="left", wraplength=820)
-        self.board_status.grid(row=2, column=0, columnspan=3, sticky="w", padx=16, pady=(0, 10))
-        return page
+        self.board_status.grid(row=1, column=0, columnspan=3, sticky="w", padx=16, pady=(0, 10))
+        self.board_side = ctk.CTkScrollableFrame(
+            page, width=SIDE, fg_color="transparent", scrollbar_fg_color=SCROLLBAR_BG,
+            scrollbar_button_color=SCROLLBAR_THUMB,
+            scrollbar_button_hover_color=SCROLLBAR_THUMB_HOVER)
+        self.board_side.grid_columnconfigure(0, weight=1)
+        self._build_scene_preview(self.board_side)
+        self.video_box = self._build_video_box(self.board_side)
+        self._options_open = False
+        self._show_board_view()
+        return outer
+
+    def _layout_board(self):
+        """Wide: the side panel sits right of the scenes. Narrow: "Video options" opens it."""
+        side = self._frame_of(self.board_side)
+        tk.Frame.place_forget(side)
+        self._options_open = False
+        if self.wide:
+            self.board_side.grid(row=1, column=1, rowspan=3, sticky="ns", padx=(PAD, 0))
+            self.options_button.pack_forget()
+        else:
+            self.board_side.grid_remove()
+            self.options_button.configure(text="Video options")
+            self.options_button.pack(side="left", padx=(0, 8), before=self._first_step)
+        self._draw_timeline()
+
+    def _toggle_video_options(self):
+        side = self._frame_of(self.board_side)
+        self._options_open = not self._options_open
+        if self._options_open:
+            scale = ctk.ScalingTracker.get_widget_scaling(self)
+            tk.Frame.place(side, relx=1, rely=0, anchor="ne", relheight=1,
+                           width=(SIDE + 30) * scale)
+            side.lift()
+        else:
+            tk.Frame.place_forget(side)
+        self.options_button.configure(text="Hide options" if self._options_open
+                                      else "Video options")
+
+    # -- the side panel: the selected scene, big -------------------------------------
+    def _build_scene_preview(self, parent):
+        card = Card(parent)
+        card.pack(fill="x", pady=(0, PAD))
+        self.preview_title = ctk.CTkLabel(card, text="Scene 1", font=self.font_bold,
+                                          text_color=TEXT, anchor="w")
+        self.preview_title.pack(fill="x", padx=14, pady=(12, 6))
+        self.preview_picture = ctk.CTkLabel(card, text="No picture yet", fg_color=FIELD_BG,
+                                            corner_radius=6, font=self.font_tiny,
+                                            text_color=TEXT_DIM, width=180, height=320)
+        self.preview_picture.pack(padx=14)
+        self.preview_line = ctk.CTkLabel(card, text="", font=self.font_body, text_color=TEXT,
+                                         anchor="w", justify="left", wraplength=SIDE - 40)
+        self.preview_line.pack(fill="x", padx=14, pady=(8, 4))
+        ctk.CTkButton(card, text=f"{self.icon('play')}  Hear it", width=110, height=28,
+                      corner_radius=4, font=self.font_tiny, fg_color=FIELD_BG,
+                      hover_color=CARD_HOVER, border_width=1, border_color=FIELD_BORDER,
+                      text_color=TEXT, command=self._hear_selected).pack(anchor="w", padx=14,
+                                                                         pady=(0, 12))
+        self.board_selected, self._preview_image = 0, None
+
+    def _board_select(self, index):
+        """A scene card was clicked: it is shown big in the side panel."""
+        if self.board is None or not 0 <= index < len(self.board_cards):
+            return
+        self.board_selected = index
+        for at, widgets in enumerate(self.board_cards):
+            widgets["card"].configure(border_width=2 if at == index else 0,
+                                      border_color=ACCENT)
+        self._show_preview()
+
+    def _show_preview(self):
+        from PIL import Image, ImageOps
+
+        index = self.board_selected
+        if self.board is None or index >= len(self.board):
+            self.preview_title.configure(text="")
+            self.preview_line.configure(text="")
+            self.preview_picture.configure(image=None, text="No scenes yet")
+            return
+        self.preview_title.configure(text=f"Scene {index + 1}")
+        self.preview_line.configure(text=self.board.scenes[index].voice or "(no words)")
+        box = (180, 320) if self.var_aspect.get() == "9:16" else (SIDE - 28, 194)
+        self.preview_picture.configure(width=box[0], height=box[1])
+        path = self.board_paths.get(index)
+        try:
+            with Image.open(path) as opened:
+                fitted = ImageOps.fit(opened.convert("RGB"), (box[0] * 2, box[1] * 2))
+            self._preview_image = ctk.CTkImage(light_image=fitted, dark_image=fitted, size=box)
+            self.preview_picture.configure(image=self._preview_image, text="")
+        except Exception:  # noqa: BLE001 - no picture yet
+            self._preview_image = None
+            self.preview_picture.configure(image=None, text="No picture yet")
+
+    def _hear_selected(self):
+        if self.board is not None and self.board_selected < len(self.board):
+            voice = self.board.scenes[self.board_selected].voice
+            if voice:
+                self.hear_line(voice)
+
+    # -- the side panel: this video's choices, each in its own box -------------------
+    def _option_card(self, parent, glyph, title):
+        """A lighter box inside "This video": its title, then the body for its controls."""
+        card = ctk.CTkFrame(parent, fg_color=FIELD_BG, corner_radius=6)
+        card.pack(fill="x", padx=12, pady=(0, 8))
+        head = ctk.CTkFrame(card, fg_color="transparent")
+        head.pack(fill="x", padx=12, pady=(10, 6))
+        ctk.CTkLabel(head, text=self.icon(glyph), font=self.font_icon,
+                     text_color=TEXT_MUTED).pack(side="left", padx=(0, 8))
+        ctk.CTkLabel(head, text=title, font=self.font_bold, text_color=TEXT).pack(side="left")
+        body = ctk.CTkFrame(card, fg_color="transparent")
+        body.pack(fill="x", padx=12, pady=(0, 12))
+        return card, body
+
+    def _menu(self, parent, values, variable, width):
+        return ctk.CTkOptionMenu(
+            parent, values=values, variable=variable, width=width, height=30, corner_radius=4,
+            font=self.font_body, fg_color=CARD_BG, button_color=CARD_BG,
+            button_hover_color=CARD_HOVER, text_color=TEXT, text_color_disabled=TEXT_DIM,
+            dropdown_fg_color=CARD_BG, dropdown_text_color=TEXT, dropdown_hover_color=CARD_HOVER,
+            dropdown_font=self.font_body, dynamic_resizing=False)
+
+    def _build_video_box(self, parent):
+        """Everything about this video in one place: shape, captions, voice, length, looks.
+
+        The same variables as before, so the same settings keys are saved.
+        """
+        box = Card(parent)
+        box.pack(fill="x")
+        ctk.CTkLabel(box, text="This video", font=self.font_title, text_color=TEXT,
+                     anchor="w").pack(fill="x", padx=14, pady=(12, 8))
+        inner = SIDE - 56
+
+        _card, body = self._option_card(box, "aspect", "Shape")
+        FluentSegmented(body, self, RATIO_OPTIONS, self.var_aspect, inner).pack(anchor="w")
+        ctk.CTkLabel(body, text="9:16 for Shorts and TikTok, 16:9 for YouTube", font=self.font_tiny,
+                     text_color=TEXT_DIM, anchor="w").pack(fill="x", pady=(6, 0))
+
+        _card, body = self._option_card(box, "captions", "Captions")
+        ctk.CTkSwitch(body, text="Show captions", font=self.font_body, text_color=TEXT,
+                      variable=self.var_captions, onvalue=True, offvalue=False,
+                      progress_color=ACCENT).pack(anchor="w")
+        grid = ctk.CTkFrame(body, fg_color="transparent")
+        grid.pack(fill="x", pady=(8, 8))
+        self.caption_menus = []
+        for at, (key, allowed, _default) in enumerate(CAPTION_SETTINGS):
+            menu = self._menu(grid, list(allowed), self.caption_vars[key], (inner - 8) // 2)
+            menu.grid(row=at // 2, column=at % 2, padx=(0, 8) if at % 2 == 0 else 0, pady=2)
+            self.caption_menus.append(menu)
+        self.caption_sample = ctk.CTkFrame(body, fg_color="#101010", corner_radius=6,
+                                           height=96, width=inner)
+        self.caption_sample.pack(fill="x")
+        self.caption_sample.pack_propagate(False)
+        self._caption_words = None
+        for var in (self.var_captions, *self.caption_vars.values()):
+            var.trace_add("write", self._sync_caption_controls)
+        self.var_aspect.trace_add("write", self._shape_changed)
+
+        _card, body = self._option_card(box, "voice", "Voice")
+        self.voice_menus.append(self._menu(body, VOICE_OPTIONS, self.var_voice, inner))
+        self.voice_menus[-1].pack(anchor="w")
+        self.preview_button = ctk.CTkButton(
+            body, text=f"{self.icon('play')}  Preview Voice", width=150,
+            height=30, corner_radius=4, font=self.font_body, fg_color=CARD_BG,
+            hover_color=CARD_HOVER, border_width=1, border_color=FIELD_BORDER,
+            text_color=TEXT, command=self.preview_voice)
+        self.preview_button.pack(anchor="w", pady=(8, 0))
+
+        _card, body = self._option_card(box, "timer", "Length")
+        FluentSegmented(body, self, list(pacing.TARGETS), self.var_target, inner).pack(anchor="w")
+        versions = ctk.CTkFrame(body, fg_color="transparent")
+        versions.pack(fill="x", pady=(8, 0))
+        ctk.CTkLabel(versions, text="Versions", font=self.font_body,
+                     text_color=TEXT).pack(side="left", padx=(0, 12))
+        FluentSegmented(versions, self, list(VERSION_OPTIONS), self.var_versions, 100).pack(
+            side="left")
+        # Its own line, so "too short for 60 s" is never cut off.
+        self.estimate_label = ctk.CTkLabel(body, text="", font=self.font_tiny,
+                                           text_color=TEXT_MUTED, anchor="w", justify="left",
+                                           wraplength=inner)
+        self.estimate_label.pack(fill="x", pady=(8, 0))
+
+        # The look of AI pictures: only there once AI pictures are downloaded.
+        self.look_bar, body = self._option_card(box, "images", "AI picture look")
+        FluentSegmented(body, self, list(imagegen.LOOKS), self.var_ai_look, inner).pack(
+            anchor="w")
+        look_hint = ctk.CTkLabel(body, text=AI_LOOK_HINTS.get(self.var_ai_look.get(), ""),
+                                 font=self.font_tiny, text_color=TEXT_DIM, anchor="w",
+                                 justify="left", wraplength=inner)
+        look_hint.pack(fill="x", pady=(6, 0))
+        self.var_ai_look.trace_add("write", lambda *_args: look_hint.configure(
+            text=AI_LOOK_HINTS.get(self.var_ai_look.get(), "")))
+
+        self.style_card, body = self._option_card(box, "script", "Style")
+        FluentSegmented(body, self, list(drawn.STYLES), self.var_style, inner).pack(anchor="w")
+        ctk.CTkLabel(body, text="Normal footage, or every scene drawn: chalk on a blackboard, or a "
+                                "flat-colour drawing", font=self.font_tiny, text_color=TEXT_DIM,
+                     anchor="w", justify="left", wraplength=inner).pack(fill="x", pady=(6, 0))
+
+        _card, body = self._option_card(box, "resolution", "Thumbnail")
+        self.thumb_label = ctk.CTkLabel(body, text="Made when the scenes have pictures",
+                                        fg_color=CARD_BG, corner_radius=4, width=108, height=192,
+                                        font=self.font_tiny, text_color=TEXT_DIM,
+                                        wraplength=100)
+        self.thumb_label.pack(anchor="w")
+        buttons = ctk.CTkFrame(body, fg_color="transparent")
+        buttons.pack(fill="x", pady=(8, 0))
+        for text, command in (("Change picture", self.next_thumb_scene),
+                              ("Edit thumbnail", lambda: ThumbDialog(self))):
+            ctk.CTkButton(buttons, text=text, width=130, height=28, corner_radius=4,
+                          font=self.font_tiny, fg_color=CARD_BG, hover_color=CARD_HOVER,
+                          border_width=1, border_color=FIELD_BORDER, text_color=TEXT,
+                          command=command).pack(side="left", padx=(0, 8))
+        ctk.CTkFrame(box, fg_color="transparent", height=4).pack()
+        self._sync_look_bar()
+        self._sync_caption_controls()
+        return box
+
+    def _show_board_view(self):
+        for name, view in self.board_views.items():
+            if name == self.var_board_view.get():
+                view.grid(row=1, column=0, sticky="nsew")
+            else:
+                view.grid_remove()
+
+    def _to_from_text(self, text):
+        """Plain text in the script box: move it to Make new video > From text."""
+        self.door_box.delete("1.0", "end")
+        self.door_box.insert("1.0", text)
+        self.select_page("new")
 
     def board_box(self):
         """The size of a card's picture: the shape of the video, small."""
@@ -6336,33 +7126,45 @@ class App(ctk.CTk):
             return
         for child in self.board_list.winfo_children():
             child.destroy()
-        self.board_cards, self.board_images = [], {}
+        self.board_cards, self.board_images, self.board_paths = [], {}, {}
+        self._timeline_pictures = {}
         self.board_gen += 1
         try:
             self.board = boards.Board.from_text(text)
         except ScriptError as exc:
             self.board, self.board_text = None, None
-            hint = ("There is plain text in the script box. Paste it on Home instead and press "
-                    "Make my video." if looks_like_plain_text(text) else
+            hint = ("There is plain text in the script box. Paste it in Make new video > From text "
+                    "instead and press Make video." if looks_like_plain_text(text) else
                     f"The script has a mistake, so there is nothing to show yet.\n{exc}\n"
-                    "Fix it on the Script page.")
+                    "Fix it in Settings > Advanced > Script editor.")
             ctk.CTkLabel(self.board_list, text=hint, font=self.font_body, text_color=TEXT_MUTED,
                          justify="left", anchor="w").grid(row=0, column=0, sticky="w",
-                                                          padx=8, pady=20)
+                                                          padx=8, pady=(20, 8))
+            if looks_like_plain_text(text):
+                label, command = "Use it in From text", lambda: self._to_from_text(text)
+            else:
+                label, command = "Open the script", lambda: self.select_page("create")
+            ctk.CTkButton(self.board_list, text=label, width=170, height=32, corner_radius=4,
+                          font=self.font_body, fg_color=ACCENT, hover_color=ACCENT_HOVER,
+                          text_color=ACCENT_TEXT, command=command).grid(row=1, column=0,
+                                                                        sticky="w", padx=8)
             self._draw_timeline()
             return
         self.board_text = text
         self._draw_timeline()
+        lengths = self.board.lengths(voices.persona(self.var_voice.get()),
+                                     PADDING_OPTIONS.get(self.var_padding.get(), DEFAULT_PADDING))
         for index in range(len(self.board)):
-            self._board_card(index)
+            self._board_card(index, lengths)
+        self._board_select(min(self.board_selected, len(self.board) - 1))
         if not self._revising:
             self.board_status.configure(
-                text=f"{len(self.board)} scenes. Change anything here; it is the same video as "
-                     "on the Script page.", text_color=TEXT_DIM)
+                text=f"{len(self.board)} scenes. Change anything here, then press Make video.",
+                text_color=TEXT_DIM)
         threading.Thread(target=self._board_load, daemon=True,
                          args=(self.board_gen, list(self.board.scenes), self._board_ctx())).start()
 
-    def _board_card(self, index):
+    def _board_card(self, index, lengths=()):
         scene, kind = self.board.scenes[index], self.board.source(index)
         box = self.board_box()
         card = Card(self.board_list)
@@ -6371,6 +7173,8 @@ class App(ctk.CTk):
         picture = ctk.CTkLabel(card, text="...", width=box[0], height=box[1], fg_color=FIELD_BG,
                                corner_radius=4, font=self.font_tiny, text_color=TEXT_DIM)
         picture.grid(row=0, column=0, rowspan=4, padx=(10, 12), pady=10)
+        for widget in (card, picture):   # a click shows the scene big in the side panel
+            widget.bind("<Button-1>", lambda _e, i=index: self._board_select(i))
 
         head = ctk.CTkFrame(card, fg_color="transparent")
         head.grid(row=0, column=1, sticky="ew", pady=(8, 0))
@@ -6381,6 +7185,9 @@ class App(ctk.CTk):
                          text_color=WARN_COLOR).pack(side="left")
         status = ctk.CTkLabel(head, text="", font=self.font_tiny, text_color=TEXT_DIM)
         status.pack(side="left", padx=(10, 0))
+        if index < len(lengths):
+            ctk.CTkLabel(head, text=f"{lengths[index]:.1f} s", font=self.font_tiny,
+                         text_color=TEXT_DIM).pack(side="right", padx=(0, 4))
 
         def field(row, name, value, hint):
             entry = focus_accent(ctk.CTkEntry(
@@ -6389,6 +7196,7 @@ class App(ctk.CTk):
             if value:
                 entry.insert(0, value)
             entry.grid(row=row, column=1, sticky="ew", pady=2)
+            entry.bind("<FocusIn>", lambda _e, i=index: self._board_select(i), add="+")
             for event in ("<FocusOut>", "<Return>"):
                 entry.bind(event, lambda _e, i=index, n=name, w=entry: self._board_edit(i, n, w.get()))
             return entry
@@ -6433,7 +7241,8 @@ class App(ctk.CTk):
                           ("Add", lambda i=index: self.board.insert(i)),
                           ("Delete", lambda i=index: self.board.delete(i))):
             button(order, text, lambda a=act: self._board_do(a), width=64).pack(pady=(0, 4))
-        self.board_cards.append({"picture": picture, "status": status, "action": action})
+        self.board_cards.append({"picture": picture, "status": status, "action": action,
+                                 "card": card})
 
     # -- edits: every one is written back to the script -------------------------------
     # -- the timeline under the cards ---------------------------------------------------
@@ -6460,12 +7269,82 @@ class App(ctk.CTk):
                 WARN_COLOR if cut else CARD_HOVER if fixed else CARD_BG))
             canvas.create_rectangle(x + w - 8, 4, x + w - 3, 42, outline="",
                                     fill=theme_color(ACCENT if fixed else FIELD_BORDER))
+            picture = self._timeline_picture(i) if self.wide and w > 90 else None
+            if picture is not None:
+                canvas.create_image(x + 4, 23, anchor="w", image=picture)
             if w > 34:
                 label = f"{i + 1}  {length:.1f} s" if w > 70 else str(i + 1)
-                canvas.create_text(x + 7, 23, anchor="w", text=label, font=self.font_tiny,
+                canvas.create_text(x + 7 + (picture.width() + 4 if picture else 0), 23,
+                                   anchor="w", text=label, font=self.font_tiny,
                                    fill=theme_color(TEXT))
             x += w
             self._timeline_edges.append(x)
+
+    def _timeline_picture(self, index):
+        """A 34 px high picture of scene ``index`` for its timeline block, or None."""
+        path = self.board_paths.get(index)
+        if not path:
+            return None
+        kept = self._timeline_pictures.get(index)
+        if kept and kept[0] == path:
+            return kept[1]
+        from PIL import Image, ImageTk
+
+        try:
+            with Image.open(path) as opened:
+                small = opened.convert("RGB")
+            small.thumbnail((60, 34))
+            photo = ImageTk.PhotoImage(small, master=self.timeline)
+        except Exception:  # noqa: BLE001 - no picture: the block stays plain
+            return None
+        self._timeline_pictures[index] = (path, photo)
+        return photo
+
+    # -- the thumbnail: made from the scenes' pictures as soon as there are some --------
+    def _thumb_scenes(self):
+        return sorted(i for i, path in self.board_paths.items() if path and os.path.isfile(path))
+
+    def _thumb_scene(self):
+        """The scene the thumbnail uses: the chosen one, else the first with a picture."""
+        found = self._thumb_scenes()
+        chosen = self.thumb.get("scene")
+        return chosen if chosen in found else (found[0] if found else None)
+
+    def thumb_title(self):
+        return self.thumb.get("title") or projects.default_title(
+            self.script_box.get("1.0", "end"), 60)
+
+    def next_thumb_scene(self):
+        found, now = self._thumb_scenes(), self._thumb_scene()
+        if found:
+            self.thumb["scene"] = found[(found.index(now) + 1) % len(found)]
+            self._refresh_thumb()
+
+    def _schedule_thumb(self):
+        if self._thumb_job:
+            self.after_cancel(self._thumb_job)
+        self._thumb_job = self.after(300, self._refresh_thumb)
+
+    def _refresh_thumb(self):
+        from vidgen import thumbnail
+
+        self._thumb_job = None
+        index = self._thumb_scene()
+        portrait = self.var_aspect.get() == "9:16"
+        box = (108, 192) if portrait else (240, 135)
+        self.thumb_label.configure(width=box[0], height=box[1])
+        if index is None:
+            self._thumb_image = None
+            self.thumb_label.configure(image=None, text="Made when the scenes have pictures")
+            return
+        try:
+            made = thumbnail.from_image(self.board_paths[index], self.thumb_title(),
+                                        thumbnail.PORTRAIT if portrait else thumbnail.LANDSCAPE)
+        except Exception:  # noqa: BLE001 - the render still makes one
+            return
+        made.thumbnail(box)
+        self._thumb_image = ctk.CTkImage(light_image=made, dark_image=made, size=made.size)
+        self.thumb_label.configure(image=self._thumb_image, text="")
 
     def _timeline_at(self, x):
         """(scene index, whether x is on its right edge) for a point on the strip."""
@@ -6607,9 +7486,9 @@ class App(ctk.CTk):
                 path = self.board_pictures.get(self._picture_key(scene, ctx))
                 note = "AI picture" if path else (
                     "AI picture: made with the video, or press Make picture to see it now"
-                    if ctx["ai"] else "AI picture: download AI images to use it")
+                    if ctx["ai"] else "AI picture: download AI pictures in Settings to use it")
             elif not ctx["has_key"]:
-                note = "Stock clip: add a free key in Settings to see it"
+                note = "Stock clip: add a free key in Settings > Footage keys to see it"
             else:
                 query = scene.visual
                 if query not in self.board_clips:
@@ -6716,6 +7595,11 @@ class App(ctk.CTk):
                 fitted = ImageOps.fit(opened.convert("RGB"), (box[0] * 2, box[1] * 2))
             self.board_images[index] = ctk.CTkImage(light_image=fitted, dark_image=fitted, size=box)
             picture.configure(image=self.board_images[index], text="")
+            self.board_paths[index] = path
+            if index == self.board_selected:
+                self._show_preview()
+            self._draw_timeline()
+            self._schedule_thumb()
         except Exception:  # noqa: BLE001 - no path, or not a picture
             self.board_images.pop(index, None)
             picture.configure(image=None, text="No picture\nyet")
@@ -6800,6 +7684,7 @@ class App(ctk.CTk):
             return
         self.board = boards.Board(after)
         self.board_marked = marked
+        self.mark_started("rewrite")
         self._board_write()
         self.refresh_board(force=True)
         self.board_comment.delete(0, "end")
@@ -6811,7 +7696,7 @@ class App(ctk.CTk):
             parts = ["the order changed"]
         self.board_status.configure(
             text=", ".join(parts).capitalize() + ". Look them over, then press Make video. "
-                 "The Script page has the old lines if you undo there (Ctrl+Z).",
+                 "The Script editor (Settings > Advanced) has the old lines if you undo there (Ctrl+Z).",
             text_color=OK_COLOR)
         self.save_project()
 
@@ -6861,12 +7746,12 @@ class App(ctk.CTk):
         save_settings(self._collect_settings())
 
     # ----------------------------------------------------------- AI IMAGES --
-    def _build_images(self):
-        page = self._scroll_page()
+    def _build_images(self, parent):
+        page = self._scroll_page(parent)
         page.grid_columnconfigure(0, weight=1)
         rows = itertools.count()
 
-        self._caption(page, "AI IMAGES (OPTIONAL)", next(rows), pady=(0, 6))
+        self._caption(page, "AI pictures (optional)", next(rows), pady=(0, 6))
         pack_row = SettingRow(
             page, self, self.icon("images"), "AI pictures, made on this PC",
             f"{imagegen.MODEL.name}, an open-source model, draws a picture for scenes stock "
@@ -6893,18 +7778,13 @@ class App(ctk.CTk):
                      font=self.font_body, text_color=WARN_COLOR, anchor="w", justify="left",
                      wraplength=820).pack(fill="x", padx=16, pady=12)
 
-        self._caption(page, "IN YOUR VIDEOS", next(rows))
+        self._caption(page, "In your videos", next(rows))
         for_row = SettingRow(
             page, self, self.icon("script"), "Use AI pictures for",
             "Which scenes New from text gives an AI picture")
         for_row.grid(row=next(rows), column=0, sticky="ew", pady=PAD // 2)
         self._segmented(for_row.control, list(AI_IMAGES_FOR), self.var_ai_for, 470)
         self._choice_hint(page, next(rows), self.var_ai_for, AI_FOR_HINTS)
-        look_row = SettingRow(page, self, self.icon("resolution"), "Look",
-                              "One look for the whole video, so its pictures match")
-        look_row.grid(row=next(rows), column=0, sticky="ew", pady=PAD // 2)
-        self._segmented(look_row.control, list(imagegen.LOOKS), self.var_ai_look, 380)
-        self._choice_hint(page, next(rows), self.var_ai_look, AI_LOOK_HINTS)
 
         device_row = SettingRow(page, self, self.icon("resolution"), "Make pictures on",
                                 "Where the AI pictures are made")
@@ -6937,7 +7817,7 @@ class App(ctk.CTk):
                                           text_color=TEXT_MUTED, anchor="w", justify="left")
         self.speed_results.grid(row=next(rows), column=0, sticky="w", padx=18, pady=(0, 6))
 
-        self._caption(page, "MOVING PICTURES (BETA, GRAPHICS CARD ONLY)", next(rows))
+        self._caption(page, "Moving pictures (beta, graphics card only)", next(rows))
         moving_row = SettingRow(
             page, self, self.icon("play"), "Make AI pictures move",
             f"{animate.VIDEO_MODEL.name} turns a picture into a short moving clip. A separate "
@@ -6958,7 +7838,7 @@ class App(ctk.CTk):
         self._choice_hint(page, next(rows), self.var_animate, MOVING_HINTS)
         self._moving_row_changed()
 
-        self._caption(page, "TRY IT", next(rows))
+        self._caption(page, "Try it", next(rows))
         try_card = Card(page)
         try_card.grid(row=next(rows), column=0, sticky="ew", pady=(PAD // 2, PAD))
         try_card.grid_columnconfigure(0, weight=1)
@@ -6973,11 +7853,32 @@ class App(ctk.CTk):
             font=self.font_body, fg_color=ACCENT, hover_color=ACCENT_HOVER,
             text_color=ACCENT_TEXT, command=self.try_picture)
         self.try_button.grid(row=0, column=1, padx=(0, 16), pady=(14, 6))
+        # Shown once a picture is made.
+        self.try_save = ctk.CTkButton(
+            try_card, text="Save picture", width=120, height=34, corner_radius=4,
+            font=self.font_body, fg_color=FIELD_BG, hover_color=CARD_HOVER, border_width=1,
+            border_color=FIELD_BORDER, text_color=TEXT, command=self.save_try_picture)
+        self.try_save.grid(row=0, column=2, padx=(0, 16), pady=(14, 6))
+        self.try_save.grid_remove()
         self.try_status = ctk.CTkLabel(try_card, text="", font=self.font_tiny,
                                        text_color=TEXT_DIM, anchor="w")
-        self.try_status.grid(row=1, column=0, columnspan=2, sticky="w", padx=16)
+        self.try_status.grid(row=1, column=0, columnspan=3, sticky="w", padx=16)
         self.try_picture_label = ctk.CTkLabel(try_card, text="", width=10, height=10)
-        self.try_picture_label.grid(row=2, column=0, columnspan=2, pady=(6, 14))
+        self.try_picture_label.grid(row=2, column=0, columnspan=3, pady=(6, 14))
+
+        threads_row = SettingRow(
+            page, self, self.icon("timer"), "AI picture threads",
+            "How many processor threads make an AI picture when there is no graphics card. "
+            "Auto uses the result of Test speed above")
+        threads_row.grid(row=next(rows), column=0, sticky="ew", pady=PAD // 2)
+        ctk.CTkOptionMenu(
+            threads_row.control, values=list(AI_THREAD_OPTIONS), variable=self.var_ai_threads,
+            width=110, height=32, corner_radius=4, font=self.font_body, fg_color=FIELD_BG,
+            button_color=FIELD_BG, button_hover_color=CARD_HOVER, text_color=TEXT,
+            dropdown_fg_color=CARD_BG, dropdown_text_color=TEXT, dropdown_hover_color=CARD_HOVER,
+            dropdown_font=self.font_body, dynamic_resizing=False,
+            command=lambda _value: save_settings(self._collect_settings()),
+        ).pack(side="left")
 
         self._images_row_changed()
         return page
@@ -6996,7 +7897,7 @@ class App(ctk.CTk):
             self.moving_button.configure(text="Remove", command=self.remove_moving)
         else:
             self.moving_state.configure(
-                text="Needs AI images first" if not imagegen.installed() else
+                text="Needs AI pictures first" if not imagegen.installed() else
                 f"Not downloaded ({animate.SIZE / 1e9:.1f} GB)", text_color=TEXT_MUTED)
             self.moving_button.configure(text="Download", command=self.download_moving,
                                          state="normal" if imagegen.installed() else "disabled")
@@ -7224,7 +8125,7 @@ class App(ctk.CTk):
             self.images_retry.pack_forget()
         self._sync_look_bar()
         if not imagegen.installed():
-            self.try_status.configure(text="Download AI images first.", text_color=TEXT_DIM)
+            self.try_status.configure(text="Download AI pictures first.", text_color=TEXT_DIM)
 
     def remember_ai_backend(self, backend):
         """Keep what AI pictures need on this PC: "cpu" after the graphics card failed."""
@@ -7234,7 +8135,7 @@ class App(ctk.CTk):
         save_settings(self._collect_settings())
         self.append_log(
             "🎨 The graphics card could not make an AI picture, so the processor is used from "
-            "now on. The AI images tab can switch back." if backend == imagegen.CPU
+            "now on. Settings > AI pictures can switch back." if backend == imagegen.CPU
             else "🎨 AI pictures will try the graphics card again.")
         if hasattr(self, "images_state"):
             self._images_row_changed()
@@ -7243,11 +8144,11 @@ class App(ctk.CTk):
         """Remove deletes 4.2 GB, so it takes a second press."""
         if not self._images_confirm:
             self._images_confirm = True
-            self.images_state.configure(text="Press again to remove AI images",
+            self.images_state.configure(text="Press again to remove AI pictures",
                                         text_color=ERR_COLOR)
             return
         imagegen.remove()
-        self.append_log("🗑️ AI images removed.")
+        self.append_log("🗑️ AI pictures removed.")
         self._images_row_changed()
         self.refresh_estimate()
 
@@ -7258,7 +8159,7 @@ class App(ctk.CTk):
         self.images_downloading = True
         self._images_stop = stop = threading.Event()
         total = sum(m.size for m in imagegen.needed_files())
-        self.append_log(f"⬇️ Downloading AI images ({total / 1e9:.1f} GB)...")
+        self.append_log(f"⬇️ Downloading AI pictures ({total / 1e9:.1f} GB)...")
 
         def worker():
             last = 0.0
@@ -7313,6 +8214,26 @@ class App(ctk.CTk):
 
         threading.Thread(target=worker, daemon=True).start()
 
+    def save_try_picture(self, ask=None):
+        """Save the Try it picture where the user picks. A folder that refuses files (a school
+        PC's protected Pictures) falls back to a safe folder, and the status line says where."""
+        name = re.sub(r'[\\/:*?"<>|]+', "", self.try_entry.get()).strip()[:60] or "AI picture"
+        dest = (ask or filedialog.asksaveasfilename)(
+            parent=self, title="Save picture", defaultextension=".png",
+            filetypes=[("PNG picture", "*.png")], initialfile=f"{name}.png",
+            initialdir=paths.known_folder(paths.CSIDL_MYPICTURES, "Pictures"))
+        if not dest:
+            return
+        try:
+            dest, moved = paths.usable_output(dest, paths.safe_folders())
+            shutil.copyfile(os.path.join(PREVIEW_DIR, "ai_try.png"), dest)
+        except (OSError, paths.SaveError) as exc:
+            self.try_status.configure(text=f"Could not save the picture: {exc}",
+                                      text_color=ERR_COLOR)
+            return
+        where = "That folder is protected, so it was saved to " if moved else "Saved to "
+        self.try_status.configure(text=where + dest, text_color=OK_COLOR)
+
     def _images_event(self, payload):
         """UI thread: news from the AI images download or the Try it box."""
         event = payload["event"]
@@ -7333,6 +8254,7 @@ class App(ctk.CTk):
                 picture = opened.convert("RGB")
             self._try_image = ctk.CTkImage(light_image=picture, dark_image=picture, size=shown)
             self.try_picture_label.configure(image=self._try_image)
+            self.try_save.grid()
             where = "the processor" if payload["backend"] == imagegen.CPU else "the graphics card"
             self.try_status.configure(
                 text=f"Made in {payload['seconds']:.0f} s on {where}.", text_color=OK_COLOR)
@@ -7341,8 +8263,8 @@ class App(ctk.CTk):
             return
         if event != "progress":
             self.images_downloading = False
-            self.append_log({"done": "✅ AI images are ready.",
-                             "stopped": "⏸️ AI images download paused.",
+            self.append_log({"done": "✅ AI pictures are ready.",
+                             "stopped": "⏸️ AI pictures download paused.",
                              "failed": f"⚠️ {payload.get('message', '')}"}[event])
             self.refresh_estimate()
         self._images_row_changed(payload)
@@ -7548,7 +8470,7 @@ class App(ctk.CTk):
             failed = "".join(f"\nVideo {n}: {why}" for n, why in b["failed"])
             self.append_log(f"📚 Done: {len(b['made'])} of {len(b['texts'])} videos made.")
             Dialog(self, "Videos made", f"{len(b['made'])} of {len(b['texts'])} videos were "
-                   f"made. They are on the Projects page and in {b['folder']}." + failed,
+                   f"made. They are in My videos and in {b['folder']}." + failed,
                    ok=not b["failed"])
             if self.current_page == "projects":
                 self.refresh_projects()
@@ -7588,6 +8510,7 @@ class App(ctk.CTk):
         result = payload["result"]
         b["upload"] = payload.get("upload")
         self.project = None   # each video is its own project
+        self.thumb = {"scene": None, "title": ""}
         audience = b["audience"]   # as use_draft keeps it: the music's mood follows it
         self.audience = {"audience_content": audience.content, "audience_age": audience.age,
                          "audience_platform": audience.platform}
@@ -7674,6 +8597,12 @@ class App(ctk.CTk):
             overwrite = True
 
         self.project = self.project or projects.new_id()
+        try:
+            has_ai = any(scene.is_ai for scene in parse_script(pasted))
+        except ScriptError:
+            has_ai = False
+        self._render_info = {"at": time.time(), "ai": has_ai, "tip": self._tip_pending}
+        self._tip_pending = False
         # Snapshot every widget value here, on the UI thread.
         settings = self._collect_settings()
         self.settings = settings
@@ -7687,7 +8616,8 @@ class App(ctk.CTk):
                    ai_images_speed=self.ai_speed_now(), ai_threads=self.threads_pair(),
                    ai_images_backend=self.ai_backend_now(),
                    project_dir=projects.folder(self.project),
-                   target_length=pacing.TARGETS.get(settings["target_length"]))
+                   target_length=pacing.TARGETS.get(settings["target_length"]),
+                   thumbnail_scene=self._thumb_scene(), thumbnail_title=self.thumb_title())
 
         if cfg["music_path"] == AUTO_TRACK:
             cfg["music_path"] = draft.pick_track(bundled_tracks(), self.audience[

@@ -126,9 +126,28 @@ def _year(n: int) -> str:
     return _two_digits(high) + (" oh " + _ONES[low] if low < 10 else " " + _two_digits(low))
 
 
+# Capitals that are said as words, not letters: espeak-ng spells out any word in capitals
+# ("RAM" came out as "R A M"). Others (USB, PC, GPU) are meant to be spelled, so they stay.
+SAID_AS_WORDS = {
+    "RAM": "ram", "ROM": "rom", "NASA": "nasa", "GIF": "gif", "GIFS": "gifs", "JPEG": "jay peg",
+    "JPG": "jay peg", "CAPTCHA": "captcha", "SIM": "sim", "PIN": "pin", "LAN": "lan",
+    "WAN": "wan", "SATA": "sata", "NAND": "nand", "BIOS": "bye oss", "RAID": "raid",
+    "ASCII": "ass key", "GUI": "gooey", "SCSI": "scuzzy", "DOS": "doss", "MIDI": "middy",
+    "NATO": "nato", "UNESCO": "unesco", "COVID": "covid", "LASER": "laser", "RADAR": "radar",
+    "SONAR": "sonar", "SWAT": "swat", "IKEA": "ikea", "WIFI": "wifi", "WI-FI": "wifi",
+    "LOL": "lol", "YOLO": "yolo", "FOMO": "fomo", "ASAP": "a sap", "AIDS": "aids",
+    "SQL": "sequel", "NOAA": "noah", "OPEC": "oh peck", "FIFA": "fifa", "UEFA": "you ay fa",
+}
+
+
 def speakable(word: str) -> str:
-    """``word`` the way it should be read out: years and dollar amounts spelled the usual way."""
+    """``word`` the way it should be read out: years and dollar amounts spelled the usual way,
+    and capitals that are words (RAM, NASA) read as words."""
     word = word.replace("’", "'").replace("‘", "'")
+    if word in SAID_AS_WORDS:
+        return SAID_AS_WORDS[word]
+    if word.endswith("s") and word[:-1] in SAID_AS_WORDS:   # "LASERs"
+        return SAID_AS_WORDS[word[:-1]] + "s"
     money = re.fullmatch(r"\$(\d[\d,.]*)([a-zA-Z]*)", word)
     if money:
         return f"{money.group(1)}{money.group(2)} dollars"

@@ -67,17 +67,28 @@ def draw_title(image, title: str):
     return image
 
 
-def make(video: str, title: str, dest: str, pauses=()) -> str:
+def from_image(path: str, title: str, size):
+    """A thumbnail from one picture (a scene's still): filled to ``size``, with the title."""
+    from PIL import Image, ImageOps
+
+    with Image.open(path) as opened:
+        picture = ImageOps.fit(opened.convert("RGB"), size)
+    return draw_title(picture, title)
+
+
+def make(video: str, title: str, dest: str, pauses=(), at=None) -> str:
     """Write the thumbnail for ``video`` to ``dest`` (a .jpg) and return ``dest``.
 
-    ``pauses`` are moments between spoken lines, when no caption is on screen; they are
-    preferred, the even spread through the video is the fallback.
+    ``at``: the moment chosen in the Storyboard. Without it, ``pauses`` (moments between
+    spoken lines, when no caption is on screen) are preferred, the even spread through the
+    video is the fallback.
     """
     width, height, length = preview.probe(video)
     size = PORTRAIT if height > width else LANDSCAPE
     small = preview.fit((width, height), (size[0] // 2, size[1] // 2))
     times = [t for t in pauses if SKIP < t < length - SKIP][:FRAMES] or moments(length)
-    best = max(times, key=lambda t: sharpness(preview.poster(video, small, at=t)))
+    best = at if at is not None else \
+        max(times, key=lambda t: sharpness(preview.poster(video, small, at=t)))
     frame = preview.poster(video, preview.fit((width, height), size), at=best)
     from PIL import Image
 
