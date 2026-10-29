@@ -144,6 +144,28 @@ def persona(value) -> Persona:
     return find(value) or _BY_KEY[DEFAULT_ID]
 
 
+# The Storyboard's Speed choice, on top of each voice's own pace.
+SPEEDS = {"Slower": 0.88, "Normal": 1.0, "Faster": 1.12}
+DEFAULT_SPEED = "Normal"
+
+
+def at_speed(found: Persona, speed) -> Persona:
+    """``found`` read at ``speed`` (a SPEEDS name or a factor): its rate is scaled, so the
+    voice, the length estimate and the timeline all follow it."""
+    from dataclasses import replace
+
+    factor = SPEEDS.get(speed, speed) if isinstance(speed, str) else (speed or 1.0)
+    if factor == 1.0:
+        return found
+    sign, digits = (found.rate or "+0%").strip().rstrip("%")[:1], \
+        (found.rate or "+0%").strip().rstrip("%")[1:]
+    try:
+        own = 1.0 + float(sign + digits) / 100.0
+    except ValueError:
+        own = 1.0
+    return replace(found, rate=f"{(own * factor - 1) * 100:+.0f}%")
+
+
 LANGUAGES = tuple(dict.fromkeys(p.language for p in CATALOG if p.language != "English"))
 
 

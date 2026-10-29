@@ -133,9 +133,9 @@ def _synthesise(text, persona, mp3_path):
             time.sleep(1.5 * (attempt + 1))
 
 
-def generate_voiceover(text, filename, log_func, voice_choice, online=False):
+def generate_voiceover(text, filename, log_func, voice_choice, online=False, speed=None):
     """Voice ``text`` into ``filename``; returns the path actually written."""
-    return generate_voiceover_timed(text, filename, log_func, voice_choice, online)[0]
+    return generate_voiceover_timed(text, filename, log_func, voice_choice, online, speed)[0]
 
 
 def myvoice_ready() -> bool:
@@ -211,7 +211,8 @@ def _local(text, persona, base, log_func):
         return paced, words
 
 
-def generate_voiceover_timed(text, filename, log_func, voice_choice, online=False):
+def generate_voiceover_timed(text, filename, log_func, voice_choice, online=False,
+                             speed=None):
     """Voice ``text`` into ``filename``; returns (path written, word timings).
 
     Word timings are (start, duration, word) in seconds within the returned
@@ -222,7 +223,7 @@ def generate_voiceover_timed(text, filename, log_func, voice_choice, online=Fals
     the line is still used, unmastered, with a warning - polish never sinks a
     render. The offline voice always writes a WAV.
     """
-    persona = voices.persona(voice_choice)
+    persona = voices.at_speed(voices.persona(voice_choice), speed)
     log_func(f"🗣️ Generating {persona.short} Voice: '{text}'")
 
     base = os.path.splitext(filename)[0]

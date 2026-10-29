@@ -156,22 +156,7 @@ def mix_audio(voices, music, total: float):
 # --- sound effects: made here, so there is nothing to download or license ----------------
 
 SFX_RATE = 44100
-WHOOSH_LENGTH, WHOOSH_GAIN, WHOOSH_LEAD = 0.45, 0.10, 0.32  # it peaks just before the cut
 POP_LENGTH, POP_GAIN = 0.09, 0.22
-
-
-def whoosh() -> np.ndarray:
-    """Soft filtered noise that swells and fades: stereo samples at SFX_RATE."""
-    n = int(WHOOSH_LENGTH * SFX_RATE)
-    rng = np.random.default_rng(7)   # the same whoosh every time
-    noise = rng.standard_normal(n)
-    smooth = np.convolve(noise, np.ones(24) / 24, mode="same")   # a dull, airy hiss
-    t = np.linspace(0, 1, n)
-    envelope = np.sin(np.pi * np.clip(t / 0.7, 0, 1) / 2) ** 2 * np.clip((1 - t) / 0.3, 0, 1)
-    wave = smooth * envelope
-    wave *= WHOOSH_GAIN / max(np.abs(wave).max(), 1e-9)
-    pan = np.linspace(-0.4, 0.4, n)   # it moves across, left to right
-    return np.stack([wave * (1 - pan), wave * (1 + pan)], axis=1) / 1.4
 
 
 def pop() -> np.ndarray:
@@ -184,20 +169,20 @@ def pop() -> np.ndarray:
     return np.stack([wave, wave], axis=1)
 
 
-def effect_times(cuts, card_starts, total: float):
-    """[(kind, start)]: a whoosh at each cut between scenes, a pop as each card appears."""
-    times = [("whoosh", cut - WHOOSH_LEAD) for cut in cuts if cut > WHOOSH_LEAD]
-    times += [("pop", start) for start in card_starts]
+def effect_times(card_starts, total: float):
+    """[(kind, start)]: a pop as each card appears. No sound between scenes: the whoosh
+    there was too much in a long video (removed in 4.8.1)."""
+    times = [("pop", start) for start in card_starts]
     return [(kind, start) for kind, start in times if 0 <= start < total - 0.05]
 
 
-def sound_effects(cuts, card_starts, total: float):
+def sound_effects(card_starts, total: float):
     """The effects as (clip, start) pairs, ready for mix_audio."""
     from moviepy import AudioArrayClip
 
-    made = {"whoosh": whoosh(), "pop": pop()}
+    made = {"pop": pop()}
     return [(AudioArrayClip(made[kind], fps=SFX_RATE), start)
-            for kind, start in effect_times(cuts, card_starts, total)]
+            for kind, start in effect_times(card_starts, total)]
 
 
 # --- beats: so scene changes can land on the music -----------------------------------------

@@ -263,6 +263,18 @@ def parse_pixabay(data: dict, target_w: int, target_h: int) -> list[Candidate]:
     return found
 
 
+# Which site is asked first: "Both" mixes them so the best match wins (4.8.1).
+ORDERS = ("Both", "Pexels first", "Pixabay first")
+
+
+def mix(*lists):
+    """The lists taken in turn, one from each: neither site wins a tie by being asked first."""
+    out = []
+    for at in range(max((len(found) for found in lists), default=0)):
+        out += [found[at] for found in lists if at < len(found)]
+    return out
+
+
 class FootageSearch:
     """Stock search for one render.
 
@@ -272,7 +284,7 @@ class FootageSearch:
     """
 
     def __init__(self, pexels_key, pixabay_key, target_w, target_h, orientation,
-                 quality, cache_dir=None, log=print, session=None):
+                 quality, cache_dir=None, log=print, session=None, order="Pexels first"):
         self.keys = {"Pexels": (pexels_key or "").strip(),
                      "Pixabay": (pixabay_key or "").strip()}
         self.target_w, self.target_h = target_w, target_h
@@ -284,6 +296,7 @@ class FootageSearch:
         self.http = session or requests.Session()
         self.used: set[str] = set()
         self.disabled: dict[str, str] = {}
+        self.order = order if order in ORDERS else "Pexels first"
 
     @property
     def providers(self) -> list[str]:
@@ -297,8 +310,12 @@ class FootageSearch:
         found: list[Candidate] = []
         seen: set[str] = set()
         for variant in query_variants(query):
-            for search in self._searches(variant):
-                for candidate in search():
+            if self.order == "Both":   # both sites, taken in turn; rank() then picks
+                batches = [mix(*(search() for search in self._searches(variant)))]
+            else:
+                batches = (search() for search in self._searches(variant))
+            for batch in batches:
+                for candidate in batch:
                     if candidate.key in self.used or candidate.key in seen:
                         continue
                     seen.add(candidate.key)
@@ -313,11 +330,14 @@ class FootageSearch:
         return f"No usable stock footage found for query: '{query}'{tail}"
 
     def _searches(self, variant: str):
+        pexels = []
         if "Pexels" in self.providers:
-            yield lambda: self._search_pexels(variant, self.orientation)
-            yield lambda: self._search_pexels(variant, None)
-        if "Pixabay" in self.providers:
-            yield lambda: self._search_pixabay(variant)
+            pexels = [lambda: self._search_pexels(variant, self.orientation),
+                      lambda: self._search_pexels(variant, None)]
+        pixabay = [lambda: self._search_pixabay(variant)] if "Pixabay" in self.providers else []
+        if self.order == "Both":   # one search per site: Pexels' any-orientation one is extra
+            return pexels[:1] + pixabay
+        return pixabay + pexels if self.order == "Pixabay first" else pexels + pixabay
 
     def _search_pexels(self, query, orientation) -> list[Candidate]:
         if "Pexels" not in self.providers:

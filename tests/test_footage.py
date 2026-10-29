@@ -390,3 +390,42 @@ def test_rank_moves_a_clip_that_fits_the_scene_up_and_otherwise_keeps_the_order(
     # nothing fits better: the site's order stays
     found = [clip(1, "a man typing"), clip(2, "a man writing")]
     assert [c.id for c in footage.rank(found, "sunset sky")] == ["1", "2"]
+
+
+# --- both sites together (4.8.1) -----------------------------------------------------------
+
+def test_mix_takes_the_lists_in_turn():
+    from vidgen.footage import mix
+    assert mix([1, 2, 3], ["a"]) == [1, "a", 2, 3]
+    assert mix() == [] and mix([], [4]) == [4]
+
+
+def test_both_asks_both_sites_and_the_best_match_wins(monkeypatch):
+    from vidgen import footage
+    pexels = footage.Candidate("Pexels", "1", "u", 1920, 1080, None, "", "", "", "office desk")
+    pixabay = footage.Candidate("Pixabay", "2", "u", 1920, 1080, None, "", "", "",
+                                "coffee, drying, patio, beans")
+    search = FootageSearch("xk", "pk", 1920, 1080, "landscape", "1080p", log=lambda m: None,
+                           session=FakeSession({}), order="Both")
+    monkeypatch.setattr(search, "_search_pexels", lambda q, o: [pexels])
+    monkeypatch.setattr(search, "_search_pixabay", lambda q: [pixabay])
+    found = search.find("coffee drying patio", 10)
+    assert {c.provider for c in found} == {"Pexels", "Pixabay"}
+    assert footage.rank(found, "coffee drying patio")[0] is pixabay
+
+
+def test_pexels_first_keeps_the_old_order_and_one_key_still_works(monkeypatch):
+    from vidgen import footage
+    asked = []
+    search = FootageSearch("xk", "pk", 1920, 1080, "landscape", "1080p", log=lambda m: None,
+                           session=FakeSession({}), order="Pexels first")
+    monkeypatch.setattr(search, "_search_pexels",
+                        lambda q, o: asked.append("pexels") or [footage.Candidate(
+                            "Pexels", q + str(o), "u", 1920, 1080, None)])
+    monkeypatch.setattr(search, "_search_pixabay", lambda q: asked.append("pixabay") or [])
+    search.find("ocean", 1)
+    assert asked == ["pexels"]   # enough found: Pixabay never asked
+    alone = FootageSearch("xk", "", 1920, 1080, "landscape", "1080p", log=lambda m: None,
+                          session=FakeSession({}), order="Both")
+    assert alone.providers == ["Pexels"]
+    alone.find("ocean", 1)

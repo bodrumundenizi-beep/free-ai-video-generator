@@ -113,7 +113,7 @@ def test_a_cancel_inside_a_background_download_still_cancels(monkeypatch):
 def test_an_unchanged_line_reuses_its_voice_and_a_change_makes_a_new_one(tmp_path, monkeypatch):
     made = []
 
-    def generate(text, path, log, voice, online):
+    def generate(text, path, log, voice, online, speed=None):
         made.append((text, voice, online))
         wav = path[:-4] + ".wav"
         open(wav, "wb").write(b"RIFF" + text.encode())
@@ -125,10 +125,11 @@ def test_an_unchanged_line_reuses_its_voice_and_a_change_makes_a_new_one(tmp_pat
     first = render._voice("Hello there", str(tmp_path / "v0.mp3"), cfg, ui)
     again = render._voice("Hello there", str(tmp_path / "v1.mp3"), cfg, ui)
     assert len(made) == 1 and again[1] == first[1] and open(again[0], "rb").read() == b"RIFFHello there"
-    for change in ({"voice": "en-US-Ava"}, {"voice_online": True}, {"app_version": "4.7.0"}):
+    for change in ({"voice": "en-US-Ava"}, {"voice_online": True}, {"app_version": "4.7.0"},
+                   {"voice_speed": "Slower"}):
         render._voice("Hello there", str(tmp_path / "v2.mp3"), dict(cfg, **change), ui)
     render._voice("Hello you", str(tmp_path / "v3.mp3"), cfg, ui)
-    assert len(made) == 5
+    assert len(made) == 6
 
 
 def test_without_a_cache_every_voice_is_made(tmp_path, monkeypatch):

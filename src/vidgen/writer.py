@@ -326,8 +326,10 @@ def build_prompt(audience: draft.Audience, words: int, pictures: bool = False,
         "watching.\n"
         "- \"voice\" is one full spoken sentence of 8 to 18 words.\n"
         "- \"visual\" is 2 or 3 words for a stock video search: real things a camera can film "
-        "that match the line. Every scene gets different words. No brand names, no single "
-        "words.\n"
+        "that match the line. Name the video's subject when the line is about it (\"coffee "
+        "drying patio\", not \"water and sun\"), and keep what the line shows, like rain, "
+        "umbrellas or night. Never idea words like recap, summary, question or ending. Every "
+        "scene gets different words. No brand names, no single words.\n"
         + ("- \"picture\" is one sentence describing a photo for this scene: who or what is "
            "in it, what they are doing and where. Things you can see, not ideas. No writing, "
            "logos or brand names in the picture.\n" if pictures else "")
@@ -393,6 +395,13 @@ _UNFILMABLE = frozenset(
     "downloading upload uploading install installing sync syncing "
     # brands: stock sites have none of their screens or logos
     "microsoft google youtube tiktok instagram facebook chrome android".split())
+# Ideas, not things: a search for "recap" finds anything at all (a night out, in a coffee
+# video). They are dropped like the screen words above; the scene shows the subject instead.
+_IDEAS = frozenset(
+    "recap summary summarize question questions intro introduction outro ending conclusion "
+    "overview hook lesson takeaway takeaways fact facts reason reasons step steps idea ideas "
+    "tip tips thing things way ways part parts surprise video videos minute minutes scene "
+    "scenes topic make".split())
 _COMPUTER_SHOTS = (
     "person typing laptop", "hands keyboard close up", "woman working computer",
     "man using laptop", "hand computer mouse", "person looking monitor",
@@ -407,21 +416,35 @@ _COMPUTER_SHOTS = (
 # the writing time. So: many generic shots, and each video uses different ones.
 
 
-def filmable(visual: str, turn: int = 0) -> str:
+def filmable(visual: str, turn: int = 0, topic: str = "") -> str:
     """``visual`` without the words no camera can film.
 
-    When fewer than two words are left, the scene shows someone at a computer;
-    ``turn`` picks which shot, so the scenes of a video differ.
+    When fewer than two words are left, the scene shows the video's ``topic`` ("coffee
+    beans"); a tech video has none, and shows someone at a computer, ``turn`` picking
+    which shot so the scenes of a video differ.
     """
     words = visual.split()
-    kept = [w for w in words if w.lower() not in _UNFILMABLE]
+    kept = [w for w in words if w.lower() not in _UNFILMABLE and w.lower() not in _IDEAS]
     if len(kept) < len(words):  # "windows key v": the letter means nothing without the rest
         kept = [w for w in kept if len(w) > 1]
     if len(kept) == len(words):
         return visual
     if len(kept) >= 2:
         return " ".join(kept)
+    if topic:
+        return topic
     return _COMPUTER_SHOTS[turn % len(_COMPUTER_SHOTS)]
+
+
+def topic_of(text: str) -> str:
+    """The two words a text keeps coming back to that a camera can film, or "" (a tech
+    video's words are mostly screen words: it keeps the computer shots)."""
+    found = [w for w in draft.topic_words(text, 8)
+             if w not in _UNFILMABLE and w not in _IDEAS]
+    said = draft.words_in(text.lower())
+    if not found or sum(w.rstrip("s") == found[0].rstrip("s") for w in said) < 3:
+        return ""   # nothing the text keeps coming back to
+    return " ".join(found[:2])
 
 
 # --- changing a finished script ------------------------------------------------------
@@ -493,7 +516,7 @@ def _revise_turn(scenes, comment: str) -> str:
     return f"Script:\n{json.dumps({'scenes': scenes})}\n\nComment: {comment}"
 
 
-def parse_scenes(content: str) -> list[draft.DraftScene]:
+def parse_scenes(content: str, topic: str = "") -> list[draft.DraftScene]:
     """The model's answer as scenes. Repeated and empty lines are dropped."""
     try:
         items = json.loads(content)["scenes"]
@@ -515,7 +538,7 @@ def parse_scenes(content: str) -> list[draft.DraftScene]:
         said.add(key)
         asked = str(item.get("visual") or "")
         picture = " ".join(str(item.get("picture") or "").split())
-        visual = filmable(asked, generic)
+        visual = filmable(asked, generic, topic)
         generic += visual in _COMPUTER_SHOTS
         scenes.append(draft.DraftScene(visual, voice, len(scenes), picture, visual != asked))
     if not scenes:
@@ -976,7 +999,7 @@ class Session:
             build_prompt(audience, words, pictures, idea, bool(facts)),
             [("user", _EXAMPLE_IN), ("assistant", example), ("user", text)],
             script_schema(scene_count(words), pictures), room)
-        return parse_scenes(content)
+        return parse_scenes(content, topic_of(text))
 
 
 def _answer_tokens(words: int, pictures: bool = False) -> int:

@@ -71,16 +71,14 @@ def test_no_speech_means_constant_music():
     assert times[-1] >= 3.0
 
 
-def test_sound_effects_sit_before_each_cut_and_on_each_card():
-    times = audio.effect_times([3.0, 6.0], [0.1, 6.1], 9.0)
-    assert ("whoosh", 3.0 - audio.WHOOSH_LEAD) in times and ("pop", 6.1) in times
-    assert len(times) == 4
-    assert audio.effect_times([0.2], [], 9.0) == []          # too close to the start
-    assert audio.effect_times([], [8.99], 9.0) == []         # past the end
+def test_sound_effects_are_a_pop_on_each_card_and_nothing_between_scenes():
+    assert audio.effect_times([0.1, 6.1], 9.0) == [("pop", 0.1), ("pop", 6.1)]
+    assert audio.effect_times([], 9.0) == []                 # no cards: no sounds at all
+    assert audio.effect_times([8.99], 9.0) == []             # past the end
 
 
 def test_the_effects_are_quiet_stereo_sounds():
-    for wave, gain in ((audio.whoosh(), audio.WHOOSH_GAIN), (audio.pop(), audio.POP_GAIN)):
+    for wave, gain in ((audio.pop(), audio.POP_GAIN),):
         assert wave.ndim == 2 and wave.shape[1] == 2
         assert 0 < abs(wave).max() <= gain + 1e-6
 

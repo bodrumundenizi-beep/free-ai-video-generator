@@ -36,7 +36,7 @@ voiceover, and renders a 1080p or 720p MP4 in portrait or landscape.
 - **Watch it straight away:** When a render finishes, the video plays inside the app, with sound.
 - **Ready to post:** Every video gets a thumbnail and a suggested title, description and tags, with Copy buttons. Nothing is posted for you.
 - **Other languages:** Make the same video in Spanish, French, Italian, Portuguese or Hindi.
-- **Sound effects:** A soft whoosh on each cut and a pop when a card appears, made by the app itself.
+- **Sound effects:** A soft pop when a card appears, made by the app itself.
 - **Portrait or landscape:** 9:16 for Shorts and TikTok, 16:9 for YouTube, at 1080p or 720p.
 - **End-to-End Automation:** Fetches, generates, matches duration, and stitches everything into a final `.mp4`.
 
@@ -70,7 +70,7 @@ You can confirm you have the real file by checking its hash against
 `SHA256SUMS.txt` on the release page:
 
 ```powershell
-Get-FileHash .\AIVideoStudio-4.8.0-setup.exe -Algorithm SHA256
+Get-FileHash .\AIVideoStudio-4.8.1-setup.exe -Algorithm SHA256
 ```
 
 ## The quick way
@@ -169,8 +169,9 @@ page, copy your key, paste it in, and press **Test key** to check it works. You
 can reopen the window later from **Settings → Help & about → Setup guide**, or paste a key into
 **Settings**.
 
-With both keys set, the app searches Pexels first and falls back to Pixabay when
-Pexels has nothing good. Scripts that only use your own files (see `local:`
+With both keys set, the app searches Pexels and Pixabay together and gives each scene the
+clip that fits it best, from either site (Settings → Footage keys → **With both keys** can
+ask one site first instead). Scripts that only use your own files (see `local:`
 below) need no key at all.
 
 **No key at all?** If you have downloaded [AI pictures](#ai-pictures-optional) (they need a
@@ -484,8 +485,8 @@ person, hands, a screen) instead of always the middle.
 
 ### Sound effects
 
-**Settings → Sound effects** (on by default): a soft whoosh just before each cut and a short
-pop when a card appears, quiet under the voice. The app makes these sounds itself, so there
+**Settings → Sound effects** (on by default): a short pop when a card appears, quiet under
+the voice. The app makes these sounds itself, so there
 is nothing to download and no licence to worry about.
 
 ### Start and end cards
@@ -502,7 +503,8 @@ project. AI pictures are made again for the second shape.
 
 ### Voices
 
-Pick a voice on the **Storyboard** and press **▶ Preview Voice** to hear it
+Pick a voice on the **Storyboard**, set its **Speed** (Slower, Normal, Faster: Slower suits
+long videos), and press **▶ Preview Voice** to hear it
 before rendering. All voices are free — no account or key needed.
 
 The voices are spoken on your PC by [Kokoro](https://huggingface.co/hexgrad/Kokoro-82M),
@@ -697,7 +699,7 @@ python -m pytest
 python packaging/make_icon.py
 python packaging/fetch_llama.py
 pyinstaller --noconfirm --clean packaging/ai_video_studio.spec
-"%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe" /DMyAppVersion=4.8.0 packaging\installer.iss
+"%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe" /DMyAppVersion=4.8.1 packaging\installer.iss
 ```
 
 That is where Inno Setup goes when installed for one user; installed for everyone, it is

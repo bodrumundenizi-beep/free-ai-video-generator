@@ -322,6 +322,7 @@ def _render(cfg, ui, work_dir, job):
     search = footage.FootageSearch(
         cfg.get("api_key"), cfg.get("pixabay_key"), target_w, target_h,
         orientation, quality, cfg.get("cache_dir"), ui.log,
+        order=cfg.get("footage_order") or "Both",
     )
     # No stock key, but AI images are here: draw every scene. The app then needs no key.
     if not search.providers:
@@ -469,7 +470,9 @@ def _voice(text, path, cfg, ui):
     # How the words are read (RAM as "ram"): a corrected reading makes the line again.
     from .localvoice import _pieces
     said = " ".join(piece.spoken for piece in _pieces(text))
-    name = cache.key("voice", text, said, cfg.get("voice"), online, cfg.get("app_version"), mine)
+    speed = cfg.get("voice_speed") or voices.DEFAULT_SPEED
+    name = cache.key("voice", text, said, cfg.get("voice"), speed, online,
+                     cfg.get("app_version"), mine)
     kept = store.get_json(name + ".json")
     if kept:
         audio_file = store.get(name + kept["ext"])
@@ -477,7 +480,7 @@ def _voice(text, path, cfg, ui):
             ui.log("🗣️ Same line and voice as before: reusing it")
             return audio_file, [tuple(word) for word in kept["words"]]
     # Studio voices come back as a mastered .wav, classic ones as the .mp3.
-    made, words = generate_voiceover_timed(text, path, ui.log, cfg.get("voice"), online)
+    made, words = generate_voiceover_timed(text, path, ui.log, cfg.get("voice"), online, speed)
     ext = os.path.splitext(made)[1]
     if store.put(name + ext, made):
         store.put_json(name + ".json", {"ext": ext, "words": [list(w) for w in words]})
@@ -815,8 +818,7 @@ def _soundtrack(cfg, ui, job, plans, starts, total):
 
         try:
             effects = audio.sound_effects(
-                starts[1:], [starts[i] + cards.MARGIN for i, p in enumerate(plans)
-                             if p.scene.card], total)
+                [starts[i] + cards.MARGIN for i, p in enumerate(plans) if p.scene.card], total)
             voices += effects
             ui.log(f"🔊 Sound effects: {len(effects)}")
         except Exception as exc:  # noqa: BLE001 - like music, never sinks a render

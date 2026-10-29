@@ -495,3 +495,27 @@ def test_a_short_request_is_an_idea_and_a_story_idea_asks_for_events():
     story = writer.build_prompt(draft.Audience(), 80, idea="write a story being followed at night")
     assert "Something happens in every scene" in story and "Use only facts" not in story
     assert "Use only facts" in writer.build_prompt(draft.Audience(), 80)
+
+
+# --- search words that find the right clip (4.8.1) ----------------------------------------
+
+COFFEE = ("Make a 3 to 4 minute YouTube video about how coffee gets from a farm to your hands. "
+          "Coffee cherries grow on bushes. Farmers pick the coffee cherries. The coffee beans "
+          "are roasted. A barista makes coffee.")
+
+
+def test_an_idea_word_becomes_the_videos_subject():
+    topic = writer.topic_of(COFFEE)
+    assert topic.startswith("coffee")
+    assert writer.filmable("recap", 0, topic) == topic
+    assert writer.filmable("surprise question", 0, topic) == topic
+
+
+def test_good_search_words_are_kept_as_they_are():
+    assert writer.filmable("ship crossing ocean", 0, "coffee beans") == "ship crossing ocean"
+
+
+def test_a_tech_video_still_gets_a_computer_shot():
+    topic = writer.topic_of("Press Windows and V to open the clipboard history.")
+    assert topic == ""
+    assert writer.filmable("clipboard settings", 0, topic) in writer._COMPUTER_SHOTS

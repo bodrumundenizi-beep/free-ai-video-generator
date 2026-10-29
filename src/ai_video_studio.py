@@ -159,7 +159,7 @@ from vidgen.voice import generate_voiceover  # noqa: E402
 
 
 APP_NAME = "AI Video Studio"
-APP_VERSION = "4.8.0"
+APP_VERSION = "4.8.1"
 # Must match AppUserModelID in packaging/installer.iss, or a pinned taskbar
 # shortcut will not group with the running window.
 APP_MODEL_ID = "AIVideoStudio.Desktop.3"
@@ -358,7 +358,7 @@ def default_settings() -> dict:
         "intro_text": "",
         "outro_on": False,         # an end card after it
         "outro_text": "Subscribe for more",
-        "sound_effects": True,     # a whoosh on each cut, a pop as a card appears
+        "sound_effects": True,     # a pop as a card appears
         "smart_motion": True,      # cuts on the music's beats, framing toward the detail
         "animate": "Off",          # which AI pictures become moving clips (vidgen.animate)
         "web_facts": True,         # fact ideas are looked up on Wikipedia first (webfacts)
@@ -375,6 +375,8 @@ def default_settings() -> dict:
         "aspect": "9:16",
         "resolution": "1080p",
         "voice": voices.DEFAULT_ID,
+        "voice_speed": voices.DEFAULT_SPEED,
+        "footage_order": "Both",   # Pexels and Pixabay searched together (footage.ORDERS)
         "captions": True,
         "caption_style": captions.DEFAULT_STYLE,
         "caption_size": captions.DEFAULT_SIZE,
@@ -475,6 +477,10 @@ def load_settings() -> dict:
         data["resolution"] = "1080p"
     # An ID or an old label; the four original labels are the Classic voices' IDs.
     data["voice"] = voices.persona(data["voice"]).id
+    if data["footage_order"] not in footage.ORDERS:
+        data["footage_order"] = "Both"
+    if data["voice_speed"] not in voices.SPEEDS:
+        data["voice_speed"] = voices.DEFAULT_SPEED
     if data["voice"] == voices.MY_VOICE and not myvoice.ready():
         data["voice"] = voices.DEFAULT_ID   # My voice is hidden (or not made): the usual voice
     data["captions"] = bool(data["captions"])
@@ -1290,12 +1296,11 @@ TOUR = (
 # Shown once after updating to this version (WhatsNewDialog). Short: the release notes have
 # the whole story.
 WHATS_NEW = (
-    "A simpler app: Home has Make new video and Edit a video, tip ideas and a Get started list; "
-    "the new Dashboard shows your numbers, and Settings is split into tabs.",
-    "Everything about a video is in one place on the Storyboard, with a preview of the "
-    "selected scene, a live caption sample, and a thumbnail you can pick before making it.",
-    "The app opens maximized and uses the room: side panels on wide screens, the simple "
-    "layout on small laptops. Capitals like RAM and NASA are read as words.",
+    "Pexels and Pixabay are searched together, and each scene gets the clip that fits it "
+    "best from either site.",
+    "Voice Speed on the Storyboard: Slower, Normal or Faster. The whoosh on each cut is gone, "
+    "and scenes about \"the recap\" or \"a question\" show the video's subject instead.",
+    "Opening maximized now shows the Storyboard's side panel straight away.",
 )
 
 
@@ -3960,6 +3965,8 @@ class App(ctk.CTk):
         first = getattr(self, "_last_size", None) is None
         self._last_size = size
         if first or self.current_page is None:
+            if self.current_page is not None:   # opening maximized: the side panels show
+                self.after_idle(self._resized)
             return
         # customtkinter redraws every rounded widget on each step of a drag (CTk issue #2617):
         # the pages are taken off screen behind a plain panel until the drag stops.
@@ -4023,6 +4030,8 @@ class App(ctk.CTk):
         self.var_aspect = tk.StringVar(value=s["aspect"])
         self.var_resolution = tk.StringVar(value=s["resolution"])
         self.var_voice = tk.StringVar(value=voices.persona(s["voice"]).label)
+        self.var_voice_speed = tk.StringVar(value=s["voice_speed"])
+        self.var_footage_order = tk.StringVar(value=s["footage_order"])
         self.var_theme = tk.StringVar(value=s["theme"])
         self.var_translucent = tk.BooleanVar(value=bool(s["translucent"]))
         self.var_pixabay = tk.StringVar(value=s["pixabay_key"])
@@ -4083,7 +4092,8 @@ class App(ctk.CTk):
         self._tracks = {}
 
         for var in (self.var_api, self.var_output, self.var_aspect,
-                    self.var_resolution, self.var_voice, self.var_pixabay,
+                    self.var_resolution, self.var_voice, self.var_voice_speed, self.var_pixabay,
+                    self.var_footage_order,
                     self.var_padding, self.var_music_enabled, self.var_captions,
                     self.var_ask_save, self.var_check_updates, self.var_versions,
                     self.var_writer_gpu, self.var_voice_online, self.var_auto_cards,
@@ -4141,6 +4151,8 @@ class App(ctk.CTk):
             "aspect": self.var_aspect.get(),
             "resolution": self.var_resolution.get(),
             "voice": voices.persona(self.var_voice.get()).id,
+            "voice_speed": self.var_voice_speed.get(),
+            "footage_order": self.var_footage_order.get(),
             "captions": bool(self.var_captions.get()),
             **{key: var.get() for key, var in self.caption_vars.items()},
             "theme": self.var_theme.get(),
@@ -4967,7 +4979,7 @@ class App(ctk.CTk):
             self.estimate_label.configure(text="")
             return
         guess = pacing.estimate(
-            parsed, voices.persona(self.var_voice.get()),
+            parsed, self.voice_now(),
             PADDING_OPTIONS.get(self.var_padding.get(), DEFAULT_PADDING))
         text, warning = pacing.describe(guess, len(parsed),
                                         pacing.TARGETS.get(self.var_target.get()))
@@ -5415,9 +5427,13 @@ class App(ctk.CTk):
         )
         self.pixabay_entry = self._key_row(
             page, next(rows), "Pixabay", "Pixabay API key",
-            "Works on its own, or as a backup when Pexels finds nothing",
+            "Works on its own, or together with Pexels: the best clip wins",
             self.var_pixabay, "Paste your Pixabay API key",
         )
+        order_row = SettingRow(page, self, self.icon("scenes"), "With both keys",
+                               "Both: each scene gets the best-fitting clip from either site")
+        order_row.grid(row=next(rows), column=0, sticky="ew", pady=PAD // 2)
+        self._segmented(order_row.control, list(footage.ORDERS), self.var_footage_order, 330)
 
         page, rows = self._settings_tab("video", "resolution", "Video & saving"), itertools.count()
         self._caption(page, "Output", next(rows), pady=(0, 6))
@@ -5573,7 +5589,7 @@ class App(ctk.CTk):
         self._refresh_tracks()
 
         sfx_row = SettingRow(page, self, self.icon("music"), "Sound effects",
-                             "A soft whoosh on each cut and a pop as a card appears")
+                             "A soft pop as a card appears")
         sfx_row.grid(row=next(rows), column=0, sticky="ew", pady=PAD // 2)
         ctk.CTkSwitch(sfx_row.control, text="", width=44, variable=self.var_sfx, onvalue=True,
                       offvalue=False, progress_color=ACCENT).pack(side="left")
@@ -6302,7 +6318,8 @@ class App(ctk.CTk):
             self.var_aspect.get(), self.var_resolution.get())
         return footage.FootageSearch(
             self.var_api.get(), self.var_pixabay.get(), width, height, orientation,
-            self.var_resolution.get(), SEARCH_CACHE_DIR, lambda _message: None)
+            self.var_resolution.get(), SEARCH_CACHE_DIR, lambda _message: None,
+            order=self.var_footage_order.get())
 
     def open_scene_preview(self):
         if self.is_rendering:
@@ -6754,6 +6771,8 @@ class App(ctk.CTk):
             self.var_resolution.set(snap["resolution"])
         if snap.get("voice"):
             self.var_voice.set(voices.persona(snap["voice"]).label)
+        self.var_voice_speed.set(snap.get("voice_speed") if snap.get("voice_speed")
+                                 in voices.SPEEDS else voices.DEFAULT_SPEED)
         if "captions" in snap:
             self.var_captions.set(bool(snap["captions"]))
         for key, allowed, _default in CAPTION_SETTINGS:
@@ -7045,6 +7064,14 @@ class App(ctk.CTk):
         _card, body = self._option_card(box, "voice", "Voice")
         self.voice_menus.append(self._menu(body, VOICE_OPTIONS, self.var_voice, inner))
         self.voice_menus[-1].pack(anchor="w")
+        speed = ctk.CTkFrame(body, fg_color="transparent")
+        speed.pack(fill="x", pady=(8, 0))
+        ctk.CTkLabel(speed, text="Speed", font=self.font_body, text_color=TEXT).pack(
+            side="left", padx=(0, 12))
+        FluentSegmented(speed, self, list(voices.SPEEDS), self.var_voice_speed, 240).pack(
+            side="left")
+        self.var_voice_speed.trace_add("write", lambda *_a: (self.refresh_estimate(),
+                                                             self._draw_timeline()))
         self.preview_button = ctk.CTkButton(
             body, text=f"{self.icon('play')}  Preview Voice", width=150,
             height=30, corner_radius=4, font=self.font_body, fg_color=CARD_BG,
@@ -7152,7 +7179,7 @@ class App(ctk.CTk):
             return
         self.board_text = text
         self._draw_timeline()
-        lengths = self.board.lengths(voices.persona(self.var_voice.get()),
+        lengths = self.board.lengths(self.voice_now(),
                                      PADDING_OPTIONS.get(self.var_padding.get(), DEFAULT_PADDING))
         for index in range(len(self.board)):
             self._board_card(index, lengths)
@@ -7253,7 +7280,7 @@ class App(ctk.CTk):
         if self.board is None or not len(self.board):
             self._timeline_edges = []
             return
-        persona = voices.persona(self.var_voice.get())
+        persona = self.voice_now()
         padding = PADDING_OPTIONS.get(self.var_padding.get(), DEFAULT_PADDING)
         lengths = lengths or self.board.lengths(persona, padding)
         width = max(canvas.winfo_width(), 200) - 8
@@ -7701,25 +7728,31 @@ class App(ctk.CTk):
         self.save_project()
 
     # -- hearing one line -----------------------------------------------------------------
+    def voice_now(self):
+        """The chosen voice at the chosen speed: what lengths and estimates are timed with."""
+        return voices.at_speed(voices.persona(self.var_voice.get()), self.var_voice_speed.get())
+
     def hear_line(self, text):
         """Speak one line in the chosen voice, without blocking the window."""
         if not text or self.voice_missing():
             return
         persona, online = voices.persona(self.var_voice.get()), bool(self.var_voice_online.get())
+        speed = self.var_voice_speed.get()
 
         def worker():
             import hashlib
 
             try:
                 os.makedirs(PREVIEW_DIR, exist_ok=True)
-                name = hashlib.sha1(f"{persona.id}|{online}|{text}".encode()).hexdigest()[:16]
+                name = hashlib.sha1(f"{persona.id}|{speed}|{online}|{text}".encode()
+                                    ).hexdigest()[:16]
                 stem = os.path.join(PREVIEW_DIR, f"line_{name}")
                 playable = stem + ".play.wav"
                 if not os.path.exists(playable):
                     from vidgen import mastering
 
                     made = generate_voiceover(text, stem + ".mp3", lambda _line: None,
-                                              persona.id, online)
+                                              persona.id, online, speed)
                     partial = stem + ".tmp.wav"
                     mastering.run_ffmpeg(["-y", "-i", made, "-ar", "44100", "-ac", "1",
                                           "-c:a", "pcm_s16le", partial])
@@ -8337,20 +8370,21 @@ class App(ctk.CTk):
         self._previewing = True
         self.preview_button.configure(state="disabled", text="Generating...")
         threading.Thread(target=self._preview_worker,
-                         args=(persona.id, bool(self.var_voice_online.get())),
+                         args=(persona.id, bool(self.var_voice_online.get()),
+                               self.var_voice_speed.get()),
                          daemon=True).start()
 
-    def _preview_worker(self, voice_id, online):
+    def _preview_worker(self, voice_id, online, speed=None):
         """Worker thread: the full voice chain once, cached per voice, engine and version."""
         try:
             os.makedirs(PREVIEW_DIR, exist_ok=True)
             engine = "online" if online else "offline"
             stem = os.path.join(PREVIEW_DIR, re.sub(r"[^\w-]", "_",
-                                                    f"{voice_id}_{engine}_{APP_VERSION}"))
+                                                    f"{voice_id}_{speed}_{engine}_{APP_VERSION}"))
             playable = stem + ".play.wav"
             if not os.path.exists(playable):
                 made = generate_voiceover(PREVIEW_TEXT, stem + ".mp3", self.ui.log, voice_id,
-                                          online)
+                                          online, speed)
                 # winsound plays WAV only; classic voices arrive as MP3.
                 from vidgen import mastering
                 # Convert beside it, then rename: a failed run must not leave a

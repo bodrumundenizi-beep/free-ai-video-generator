@@ -151,3 +151,15 @@ def test_shift_words_moves_only_the_words_after_a_pause():
 def test_shift_words_without_pauses_is_unchanged():
     words = [(0.0, 0.3, "one")]
     assert shift_words(words, []) == words
+
+
+def test_speed_scales_the_voices_own_rate():
+    hype = voices.persona(voices.DEFAULT_ID)
+    assert voices.at_speed(hype, "Normal") is hype
+    slower = voices.at_speed(hype, "Slower")
+    faster = voices.at_speed(hype, "Faster")
+    from vidgen import pacing
+    assert pacing.rate_factor(slower.rate) < pacing.rate_factor(hype.rate) < \
+        pacing.rate_factor(faster.rate)
+    line = "The cherries are washed and dried in the sun on large patios."
+    assert pacing.estimate_voice(line, slower.rate) > pacing.estimate_voice(line, hype.rate)
