@@ -28,6 +28,8 @@ import requests
 
 PEXELS_URL = "https://api.pexels.com/videos/search"
 PIXABAY_URL = "https://pixabay.com/api/videos/"
+PEXELS_PHOTO_URL = "https://api.pexels.com/v1/search"   # photos, for the thumbnail editor
+PIXABAY_PHOTO_URL = "https://pixabay.com/api/"
 
 # (connect, read) seconds. Without a timeout a stalled connection would hang
 # the render thread forever.
@@ -263,6 +265,35 @@ def parse_pixabay(data: dict, target_w: int, target_h: int) -> list[Candidate]:
     return found
 
 
+def parse_pexels_photos(data: dict) -> list[Candidate]:
+    """Pexels photos as Candidates: ``url`` the big picture, ``thumb`` a small one. Their ids
+    start with "photo-", so they never share a key with a clip."""
+    found = []
+    for photo in data.get("photos") or []:
+        src = photo.get("src") or {}
+        url = src.get("large2x") or src.get("large") or src.get("original")
+        if url:
+            found.append(Candidate(
+                "Pexels", f"photo-{photo.get('id')}", url, photo.get("width") or 0,
+                photo.get("height") or 0, None, photo.get("url") or "",
+                photo.get("photographer") or "", src.get("tiny") or src.get("medium") or url,
+                photo.get("alt") or ""))
+    return found
+
+
+def parse_pixabay_photos(data: dict) -> list[Candidate]:
+    found = []
+    for hit in data.get("hits") or []:
+        url = hit.get("largeImageURL") or hit.get("webformatURL")
+        if url:
+            found.append(Candidate(
+                "Pixabay", f"photo-{hit.get('id')}", url, hit.get("imageWidth") or 0,
+                hit.get("imageHeight") or 0, None, hit.get("pageURL") or "",
+                hit.get("user") or "", hit.get("previewURL") or hit.get("webformatURL") or url,
+                str(hit.get("tags") or "")))
+    return found
+
+
 # Which site is asked first: "Both" mixes them so the best match wins (4.8.1).
 ORDERS = ("Both", "Pexels first", "Pixabay first")
 
@@ -362,6 +393,26 @@ class FootageSearch:
         # Pixabay can't filter by orientation, so prefer matching clips here.
         found.sort(key=lambda c: c.orientation != self.orientation)
         return found
+
+    def photos(self, query: str, limit: int = 24) -> list[Candidate]:
+        """Photos for ``query`` from both sites, taken in turn (the thumbnail editor)."""
+        query = " ".join(query.split())[:100]
+        pexels = pixabay = []
+        if "Pexels" in self.providers:
+            data = self._get("Pexels photos", PEXELS_PHOTO_URL,
+                             {"query": query, "per_page": 15, "orientation": self.orientation},
+                             {"Authorization": self.keys["Pexels"]},
+                             f"Searching Pexels photos for: '{query}'...")
+            pexels = parse_pexels_photos(data) if data else []
+        if "Pixabay" in self.providers:
+            data = self._get("Pixabay photos", PIXABAY_PHOTO_URL,
+                             {"key": self.keys["Pixabay"], "q": query, "per_page": 15,
+                              "image_type": "photo", "safesearch": "true",
+                              "orientation": "vertical" if self.orientation == "portrait"
+                              else "horizontal"}, {},
+                             f"Searching Pixabay photos for: '{query}'...")
+            pixabay = parse_pixabay_photos(data) if data else []
+        return mix(pexels, pixabay)[:limit]
 
     def _get(self, provider, url, params, headers, message):
         cached = self.cache.get(provider, params)

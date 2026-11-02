@@ -859,9 +859,22 @@ def thumbnail_moment(cfg, starts):
 
 def _thumbnail(cfg, ui, save_path, speech, starts=()):
     try:
-        from . import projects, thumbnail
+        from . import projects, thumbedit, thumbnail
 
         thumb = os.path.splitext(save_path)[0] + ".thumbnail.jpg"
+        edited = thumbedit.edited(cfg.get("project_dir"), cfg.get("aspect", "9:16") == "9:16")
+        if edited:   # made in the thumbnail editor: used as it is
+            from PIL import Image
+
+            with Image.open(edited) as picture:
+                picture.convert("RGB").save(thumb, quality=92)
+            ui.log(f"🖼️ Thumbnail (your edit) saved to {os.path.basename(thumb)}")
+            lines = thumbedit.credits(thumbedit.load(os.path.dirname(edited))[0])
+            if lines:   # stock photos on it are credited with the clips
+                with open(os.path.splitext(save_path)[0] + ".credits.txt", "a",
+                          encoding="utf-8") as fh:
+                    fh.write("\nThumbnail photos:\n" + "\n".join(lines) + "\n")
+            return
         # Between two spoken lines no caption is on screen: the cleanest frames.
         pauses = [(a_end + b_start) / 2 for (_a, a_end), (b_start, _b) in zip(speech, speech[1:])
                   if b_start - a_end > 0.12]

@@ -99,8 +99,9 @@ def test_a_render_shows_the_storyboard_log_and_setup_is_one_click(app):
     assert str(app.log_box).startswith(str(app.pages["board"]))   # one home: not in Settings
 
 
-def test_the_sidebar_has_four_entries_and_storyboard_only_with_a_video(app):
-    assert list(app.nav_items) == ["home", "dashboard", "projects", "board", "settings"]
+def test_the_sidebar_entries_and_storyboard_only_with_a_video(app):
+    assert list(app.nav_items) == ["home", "dashboard", "projects", "thumbs", "board",
+                                    "settings"]
     assert app.nav_items["projects"].label.cget("text") == "My videos"
     text = app.script_box.get("1.0", "end")
     try:

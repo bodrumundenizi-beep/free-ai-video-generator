@@ -35,6 +35,7 @@ voiceover, and renders a 1080p or 720p MP4 in portrait or landscape.
 - **Auto-captions:** The spoken words are burned into the video, a few at a time, with the word being said highlighted. An `.srt` subtitle file is saved too.
 - **Watch it straight away:** When a render finishes, the video plays inside the app, with sound.
 - **Ready to post:** Every video gets a thumbnail and a suggested title, description and tags, with Copy buttons. Nothing is posted for you.
+- **Thumbnail editor:** Change the thumbnail with text, arrows, circles, stickers and Pexels or Pixabay photos.
 - **Other languages:** Make the same video in Spanish, French, Italian, Portuguese or Hindi.
 - **Sound effects:** A soft pop when a card appears, made by the app itself.
 - **Portrait or landscape:** 9:16 for Shorts and TikTok, 16:9 for YouTube, at 1080p or 720p.
@@ -70,7 +71,7 @@ You can confirm you have the real file by checking its hash against
 `SHA256SUMS.txt` on the release page:
 
 ```powershell
-Get-FileHash .\AIVideoStudio-4.8.1-setup.exe -Algorithm SHA256
+Get-FileHash .\AIVideoStudio-4.9.0-setup.exe -Algorithm SHA256
 ```
 
 ## The quick way
@@ -459,6 +460,36 @@ frame from a pause between lines (so no caption is in the way) with the title ac
 in the video's shape (720x1280 or 1280x720). The Render complete window has **Open
 thumbnail**, and the project card shows it.
 
+The Storyboard's **Thumbnail** tab (next to Setup and Log, or **Edit thumbnail** in the
+Thumbnail box) is the thumbnail editor, before or after the video is made. It starts from the
+automatic thumbnail and works in layers:
+
+- **Background:** any scene's picture, or a picture from your PC, with blur, darken,
+  brightness and contrast so the words stand out.
+- **Text:** as many boxes as you like, with font, size, colour, outline, shadow, glow, a dark
+  band behind, and tilt.
+- **Draw:** brush, arrow, circle and box, in YouTube red or any colour.
+- **Stickers:** 30 emoji and arrows, with an outline and a glow.
+- **Photos:** search Pexels and Pixabay photos with your footage keys, or add a picture from
+  your PC. A stock photo's credit is added to the video's credits file.
+
+Drag a layer to move it (it snaps to the middle), drag its corners to resize it and the round
+handle to turn it. Arrow keys nudge it, Delete removes it, Ctrl+Z and Ctrl+Y undo and redo.
+**Save** keeps the thumbnail with the video's project: the Storyboard shows it and the video uses
+it (a copy in the other shape gets the automatic one). **Reset to automatic** goes back to the one the app makes.
+
+![The thumbnail editor](docs/thumbeditor.png)
+
+The **Thumbnails** page in the sidebar lists every video's thumbnail, marked **Edited** or
+**Automatic**. **Edit** opens the editor right there (**Back** returns to the list), with
+pictures taken from the made video; **Start
+over** begins from a plain background; **Save as picture** puts a copy wherever you want it.
+Saving an edit of a video that is already made also replaces its `.thumbnail.jpg`, so it is
+ready to upload without making the video again. **+ New 16:9 thumbnail** and **+ New 9:16
+thumbnail** make free thumbnails that belong to no video, kept on the same page.
+
+![The Thumbnails page](docs/thumbnails.png)
+
 The same window shows a title, a short description and tags for posting, written by the
 Smart writer from what the video says, each with a **Copy** button. They are also saved as
 `name.upload.txt`. Without the Smart writer the first line is the title and the search
@@ -597,6 +628,7 @@ Output size follows both settings: 9:16 at 1080p is 1080×1920, 16:9 at 720p is
 |---|---|
 | Settings | `%APPDATA%\AIVideoStudio\settings.json` |
 | My videos | `%APPDATA%\AIVideoStudio\projects`: script, settings, thumbnail and AI pictures of each video (about 1 MB a picture). The videos themselves stay where you saved them |
+| Free thumbnails | `%APPDATA%\AIVideoStudio\thumbnails`: one folder each, with the pictures used in it |
 | Rendered video | Wherever you choose in the Save window; it opens in your Videos folder the first time. An existing video is only replaced if you confirm it |
 | Footage credits | `<video name>.credits.txt`, next to the video |
 | Subtitles | `<video name>.srt`, next to the video (when captions are on) |
@@ -699,7 +731,7 @@ python -m pytest
 python packaging/make_icon.py
 python packaging/fetch_llama.py
 pyinstaller --noconfirm --clean packaging/ai_video_studio.spec
-"%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe" /DMyAppVersion=4.8.1 packaging\installer.iss
+"%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe" /DMyAppVersion=4.9.0 packaging\installer.iss
 ```
 
 That is where Inno Setup goes when installed for one user; installed for everyone, it is
