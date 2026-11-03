@@ -139,4 +139,4 @@ def test_describe_does_not_cry_wolf_near_the_limit():
 
 def test_targets_table():
     assert pacing.TARGETS[pacing.DEFAULT_TARGET] is None
-    assert [v for v in pacing.TARGETS.values() if v] == [15.0, 30.0, 60.0]
+    assert [v for v in pacing.TARGETS.values() if v] == [15.0, 30.0, 60.0, 180.0, 300.0, 600.0]

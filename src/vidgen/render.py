@@ -38,6 +38,11 @@ from .voice import generate_voiceover_timed
 
 LONG_SCENE = 6.0  # a voice longer than this gets two clips, cut at the middle
 MIN_SCENE = 0.5
+# Long videos (4.9.2): the picture is made CHUNK_SCENES scenes at a time, each chunk its own
+# silent file with only its shots open, then joined; the sound is mixed once for the whole.
+LONG_RENDER = 90.0   # seconds: longer videos are made in chunks
+CHUNK_SCENES = 20
+FPS = 30
 DEFAULT_PADDING = 0.25
 SPARE_CANDIDATES = 2  # extra search results to fall back on if a download fails
 RANKED = 6  # search results compared by description (measured 2026-10-16: 6 of 7 bad fixed)
@@ -162,6 +167,18 @@ class _Render:
     def keep(self, clip):
         self.resources.append(clip)
         return clip
+
+    def close_audio(self):
+        """Close the sound readers (one ffmpeg each, a voice per scene): a long video's
+        sound is written to a file first, and its 150 readers aren't needed after that."""
+        from moviepy import AudioClip
+
+        for clip in [c for c in self.resources if isinstance(c, AudioClip)]:
+            try:
+                clip.close()
+            except Exception:
+                pass
+            self.resources.remove(clip)
 
     def close_all(self):
         for clip in reversed(self.resources):
@@ -324,6 +341,8 @@ def _render(cfg, ui, work_dir, job):
         orientation, quality, cfg.get("cache_dir"), ui.log,
         order=cfg.get("footage_order") or "Both",
     )
+    if len(plans) > 40:   # 100+ scenes: more results per search, so fewer repeats
+        search.per_page = 2
     # No stock key, but AI images are here: draw every scene. The app then needs no key.
     if not search.providers:
         from . import imagegen
@@ -586,6 +605,8 @@ def _make_version(cfg, ui, work_dir, job, plans, search, choices, version, save_
             stock.start(plans, search, choices)
         for i, plan in enumerate(plans):
             _check(stop)
+            with spent.time("stock"):
+                stock.fill(i + AHEAD)   # keeps the downloads a chunk ahead of this scene
             if plan.scene.is_ai:
                 with spent.time("AI pictures"):
                     made = _ai_picture(plan, i, cfg, ratio, work_dir, ui, version, search, stop)
@@ -644,33 +665,33 @@ def _make_version(cfg, ui, work_dir, job, plans, search, choices, version, save_
     ui.status("Step 3 of 4: Putting the scenes together...")
     from PIL import Image
 
-    from . import drawn
+    from . import compose, drawn
 
     style = cfg.get("style") if cfg.get("style") in drawn.STYLES else drawn.NORMAL
     if style != drawn.NORMAL:
         ui.log(f"✏️ {style} style: every scene is drawn on screen")
-    layers, flip = [], False
-    for shot in shots:
+
+    def shot_layer(index, shot, keep, offset=0.0):
+        """One shot as a clip on the timeline, ``offset`` seconds earlier (a chunk's start).
+        ``keep`` registers the file readers it opens, so they are closed with their chunk."""
         plan = plans[shot.scene]
         source = plan.sources[shot.part]
         if style != drawn.NORMAL:   # drawn on screen from one still, instead of the footage
             if source.kind == "image":
                 still = Image.open(source.path)
             else:   # the whole download, as before: drawing has its own centre crop
-                footage_clip = job.keep(VideoFileClip(source.original or source.path,
-                                                      audio=False))
+                footage_clip = keep(VideoFileClip(source.original or source.path, audio=False))
                 still = Image.fromarray(footage_clip.get_frame((footage_clip.duration or 0) / 2))
-            layers.append(drawn.clip(still, shot.length, (target_w, target_h), style)
-                          .with_start(shot.start))
-            continue
+            return (drawn.clip(still, shot.length, (target_w, target_h), style)
+                    .with_start(shot.start - offset))
         if source.kind == "image":
             still = motion.load_image(source.path, target_w, target_h)
             base, movement = ImageClip(still), None
         else:
-            base = job.keep(VideoFileClip(source.path, audio=False))
+            base = keep(VideoFileClip(source.path, audio=False))
             movement = source.movement if source.cut else motion.measure_motion(base)
-        zoom = motion.zoom_range(plan.scene.zoom, source.kind, movement, flip)
-        flip = not flip
+        # Every other shot zooms the other way (it used to be a flag flipped per shot).
+        zoom = motion.zoom_range(plan.scene.zoom, source.kind, movement, index % 2 == 1)
         focus = source.focus   # measured on the download, moved onto the cut clip
         if cfg.get("smart_motion") and not source.cut:
             try:   # a few frames of the clip say where its detail is
@@ -683,21 +704,31 @@ def _make_version(cfg, ui, work_dir, job, plans, search, choices, version, save_
         clip = motion.framed_shot(base, shot.length, (target_w, target_h), zoom, focus)
         if shot.fade_in > 0:
             clip = clip.with_effects([vfx.CrossFadeIn(shot.fade_in)])
-        layers.append(clip.with_start(shot.start))
+        return clip.with_start(shot.start - offset)
+
+    # Long videos are made in chunks (chunk_ranges): their shots are opened per chunk.
+    every = int(cfg.get("chunk_scenes") or 0) or (CHUNK_SCENES if total > LONG_RENDER else 0)
+    chunks = chunk_ranges(starts, every) if every else []
+    layers = []
+    if not chunks:
+        # Each shot opens its clip only while it shows (compose.Lazy): an open 1080p reader
+        # holds ~370 MB, so 14 shots open at once took ~5 GB for a 60 s video.
+        layers = [compose.Lazy(lambda keep, i=i, shot=shot: shot_layer(i, shot, keep),
+                               shot.start, shot.end) for i, shot in enumerate(shots)]
     spent.add("layers", spent.clock() - layers_began[0], spent.cpu() - layers_began[1])
 
     # Cards go over the footage and under the captions. They never sink a render either.
-    carded = [(i, plan.scene.card) for i, plan in enumerate(plans) if plan.scene.card]
+    overlays = []
+    marks = chapter_marks(plans, starts)
+    carded = [(i, plan.scene.card or (plan.scene.chapter if len(marks) > 1 else None))
+              for i, plan in enumerate(plans)]
+    carded = [(i, text) for i, text in carded if text]   # a long video's chapter titles too
     with spent.time("cards"):
-        _add_cards(cfg, ui, carded, layers, (target_w, target_h), starts, durations)
+        _add_cards(cfg, ui, carded, overlays, (target_w, target_h), starts, durations)
 
     # Captions sit on top of everything. Like music, they never sink a render.
     with spent.time("captions"):
-        cues = _add_captions(cfg, ui, plans, starts, layers, (target_w, target_h), total)
-
-    from . import compose
-
-    video = job.keep(compose.layered(layers, (target_w, target_h), total))
+        cues = _add_captions(cfg, ui, plans, starts, overlays, (target_w, target_h), total)
 
     # 6. Soundtrack.
     with spent.time("sound"):
@@ -705,7 +736,7 @@ def _make_version(cfg, ui, work_dir, job, plans, search, choices, version, save_
         speech = [(start, start + min(plan.voice_len, plan.duration))
                   for plan, start in zip(plans, starts) if plan.voice is not None]
     if soundtrack is not None:
-        video = video.with_audio(job.keep(soundtrack))
+        job.keep(soundtrack)
 
     # 7. Encode.
     _check(stop)
@@ -717,21 +748,36 @@ def _make_version(cfg, ui, work_dir, job, plans, search, choices, version, save_
 
     encode_began, shown = time.perf_counter(), [0.0]
 
-    def encoding(fraction):
+    def encoding(fraction, label=""):
         ui.progress(encode_from + encode_span * fraction)
         now = time.perf_counter()
-        if fraction > 0.05 and now - shown[0] > 1.0:   # once a second, not every frame
+        if fraction > 0.02 and now - shown[0] > 1.0:   # once a second, not every frame
             shown[0] = now
             left = (now - encode_began) * (1 - fraction) / fraction
-            ui.status(f"Step 4 of 4: Encoding, about {_minutes(left)} left")
+            ui.status(f"Step 4 of 4: Encoding{label}, about {_minutes(left)} left")
+
 
     try:
         codec = encoder(cfg)
         if codec != X264:
             ui.log("⚡ Encoding on the Intel graphics chip (Quick Sync)")
         with spent.time("encode"):
-            _encode(video, encoded, soundtrack is not None, bitrate, work_dir, encoding, stop,
-                    codec, ui.log)
+            if chunks:
+                last = version >= (2 if str(cfg.get("versions", 1)) == "2" else 1)
+                _encode_chunks(chunks, shots, shot_layer, overlays, soundtrack,
+                               (target_w, target_h), encoded, bitrate, work_dir, version,
+                               encoding, stop, codec, ui, job.close_audio if last else None)
+            else:
+                video = job.keep(compose.layered(layers + overlays, (target_w, target_h),
+                                                 total))
+                if soundtrack is not None:
+                    video = video.with_audio(soundtrack)
+                try:
+                    _encode(video, encoded, soundtrack is not None, bitrate, work_dir,
+                            encoding, stop, codec, ui.log)
+                finally:
+                    for layer in layers:
+                        layer.release()
     except RenderCancelled:
         raise
     except Exception as exc:  # noqa: BLE001
@@ -743,6 +789,7 @@ def _make_version(cfg, ui, work_dir, job, plans, search, choices, version, save_
 
     with spent.time("credits"):
         _write_side_files(ui, save_path, credits, providers_used, cues)
+        _write_chapters(ui, save_path, marks)
 
     with spent.time("thumbnail"):
         _thumbnail(cfg, ui, save_path, speech, starts)
@@ -824,6 +871,37 @@ def _soundtrack(cfg, ui, job, plans, starts, total):
         except Exception as exc:  # noqa: BLE001 - like music, never sinks a render
             ui.log(f"⚠️ Couldn't add the sound effects ({exc}).")
     return audio.mix_audio(voices, music, total)
+
+
+def chapter_marks(plans, starts) -> list[tuple[float, str]]:
+    """(time, title) of each ``Chapter:`` in the video (4.9.2)."""
+    return [(starts[i], plan.scene.chapter) for i, plan in enumerate(plans)
+            if getattr(plan.scene, "chapter", None)]
+
+
+def youtube_chapters(marks) -> list[str]:
+    """YouTube's chapter lines ("0:00 Title"): the first at 0:00, each at least 10 s, and at
+    least three of them, or none (YouTube ignores a list that breaks its rules)."""
+    lines, last = [], None
+    for at, (seconds, title) in enumerate(marks):
+        seconds = 0.0 if at == 0 else seconds
+        if last is not None and seconds - last < 10:
+            continue
+        last = seconds
+        lines.append(f"{int(seconds // 60)}:{int(seconds % 60):02d} {title}")
+    return lines if len(lines) >= 3 else []
+
+
+def _write_chapters(ui, save_path, marks):
+    lines = youtube_chapters(marks)
+    if not lines:
+        return
+    try:
+        with open(os.path.splitext(save_path)[0] + ".chapters.txt", "w", encoding="utf-8") as fh:
+            fh.write("\n".join(lines) + "\n")
+        ui.log(f"📑 Chapters: {len(lines)}, added to the upload text")
+    except OSError as exc:
+        ui.log(f"⚠️ Couldn't save the chapters ({exc}).")
 
 
 def _write_side_files(ui, save_path, credits, providers_used, cues):
@@ -968,6 +1046,79 @@ def _write(video, path, with_audio, bitrate, work_dir, on_progress, stop, codec)
     )
 
 
+def chunk_ranges(starts, every: int, fps: int = FPS) -> list[tuple[float, float]]:
+    """(start, end) of each chunk: ``every`` scenes, cut where a scene starts and on a frame,
+    so the joined chunks are exactly as long as the video. ``starts`` ends with the total."""
+    total = round(starts[-1] * fps) / fps
+    cuts = sorted({round(starts[i] * fps) / fps for i in range(every, len(starts) - 1, every)}
+                  - {0.0, total})
+    edges = [0.0] + [c for c in cuts if 0.0 < c < total] + [total]
+    return list(zip(edges, edges[1:]))
+
+
+def concat_list(paths) -> str:
+    """ffmpeg's concat list for ``paths`` (single quotes in a path escaped its way)."""
+    return "".join("file '" + path.replace("\\", "/").replace("'", "'\\''") + "'\n"
+                   for path in paths)
+
+
+def _clock(seconds: float) -> str:
+    """0:00 style, for the parts of a long video."""
+    return f"{int(seconds // 60)}:{int(seconds % 60):02d}"
+
+
+def _encode_chunks(chunks, shots, shot_layer, overlays, soundtrack, size, encoded, bitrate,
+                   work_dir, version, encoding, stop, codec, ui, done_with_sound=None):
+    """A long video: the sound written once, then each chunk encoded on its own with every
+    shot opened only while it shows (compose.Lazy), then ffmpeg joins them without encoding
+    the picture again. ``done_with_sound`` closes the voices once the sound is written."""
+    from . import compose, mastering
+
+    total = chunks[-1][1]
+    args = []
+    if soundtrack is not None:
+        ui.status("Step 4 of 4: Mixing the sound...")
+        sound = os.path.join(work_dir, f"sound_{version}.wav")
+        soundtrack.write_audiofile(sound, fps=44100, nbytes=2, codec="pcm_s16le", logger=None)
+        args = ["-i", sound, "-map", "0:v", "-map", "1:a", "-c:a", "aac", "-b:a", "192k",
+                "-shortest"]
+        if done_with_sound:
+            done_with_sound()
+    parts = []
+    for at, (start, end) in enumerate(chunks):
+        _check(stop)
+        label = f" part {at + 1} of {len(chunks)}"
+        ui.log(f"🧩 Part {at + 1} of {len(chunks)}: {_clock(start)} to {_clock(end)}")
+        lazy = [compose.Lazy(lambda keep, i=i, shot=shot: shot_layer(i, shot, keep, start),
+                             shot.start - start, shot.end - start)
+                for i, shot in enumerate(shots) if shot.start < end and shot.end > start]
+        try:
+            layers = lazy + [o.with_start(o.start - start) for o in overlays
+                             if o.start < end and (o.end is None or o.end > start)]
+            video = compose.layered(layers, size, end - start)
+            path = os.path.join(work_dir, f"part_{version}_{at:03d}.mp4")
+            _encode(video, path, False, bitrate, work_dir,
+                    lambda f, a=start, b=end: encoding((a + (b - a) * f) / total, label),
+                    stop, codec, ui.log)
+            parts.append(path)
+        finally:
+            for layer in lazy:   # a shot that runs on into the next chunk is opened again there
+                layer.release()
+    _check(stop)
+    ui.status("Step 4 of 4: Joining the parts...")
+    listing = os.path.join(work_dir, f"parts_{version}.txt")
+    with open(listing, "w", encoding="utf-8") as fh:
+        fh.write(concat_list(parts))
+    args = ["-y", "-f", "concat", "-safe", "0", "-i", listing] + args
+    mastering.run_ffmpeg(args + ["-c:v", "copy", "-movflags", "+faststart", encoded])
+    for path in parts:   # gigabytes for a long video: gone before the next version
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+    encoding(1.0)
+
+
 def _timeline_words(plans, starts):
     """Every spoken word as (start, duration, text) on the video's timeline.
 
@@ -1004,6 +1155,8 @@ def _stand_in(plan, index, before, cfg, ratio, work_dir, ui, version, search, st
     earlier = [p for p in before if p.sources and p.sources[0].kind == "video"]
     if not earlier:
         raise Exception(str(why))
+    if len(earlier) > 1 and before and before[-1] is earlier[-1]:
+        earlier = earlier[:-1]   # never the clip the scene just before shows
     plan.parts, plan.sources = 1, list(earlier[index % len(earlier)].sources[:1])
     plan.kind = "stock clip (used again: no other left)"
     ui.log(f"🔁 Scene {index + 1}: using a clip from an earlier scene again.")
@@ -1169,6 +1322,7 @@ def _ai_picture(plan, index, cfg, ratio, work_dir, ui, version, search, stop) ->
 
 
 DOWNLOADS = 3   # stock clips fetched and cut at the same time
+AHEAD = 20      # stock scenes searched and queued ahead of the one being made (4.9.2)
 
 
 def _parts(plan) -> int:
@@ -1207,18 +1361,27 @@ class _StockFetch:
         return clips.ready(url, self.frame, self.smart, self.store, self.work_dir,
                            cache.key(url)[:12], self.stop)
 
-    def start(self, plans, search, choices):
-        taken = set()
-        for i, plan in enumerate(plans):
+    def start(self, plans, search, choices, ahead=None):
+        """Queue the first ``ahead`` scenes (AHEAD); the scene loop calls fill() for more, so a
+        10 minute video doesn't search all 150 scenes at once (the sites' rate limits)."""
+        self.plans, self.search, self.choices = plans, search, choices
+        self.taken, self.next = set(), 0
+        self.fill(AHEAD if ahead is None else ahead)
+
+    def fill(self, upto):
+        """Search and queue the scenes before ``upto`` that aren't queued yet."""
+        while self.next < min(upto, len(self.plans)):
+            i, plan = self.next, self.plans[self.next]
+            self.next += 1
             if plan.scene.is_local or plan.scene.is_ai:
                 continue
             wanted = _parts(plan)
             try:
-                candidates = _candidates(plan, search, choices.get(i), wanted)
+                candidates = _candidates(plan, self.search, self.choices.get(i), wanted)
             except Exception:  # noqa: BLE001 - the scene loop searches again and reports it
                 continue
-            for candidate in [c for c in candidates if c.key not in taken][:wanted]:
-                taken.add(candidate.key)
+            for candidate in [c for c in candidates if c.key not in self.taken][:wanted]:
+                self.taken.add(candidate.key)
                 self.queued[candidate.url] = self.pool.submit(self._ready, candidate.url)
 
     def get(self, url) -> dict:

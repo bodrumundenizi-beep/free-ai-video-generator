@@ -201,3 +201,16 @@ def changed(before: list[Scene], after: list[Scene]) -> list[int]:
     """
     known = {_identity(scene) for scene in before}
     return [i for i, scene in enumerate(after) if _identity(scene) not in known]
+
+
+def chapters(scenes) -> list[tuple[int, int, str | None]]:
+    """(first scene, end, title) of each part of a long video (4.9.2). Scenes before the
+    first ``Chapter:``, or a script without chapters, are one group with no title."""
+    starts = [i for i, scene in enumerate(scenes) if getattr(scene, "chapter", None)]
+    if not starts:
+        return [(0, len(scenes), None)]
+    groups = [(0, starts[0], None)] if starts[0] > 0 else []
+    for at, start in enumerate(starts):
+        end = starts[at + 1] if at + 1 < len(starts) else len(scenes)
+        groups.append((start, end, scenes[start].chapter))
+    return groups

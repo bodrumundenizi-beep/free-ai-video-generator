@@ -26,7 +26,7 @@ voiceover, and renders a 1080p or 720p MP4 in portrait or landscape.
 - **Moving AI pictures (beta):** With a graphics card, an AI picture can become a short moving clip.
 - **Music included:** Eight public-domain tracks, picked by the video's mood.
 - **Two versions in one go:** Optionally render the same script twice with different clips, and keep the better one.
-- **Pick a length:** Fit the video to 15, 30 or 60 seconds, with a live estimate as you type.
+- **Pick a length:** Fit the video to 15, 30 or 60 seconds, or make a long video of 3, 5 or 10 minutes in chapters, with a live estimate as you type.
 - **Neural AI Voices, on your PC:** 20 natural-sounding male and female voices from an open-source speech model that runs offline. No account, no key, no service that can be switched off.
 - **AI pictures (optional):** With a good graphics card, an open-source image model on your PC draws a picture for the scenes stock footage has nothing for.
 - **Animated cards:** Key combos like `Win + V`, big numbers and short lists are drawn over the footage, because no stock clip can show them.
@@ -71,7 +71,7 @@ You can confirm you have the real file by checking its hash against
 `SHA256SUMS.txt` on the release page:
 
 ```powershell
-Get-FileHash .\AIVideoStudio-4.9.1-setup.exe -Algorithm SHA256
+Get-FileHash .\AIVideoStudio-4.9.2-setup.exe -Algorithm SHA256
 ```
 
 ## The quick way
@@ -571,12 +571,44 @@ versions take well under twice as long as one.
 The Storyboard shows about how long your script will be next to **Length**, and updates as you
 change it. It is an estimate: the voice paces every line a little differently.
 
-Set **Length** to `15 s`, `30 s` or `60 s` to fit the video to that length. The
+Set **Length** to `15 s`, `30 s`, `60 s`, `3 min`, `5 min` or `10 min` to fit the video to that length. The
 app adjusts the pauses between scenes first. If that is not enough, it speeds
 the voice up or slows it down by at most 15%, keeping its pitch, and the
 captions follow. A script that is far too long or too short is rendered as
 close as it gets, and the Log tells you roughly how many words to cut or add.
 Scenes with their own `Duration:` or `Padding:` line are left exactly as written.
+
+### Long videos (3, 5 and 10 minutes)
+
+Pick **3 min**, **5 min** or **10 min** in **How long?** (Make new video) or **Length** (the
+Storyboard). The Smart writer first plans the video as parts, then writes one part at a
+time: 3 to 10 parts of about 13 scenes, each with a title. The window shows "Writing part 3
+of 6..."; **Cancel** keeps the parts already written. A 10 minute script took about 70
+seconds on a desktop with an RTX 4060.
+
+Each part starts with a `Chapter:` line in the script:
+
+```
+Visual: coffee farm hills
+Voice: Coffee grows best on steep, rainy hillsides near the equator.
+Chapter: Where coffee grows
+```
+
+- **Storyboard:** each chapter is a heading that folds open and shut (only the open one's
+  scenes are shown, so 140 scenes stay quick), and the timeline names the chapters.
+- **In the video:** each chapter's title is shown as a card on its first scene.
+- **Upload text:** with three or more chapters, their times (`0:00 Where coffee grows`) are
+  added under the description, which YouTube turns into chapters. They are also saved as
+  `name.chapters.txt` beside the video.
+
+A long video is made in parts of 20 scenes that are joined at the end, with the sound mixed
+once for the whole video, so the music never restarts. Each scene's clip is opened only while
+it is on screen: a 3 minute video peaked at about 2 GB of memory, a 10 minute one at 3 GB.
+Making it takes a while: on that desktop a 3 minute video took about 8 minutes and a 10 minute
+one about 22 minutes (both 1080p, with captions and music). Stock clips are searched 20 scenes ahead, not
+all at once, so the sites' limits on searches aren't reached.
+
+![A 10 minute video's Storyboard, in chapters](docs/longvideo.png)
 
 ### Stopping a render
 
@@ -612,7 +644,7 @@ on the **Storyboard**; the rest are in **Settings**.
 | Resolution | `1080p` (8000k bitrate) or `720p` (5000k) |
 | Scene padding | `0s`, `0.25s` (default), `0.5s` or `1s` of pause after each voice line |
 | Voice | 20 free neural voices that run on your PC — see **Voices** below |
-| Length | `Auto` (default), or fit to `15 s`, `30 s` or `60 s` — see **Video length** below |
+| Length | `Auto` (default), or fit to `15 s`, `30 s`, `60 s`, `3 min`, `5 min` or `10 min` — see **Video length** and **Long videos** below |
 | Versions | `1` (default) or `2`: the same video twice, with different clips |
 | Saving | **Ask where to save each video** (default): a Save window opens for every render, like a browser download. Off: videos go to the default path and are numbered `name (2).mp4`, `name (3).mp4`… so none is overwritten |
 | Captions | On or off. Style: `Highlight`, `One word` or `Plain`. Size: `Small`, `Medium`, `Large`. Highlight: yellow, green, cyan, pink, white or black. Position: `Lower`, `Center` or `Top` |
@@ -731,7 +763,7 @@ python -m pytest
 python packaging/make_icon.py
 python packaging/fetch_llama.py
 pyinstaller --noconfirm --clean packaging/ai_video_studio.spec
-"%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe" /DMyAppVersion=4.9.1 packaging\installer.iss
+"%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe" /DMyAppVersion=4.9.2 packaging\installer.iss
 ```
 
 That is where Inno Setup goes when installed for one user; installed for everyone, it is

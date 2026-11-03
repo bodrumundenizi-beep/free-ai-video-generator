@@ -239,9 +239,20 @@ def parse_pexels(data: dict, target_w: int, target_h: int) -> list[Candidate]:
     return found
 
 
+# Pixabay clips tagged like this are drawn or made by a computer: out of place among
+# filmed scenes (the coffee test, 2026-10-29).
+NOT_FILMED = ("illustration", "animation", "animated", "cartoon", "3d", "render",
+              "ai generated", "generated", "motion graphics")
+
+
+def filmed(hit: dict) -> bool:
+    tags = {t.strip().lower() for t in str(hit.get("tags") or "").split(",")}
+    return hit.get("type", "film") != "animation" and not tags & set(NOT_FILMED)
+
+
 def parse_pixabay(data: dict, target_w: int, target_h: int) -> list[Candidate]:
     found = []
-    for hit in data.get("hits") or []:
+    for hit in [h for h in data.get("hits") or [] if isinstance(h, dict) and filmed(h)]:
         # Renditions can be present but empty (url "" and size 0).
         files = [
             {"url": r.get("url"), "width": r.get("width"), "height": r.get("height")}
@@ -328,6 +339,7 @@ class FootageSearch:
         self.used: set[str] = set()
         self.disabled: dict[str, str] = {}
         self.order = order if order in ORDERS else "Pexels first"
+        self.per_page = 1   # times the usual results per search; long videos ask for more
 
     @property
     def providers(self) -> list[str]:
@@ -373,7 +385,7 @@ class FootageSearch:
     def _search_pexels(self, query, orientation) -> list[Candidate]:
         if "Pexels" not in self.providers:
             return []
-        params = {"query": query, "per_page": 15, "size": self.pexels_size}
+        params = {"query": query, "per_page": 15 * self.per_page, "size": self.pexels_size}
         if orientation:
             params["orientation"] = orientation
         label = orientation or "any orientation"
@@ -385,7 +397,7 @@ class FootageSearch:
     def _search_pixabay(self, query) -> list[Candidate]:
         if "Pixabay" not in self.providers:
             return []
-        params = {"key": self.keys["Pixabay"], "q": query[:100], "per_page": 20,
+        params = {"key": self.keys["Pixabay"], "q": query[:100], "per_page": 20 * self.per_page,
                   "safesearch": "true"}
         data = self._get("Pixabay", PIXABAY_URL, params, {},
                          f"🔍 Searching Pixabay for: '{query}'...")

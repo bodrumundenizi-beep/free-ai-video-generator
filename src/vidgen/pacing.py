@@ -19,7 +19,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-TARGETS = {"Auto": None, "15 s": 15.0, "30 s": 30.0, "60 s": 60.0}
+TARGETS = {"Auto": None, "15 s": 15.0, "30 s": 30.0, "60 s": 60.0,
+           "3 min": 180.0, "5 min": 300.0, "10 min": 600.0}   # long videos since 4.9.2
 DEFAULT_TARGET = "Auto"
 
 PAD_MIN, PAD_MAX = 0.1, 1.0

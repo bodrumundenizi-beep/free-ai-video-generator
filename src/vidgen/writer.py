@@ -16,6 +16,7 @@ Pure of Tk. The network and the model process can both be replaced in tests.
 from __future__ import annotations
 
 import ctypes
+import dataclasses
 import hashlib
 import json
 import os
@@ -294,12 +295,13 @@ def is_idea(text: str) -> bool:
 
 
 def build_prompt(audience: draft.Audience, words: int, pictures: bool = False,
-                 idea: str = "", facts: bool = False) -> str:
+                 idea: str = "", facts: bool = False, part: str = "") -> str:
     """The instructions for writing a script of about ``words`` spoken words.
 
     With ``pictures`` every scene also gets a description an image model can draw. With
     ``idea`` (the user asked for a video rather than giving a text) the script is invented:
-    for a story, events that happen one after another, not a mood described.
+    for a story, events that happen one after another, not a mood described. ``part``: this
+    is one part of a long video (``part_note``), which replaces the rule about the hook.
     """
     if idea and _STORY.search(idea):
         task = ("The user gives an idea for a story. Write an original short story from it, "
@@ -321,14 +323,17 @@ def build_prompt(audience: draft.Audience, words: int, pictures: bool = False,
         f"({round(words * 0.85)} to {round(words * 1.1)}). Keep the most important points "
         "and leave the rest out.\n"
         f"Write exactly {scene_count(words)} scenes.\n"
+        + part +
         "Rules:\n"
-        "- The first scene is a hook: a surprising or curious line that makes people keep "
-        "watching.\n"
-        "- \"voice\" is one full spoken sentence of 8 to 18 words.\n"
+        + ("" if part else
+           "- The first scene is a hook: a surprising or curious line that makes people keep "
+           "watching.\n")
+        + "- \"voice\" is one full spoken sentence of 8 to 18 words.\n"
         "- \"visual\" is 2 or 3 words for a stock video search: real things a camera can film "
-        "that match the line. Name the video's subject when the line is about it (\"coffee "
-        "drying patio\", not \"water and sun\"), and keep what the line shows, like rain, "
-        "umbrellas or night. Never idea words like recap, summary, question or ending. Every "
+        "that match the line. Name the video's subject when the shot shows the subject "
+        "itself (\"coffee drying patio\", not \"water and sun\"), but not for other things "
+        "in the line (\"food truck\", not \"coffee truck\"), and keep what the line shows, "
+        "like rain, umbrellas or night. Never idea words like recap, summary, question or ending. Every "
         "scene gets different words. No brand names, no single words.\n"
         + ("- \"picture\" is one sentence describing a photo for this scene: who or what is "
            "in it, what they are doing and where. Things you can see, not ideas. No writing, "
@@ -516,6 +521,98 @@ def _revise_turn(scenes, comment: str) -> str:
     return f"Script:\n{json.dumps({'scenes': scenes})}\n\nComment: {comment}"
 
 
+# --- long videos (4.9.2): an outline, then each part on its own -----------------------------
+# One answer holds about 770 words (CONTEXT // 2 tokens), a 10 minute video about 1500: so a
+# long video is planned as parts first, then written a part at a time.
+LONG = 60.0          # seconds: longer targets are written in parts
+PART_WORDS = 130     # spoken words in one part: about 13 scenes, well inside one answer
+MAX_PARTS = 10
+
+
+def part_count(words: int) -> int:
+    return min(max(2, round(words / PART_WORDS)), MAX_PARTS)
+
+
+def outline_schema(parts: int) -> dict:
+    return {"type": "object", "required": ["parts"], "properties": {"parts": {
+        "type": "array", "minItems": parts, "maxItems": parts,
+        "items": {"type": "object", "required": ["title", "points"], "properties": {
+            "title": {"type": "string", "maxLength": 40},
+            "points": {"type": "array", "minItems": 2, "maxItems": 3,
+                       "items": {"type": "string"}}}}}}}
+
+
+def outline_prompt(audience: draft.Audience, parts: int, story: bool, facts: bool) -> str:
+    order = ("a beginning, rising tension, a turn and an ending, like a story" if story else
+             "a clear order, from what people need first to the details, ending with a "
+             "conclusion")
+    return (f"You plan narrated videos made from stock footage. Plan a video about the user's "
+            f"text or idea in exactly {parts} parts that follow {order}. Give each part a "
+            "short title of 2 to 5 words that names what it is about (never Hook, Intro or "
+            "Part 1) and 2 or 3 points, one sentence each. No part repeats what another "
+            "part says.\n"
+            f"Audience and style: {audience.brief}\n"
+            + ("Use only the facts given after the request.\n" if facts else "")
+            + "Answer with JSON only.")
+
+
+def part_note(at: int, parts: int, titles: list[str], points: list[str], before: str) -> str:
+    """What one part of a long video is about, for build_prompt."""
+    plan = "; ".join(f"{i + 1}. {title}" for i, title in enumerate(titles)) if titles else ""
+    others = [t for i, t in enumerate(titles) if i != at]
+    about = (f"Write only part {at + 1} of {parts}"
+             + (f", \"{titles[at]}\", about: {' '.join(points)}" if titles else
+                ", from the text you are given, and give it a short title of 2 to 5 words")
+             + ".\n"
+             + (f"- Stay on this part's points only: the other parts ({'; '.join(others)}) "
+                "cover the rest.\n" if others else "")
+             + "- No lines about the video itself, like what comes next or which step this "
+               "is.\n")
+    first = ("- The first scene is a hook: a surprising or curious line that makes people "
+             "keep watching.\n" if at == 0 else
+             f"- Carry on from the part before, which ended: \"{before}\" No hook, no "
+             "greeting, and don't repeat earlier parts.\n")
+    last = ("- The last scene ends the whole video with a strong closing line.\n"
+            if at == parts - 1 else "- Don't end the video: more parts follow.\n")
+    return (f"This is one part of a longer video{': ' + plan if plan else ''}.\n"
+            + about + first + last)
+
+
+def _gist(voice: str) -> frozenset:
+    """The words that carry a line's meaning, to spot one said again in other words."""
+    return frozenset(w for w in re.findall(r"[a-z']+", voice.lower()) if len(w) > 3)
+
+
+def _repeats(voice: str, said) -> bool:
+    """Whether ``voice`` says (almost) only what a line in ``said`` (gists) already said.
+    Small models restate the hook or an earlier part when a part is written on its own."""
+    gist = _gist(voice)
+    return any(gist and len(gist & before) >= 0.75 * len(gist) for before in said)
+
+
+def part_schema(scenes: int, pictures: bool = False) -> dict:
+    """script_schema with the part's title, which a part written from a text names itself."""
+    schema = script_schema(scenes, pictures)
+    schema["properties"]["title"] = {"type": "string", "maxLength": 40}
+    schema["required"] = ["title", "scenes"]
+    return schema
+
+
+def split_text(text: str, parts: int) -> list[str]:
+    """``text`` cut into ``parts`` pieces of about the same length, between sentences."""
+    sentences = draft.split_sentences(text) or [text]
+    size = sum(len(s) for s in sentences) / parts
+    pieces, current, done = [], [], 0
+    for sentence in sentences:
+        current.append(sentence)
+        done += len(sentence)
+        if done >= size * (len(pieces) + 1) and len(pieces) < parts - 1:
+            pieces.append(" ".join(current))
+            current = []
+    pieces.append(" ".join(current))
+    return [p for p in pieces if p.strip()]
+
+
 def parse_scenes(content: str, topic: str = "") -> list[draft.DraftScene]:
     """The model's answer as scenes. Repeated and empty lines are dropped."""
     try:
@@ -600,6 +697,14 @@ def upload_fallback(script: str) -> dict:
     title = lines[0] if lines else "My video"
     tags = [s.visual for s in scenes if not s.is_ai and not s.is_local]
     return tidy_upload(title, " ".join(lines[:2]), tags)
+
+
+def with_chapters(upload: dict, lines: list[str]) -> dict:
+    """The upload text with a long video's chapter times under the description (YouTube
+    makes chapters from lines like "0:00 Title")."""
+    if not lines:
+        return upload
+    return dict(upload, description=upload["description"] + "\n\n" + "\n".join(lines))
 
 
 def upload_file_text(upload: dict) -> str:
@@ -898,9 +1003,11 @@ class Session:
 
     def write(self, text: str, audience: draft.Audience | None = None,
               length: str | None = None, padding: float = 0.3,
-              cards: bool = True, ai: str = draft.AI_NONE, web: bool = False) -> draft.Draft:
+              cards: bool = True, ai: str = draft.AI_NONE, web: bool = False,
+              progress=None) -> draft.Draft:
         """A script for ``text``, rewritten for the audience and the length. With ``web``, an
-        idea that asks for facts is first looked up on Wikipedia (vidgen.webfacts)."""
+        idea that asks for facts is first looked up on Wikipedia (vidgen.webfacts).
+        ``progress(message, fraction)`` hears how a long video's parts are going."""
         audience = audience or draft.Audience()
         length = length if length in draft.LENGTHS else audience.length
         persona = voices.persona(audience.voice)
@@ -920,6 +1027,14 @@ class Session:
             source = (f"Smart writer, with facts from Wikipedia ({', '.join(sources)})" if facts
                       else "Smart writer (Wikipedia could not be reached, so from what it "
                            "knows: check the facts)")
+        if target is not None and target > LONG:
+            scenes, note = self._write_long(text, audience, words, target, persona, pictures,
+                                            facts, progress or (lambda *_a: None))
+            script = draft.to_script(scenes, cards, ai)
+            seconds = sum(pacing.estimate_voice(s.voice, persona.rate, persona.pause_scale,
+                                                persona.enhanced) + padding for s in scenes)
+            return draft.Draft(script, scenes, seconds, length, persona.id, audience.aspect,
+                               source=source + note)
         scenes = self._write_once(text, audience, words, pictures, facts)
         if target is not None and not _fits(scenes, target, persona):
             # Too long. Ask once more for less, then cut what still does not fit.
@@ -1000,6 +1115,86 @@ class Session:
             [("user", _EXAMPLE_IN), ("assistant", example), ("user", text)],
             script_schema(scene_count(words), pictures), room)
         return parse_scenes(content, topic_of(text))
+
+    def _write_long(self, text, audience, words, target, persona, pictures, facts, progress):
+        """A long video: an outline of parts, then each part in its own answer. Returns
+        (scenes, a note for the source). Cancel keeps the parts already written."""
+        parts = part_count(words)
+        each = max(40, round(words / parts))
+        idea = text if is_idea(text) else ""
+        asked = f"{text}\n\nFacts to use:\n{facts}" if facts else text
+        topic = topic_of(text)
+        outline_room = parts * 70 + 120
+        titles, points, pieces = [], [[] for _ in range(parts)], None
+        if len(asked) / CHARS_PER_TOKEN <= CONTEXT - outline_room - 700:
+            progress("Writing the outline...", 0.0)
+            content = self._ask(outline_prompt(audience, parts, bool(_STORY.search(idea)),
+                                               bool(facts)),
+                                [("user", asked)], outline_schema(parts), outline_room, 0.7)
+            try:
+                plan = json.loads(content)["parts"]
+                titles = [" ".join(str(p["title"]).split()) for p in plan]
+                points = [[" ".join(str(x).split()) for x in p["points"]] for p in plan]
+            except (ValueError, KeyError, TypeError) as exc:
+                raise WriterError("The Smart writer gave an answer the app could not read.") \
+                    from exc
+        room = _answer_tokens(each, pictures) + 30
+        if len(asked) / CHARS_PER_TOKEN > CONTEXT - room - 900:
+            # Too long to give every part: each part is written from its own piece of it.
+            pieces = split_text(asked, parts)
+            parts = len(pieces)
+            if len(titles) != parts:
+                titles, points = [], [[] for _ in range(parts)]
+        example = _EXAMPLE_OUT_PICTURES if pictures else _EXAMPLE_OUT
+        scenes, part_of, said, done = [], [], set(), 0
+        for at in range(parts):
+            if self.should_stop():   # Cancel between parts: keep what is written
+                if not done:
+                    self._stopping()
+                break
+            progress(f"Writing part {at + 1} of {parts}...", (at + 1) / (parts + 1))
+            given = pieces[at] if pieces else asked
+            try:
+                _check_fits(given, room)
+                content = self._ask(
+                    build_prompt(audience, each, pictures, idea, bool(facts),
+                                 part_note(at, parts, titles, points[at],
+                                           scenes[-1].voice if scenes else "")),
+                    [("user", _EXAMPLE_IN), ("assistant", example), ("user", given)],
+                    part_schema(scene_count(each), pictures), room)
+            except Stopped:
+                if not done:
+                    raise
+                break
+            found = [s for s in parse_scenes(content, topic) if not _repeats(s.voice, said)]
+            if not found:
+                continue
+            try:
+                title = titles[at] if titles else " ".join(str(json.loads(content)["title"]).split())
+            except (ValueError, KeyError, TypeError):
+                title = ""
+            found[0] = dataclasses.replace(found[0], chapter=title or f"Part {at + 1}")
+            said.update(_gist(s.voice) for s in found)
+            scenes += found
+            part_of += [at] * len(found)
+            done += 1
+        if not scenes:
+            raise WriterError("The Smart writer gave an empty answer.")
+        if not _fits(scenes, target, persona):
+            kept = _trim(scenes, target, persona)
+            # A part whose first scene was cut starts at its next scene still there.
+            chapters = {part_of[i]: s.chapter for i, s in enumerate(scenes) if s.chapter}
+            where = {id(scene): part_of[i] for i, scene in enumerate(scenes)}
+            seen, marked = set(), []
+            for scene in kept:
+                at = where[id(scene)]
+                marked.append(dataclasses.replace(
+                    scene, chapter=chapters.get(at, "") if at not in seen else ""))
+                seen.add(at)
+            scenes = marked
+        progress("Done.", 1.0)
+        note = "" if done == parts else f" (stopped after part {done} of {parts})"
+        return scenes, note
 
 
 def _answer_tokens(words: int, pictures: bool = False) -> int:

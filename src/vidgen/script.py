@@ -16,6 +16,7 @@ Any scene can add optional keys, in any order after its ``Visual:``:
     Card: Win + V       drawn over the footage; see cards.py for the three looks
     Picture: a robot    what an AI picture of this scene would show, kept beside a stock
                         scene so the Storyboard can switch it to one in a click
+    Chapter: The basics a part of a long video starts at this scene, with this title
 
 ``Visual: ai: a robot holding a clipboard`` asks for an AI picture of that
 (imagegen.py) instead of stock footage, the way ``local:`` asks for a file.
@@ -29,7 +30,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-KEYS = ("visual", "voice", "duration", "padding", "zoom", "card", "picture")
+KEYS = ("visual", "voice", "duration", "padding", "zoom", "card", "picture", "chapter")
 ZOOM_MODES = ("auto", "in", "out", "none")
 _ZOOM_ALIASES = {"off": "none", "no": "none", "default": "auto"}
 
@@ -57,6 +58,7 @@ class Scene:
     zoom: str = "auto"
     card: str | None = None  # text drawn over the footage (cards.py)
     picture: str | None = None  # a description for an AI picture, should one be wanted
+    chapter: str | None = None  # the title of the part of a long video that starts here
     line: int = 0  # 1-based line of the scene's Visual:
 
     @property
@@ -149,7 +151,7 @@ def parse_script(script_text, warnings=None):
         if key not in KEYS:
             raise ScriptError(
                 f"Error on Line {line_no}: Line must begin with 'Visual:' or 'Voice:' "
-                "(or Duration:, Padding:, Zoom:, Card:, Picture:)"
+                "(or Duration:, Padding:, Zoom:, Card:, Picture:, Chapter:)"
             )
         value = match.group(2).strip()
         label = key.capitalize()
@@ -194,6 +196,8 @@ def parse_script(script_text, warnings=None):
             current.card = value
         elif key == "picture":
             current.picture = value or None
+        elif key == "chapter":
+            current.chapter = value or None
         else:
             current.zoom = _zoom(value, line_no)
 
@@ -220,6 +224,8 @@ def to_text(scenes) -> str:
             lines.append(f"Card: {scene.card}")
         if scene.picture:
             lines.append(f"Picture: {scene.picture}")
+        if scene.chapter:
+            lines.append(f"Chapter: {scene.chapter}")
         blocks.append("\n".join(lines))
     return "\n\n".join(blocks)
 

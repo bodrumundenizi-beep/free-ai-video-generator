@@ -24,7 +24,7 @@ from .footage import STOPWORDS
 from .script import parse_script
 
 KEEP_ALL = "Keep everything"
-LENGTHS = ["15 s", "30 s", "60 s", KEEP_ALL]
+LENGTHS = ["15 s", "30 s", "60 s", "3 min", "5 min", "10 min", KEEP_ALL]
 
 # How much faster than normal the voice may have to go before a sentence is
 # dropped instead. pacing allows 15%; a draft should not start at the limit.
@@ -454,6 +454,7 @@ class DraftScene:
     sentence: int  # index of the sentence it came from
     picture: str = ""  # the Smart writer's description of an AI picture for the scene
     unfilmable: bool = False  # its search words named things no camera can film
+    chapter: str = ""  # a long video's part that starts at this scene (writer._write_long)
 
 
 # Which scenes get an AI picture (imagegen.py) when the user has downloaded AI images.
@@ -583,6 +584,8 @@ def to_script(scenes, cards: bool = True, ai: str = AI_NONE) -> str:
         found = add_cards([_one_line(s.voice) for s in spoken])
         blocks = [block + (f"\nCard: {card}" if card else "")
                   for block, card in zip(blocks, found)]
+    blocks = [block + (f"\nChapter: {_one_line(s.chapter)}" if getattr(s, "chapter", "") else "")
+              for block, s in zip(blocks, spoken)]
     if not blocks:
         raise DraftError("There is no text to turn into a script.")
     script = "\n\n".join(blocks)

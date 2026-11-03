@@ -161,7 +161,7 @@ from vidgen.voice import generate_voiceover  # noqa: E402
 
 
 APP_NAME = "AI Video Studio"
-APP_VERSION = "4.9.1"
+APP_VERSION = "4.9.2"
 # Must match AppUserModelID in packaging/installer.iss, or a pinned taskbar
 # shortcut will not group with the running window.
 APP_MODEL_ID = "AIVideoStudio.Desktop.3"
@@ -1300,13 +1300,12 @@ TOUR = (
 # Shown once after updating to this version (WhatsNewDialog). Short: the release notes have
 # the whole story.
 WHATS_NEW = (
-    "A thumbnail editor: the Storyboard's new Thumbnail tab. Text with glow, arrows, circles, "
-    "brush, 30 stickers, and Pexels or Pixabay photos, all in layers you can move and turn.",
-    "The new Thumbnails page: edit any video's thumbnail (the one next to the video is "
-    "replaced), start over, or make free thumbnails that belong to no video.",
-    "Blur or darken the background so the words stand out; Undo, Redo and arrow keys work.",
-    "Important fix: the portable version updates itself even where its folder is locked "
-    "(school PCs, USB sticks): the new version goes to AppData, with a Desktop shortcut.",
+    "Long videos: 3, 5 and 10 minutes. The Smart writer plans the video in chapters, then "
+    "writes one chapter at a time.",
+    "Chapters fold open and shut on the Storyboard, show as titles in the video and as "
+    "chapter times in the upload text, ready for YouTube.",
+    "Long videos are made in parts with the sound mixed once, and every video now uses far "
+    "less memory: a clip is opened only while it is on screen.",
 )
 
 
@@ -4261,8 +4260,10 @@ class DraftDialog(ctk.CTkToplevel):
                 self._post(event="suggested", found=found)
             else:
                 self._post(event="written",
-                           result=self.session.write(text, audience, length, padding, cards,
-                                                     ai, web))
+                           result=self.session.write(
+                               text, audience, length, padding, cards, ai, web,
+                               progress=lambda message, fraction: self._post(
+                                   event="progress", message=message, fraction=fraction)))
         except writer.Stopped:
             self._post(event="stopped")
         except (writer.WriterError, draft.DraftError, ScriptError) as exc:
@@ -4279,6 +4280,10 @@ class DraftDialog(ctk.CTkToplevel):
         if not self.winfo_exists():
             return
         event = payload["event"]
+        if event == "progress":   # a long video's outline and parts, one by one
+            if self.busy:
+                self._working(payload["message"], payload["fraction"])
+            return
         if payload.get("trace"):
             self.app.session_log.write(payload["trace"])
         if self.session is not None and self.session.gpu_failed:
@@ -4369,7 +4374,7 @@ class DraftDialog(ctk.CTkToplevel):
             ("Who is it for?", lambda m: self._menu(m, draft.CONTENT, self.var_content)),
             ("Age", lambda m: FluentSegmented(m, app, list(draft.AGES), self.var_age, 380)),
             ("Where will it go?", lambda m: self._menu(m, draft.PLATFORMS, self.var_platform)),
-            ("How long?", lambda m: FluentSegmented(m, app, draft.LENGTHS, self.var_length, 420)),
+            ("How long?", lambda m: self._menu(m, draft.LENGTHS, self.var_length)),
             ("Aspect ratio", lambda m: FluentSegmented(m, app, RATIO_OPTIONS, self.var_aspect, 170)),
             ("Written by", lambda m: FluentSegmented(m, app, list(WRITER_MODES), self.var_mode, 260)),
         )
@@ -4426,7 +4431,8 @@ class DraftDialog(ctk.CTkToplevel):
             button = f"Download ({model.gigabytes})"
         elif self.smart():
             hint = ("The Smart writer rewrites your text to fit the length and picks the search "
-                    "words. It runs on this PC and takes 10 to 60 seconds.")
+                    "words. It runs on this PC and takes 10 to 60 seconds; a long video is "
+                    "written a part at a time, a minute or two.")
             button = "Write script"
         else:
             hint = ("Quick split keeps your words exactly as written and splits them into "
@@ -8140,9 +8146,12 @@ class App(ctk.CTk):
         if self.board is None or not 0 <= index < len(self.board_cards):
             return
         self.board_selected = index
+        if self.board_cards[index] is None:   # its chapter is folded: open it
+            self._open_chapter_of(index)
         for at, widgets in enumerate(self.board_cards):
-            widgets["card"].configure(border_width=2 if at == index else 0,
-                                      border_color=ACCENT)
+            if widgets is not None:
+                widgets["card"].configure(border_width=2 if at == index else 0,
+                                          border_color=ACCENT)
         self._show_preview()
 
     def _show_preview(self):
@@ -8251,7 +8260,8 @@ class App(ctk.CTk):
         self.preview_button.pack(anchor="w", pady=(8, 0))
 
         _card, body = self._option_card(box, "timer", "Length")
-        FluentSegmented(body, self, list(pacing.TARGETS), self.var_target, inner).pack(anchor="w")
+        # Seven lengths since 4.9.2 (up to 10 min): too many for a segmented row.
+        self._menu(body, list(pacing.TARGETS), self.var_target, 160).pack(anchor="w")
         versions = ctk.CTkFrame(body, fg_color="transparent")
         versions.pack(fill="x", pady=(8, 0))
         ctk.CTkLabel(versions, text="Versions", font=self.font_body,
@@ -8354,8 +8364,19 @@ class App(ctk.CTk):
         self._draw_timeline()
         lengths = self.board.lengths(self.voice_now(),
                                      PADDING_OPTIONS.get(self.var_padding.get(), DEFAULT_PADDING))
-        for index in range(len(self.board)):
-            self._board_card(index, lengths)
+        self._board_lengths = lengths
+        self.board_cards = [None] * len(self.board)   # None: folded away in its chapter
+        self.board_notes, self.chapter_heads = {}, {}
+        groups = boards.chapters(self.board.scenes)
+        key = tuple(start for start, _end, _title in groups)
+        if key != getattr(self, "_chapter_key", None):   # a new script: the first one open
+            self._chapter_key, self.chapters_open = key, {key[0]} if key else set()
+        for start, end, title in groups:
+            if title is not None:
+                self._chapter_head(start, end, title, lengths)
+            if title is None or start in self.chapters_open:
+                for index in range(start, end):
+                    self._board_card(index, lengths)
         self._board_select(min(self.board_selected, len(self.board) - 1))
         if not self._revising:
             self.board_status.configure(
@@ -8364,11 +8385,54 @@ class App(ctk.CTk):
         threading.Thread(target=self._board_load, daemon=True,
                          args=(self.board_gen, list(self.board.scenes), self._board_ctx())).start()
 
+    # -- chapters: a long video's parts fold open and shut (4.9.2) -------------------
+    def _chapter_head(self, start, end, title, lengths):
+        seconds = sum(lengths[start:end]) if len(lengths) >= end else 0
+        head = ctk.CTkButton(
+            self.board_list, text="", anchor="w", height=34, corner_radius=4,
+            font=self.font_bold, fg_color=CARD_BG, hover_color=CARD_HOVER, text_color=TEXT,
+            command=lambda: self._toggle_chapter(start, end))
+        head.grid(row=start * 2, column=0, sticky="ew", pady=(6, 6))
+        self.chapter_heads[start] = (head, f"{title}   ·   scenes {start + 1} to {end}   ·   "
+                                           f"{int(seconds // 60)}:{int(seconds % 60):02d}")
+        self._chapter_label(start)
+
+    def _chapter_label(self, start):
+        head, text = self.chapter_heads[start]
+        head.configure(text=("\u25be  " if start in self.chapters_open else "\u25b8  ") + text)
+
+    def _toggle_chapter(self, start, end, open_it=None):
+        """Show or hide one chapter's cards; pictures already loaded come straight back."""
+        open_it = start not in self.chapters_open if open_it is None else open_it
+        if open_it == (start in self.chapters_open):
+            return
+        if open_it:
+            self.chapters_open.add(start)
+            for index in range(start, end):
+                self._board_card(index, self._board_lengths)
+                if index in self.board_paths:
+                    self._board_show(index, self.board_paths[index])
+                if index in self.board_notes:
+                    self.board_cards[index]["status"].configure(text=self.board_notes[index])
+        else:
+            self.chapters_open.discard(start)
+            for index in range(start, end):
+                if self.board_cards[index] is not None:
+                    self.board_cards[index]["card"].destroy()
+                    self.board_cards[index] = None
+                    self.board_images.pop(index, None)
+        self._chapter_label(start)
+
+    def _open_chapter_of(self, index):
+        for start, end, title in boards.chapters(self.board.scenes):
+            if start <= index < end and title is not None:
+                self._toggle_chapter(start, end, True)
+
     def _board_card(self, index, lengths=()):
         scene, kind = self.board.scenes[index], self.board.source(index)
         box = self.board_box()
         card = Card(self.board_list)
-        card.grid(row=index, column=0, sticky="ew", pady=(0, 6))
+        card.grid(row=index * 2 + 1, column=0, sticky="ew", pady=(0, 6))
         card.grid_columnconfigure(1, weight=1)
         picture = ctk.CTkLabel(card, text="...", width=box[0], height=box[1], fg_color=FIELD_BG,
                                corner_radius=4, font=self.font_tiny, text_color=TEXT_DIM)
@@ -8441,8 +8505,8 @@ class App(ctk.CTk):
                           ("Add", lambda i=index: self.board.insert(i)),
                           ("Delete", lambda i=index: self.board.delete(i))):
             button(order, text, lambda a=act: self._board_do(a), width=64).pack(pady=(0, 4))
-        self.board_cards.append({"picture": picture, "status": status, "action": action,
-                                 "card": card})
+        self.board_cards[index] = {"picture": picture, "status": status, "action": action,
+                                   "card": card}
 
     # -- edits: every one is written back to the script -------------------------------
     # -- the timeline under the cards ---------------------------------------------------
@@ -8479,6 +8543,18 @@ class App(ctk.CTk):
                                    fill=theme_color(TEXT))
             x += w
             self._timeline_edges.append(x)
+        # A long video's chapters: a line where each starts, and its title over the blocks.
+        edges = [4.0] + self._timeline_edges
+        for start, end, title in boards.chapters(self.board.scenes):
+            if title is None:
+                continue
+            left, right = edges[start], edges[end]
+            canvas.create_rectangle(left, 4, left + 2, 42, outline="", fill=theme_color(ACCENT))
+            if right - left > 40:
+                canvas.create_rectangle(left + 2, 4, min(right - 3, left + 10 + 7 * len(title)),
+                                        20, outline="", fill=theme_color(MAIN_BG))
+                canvas.create_text(left + 6, 12, anchor="w", text=title, font=self.font_tiny,
+                                   fill=theme_color(TEXT))
 
     def _timeline_picture(self, index):
         """A 34 px high picture of scene ``index`` for its timeline block, or None."""
@@ -8647,7 +8723,13 @@ class App(ctk.CTk):
         if hold["moved"]:
             self._board_write()
         elif self.board_cards:   # a click: bring its card into view
-            self.board_list._parent_canvas.yview_moveto(hold["index"] / len(self.board_cards))
+            self._board_select(hold["index"])
+            self.update_idletasks()
+            widgets = self.board_cards[hold["index"]]
+            inner = self.board_list
+            if widgets is not None and inner.winfo_height() > 0:
+                self.board_list._parent_canvas.yview_moveto(
+                    widgets["card"].winfo_y() / inner.winfo_height())
 
     def _timeline_auto(self, event):
         index, _edge = self._timeline_at(event.x)
@@ -8753,10 +8835,15 @@ class App(ctk.CTk):
         self._queue.put(("board", dict(payload, gen=gen)))
 
     def _board_load(self, gen, scenes_now, ctx):
-        for index, scene in enumerate(scenes_now):
-            if gen != self.board_gen:
-                return
-            self._board_load_one(gen, index, scene, ctx)
+        """Worker: the cards' stills, three at a time (one by one, 140 scenes took minutes)."""
+        from concurrent.futures import ThreadPoolExecutor
+
+        def one(item):
+            if gen == self.board_gen:   # the cards were rebuilt: stop
+                self._board_load_one(gen, *item, ctx)
+
+        with ThreadPoolExecutor(3, thread_name_prefix="still") as pool:
+            list(pool.map(one, enumerate(scenes_now)))
 
     def _board_load_one(self, gen, index, scene, ctx):
         """Worker thread: the still for one card, and what to say beside it."""
@@ -8832,7 +8919,8 @@ class App(ctk.CTk):
         size, look, backend = imagegen.size_for(self.var_aspect.get()), self.var_ai_look.get(), \
             self.ai_backend_now()
         speed, threads = self.ai_speed_now(), self.threads_pair()
-        self.board_cards[index]["status"].configure(text="Making the picture...")
+        if self.board_cards[index] is not None:
+            self.board_cards[index]["status"].configure(text="Making the picture...")
 
         def worker():
             import hashlib
@@ -8866,6 +8954,12 @@ class App(ctk.CTk):
         if payload["gen"] != self.board_gen or index is None or index >= len(self.board_cards):
             return   # the cards were rebuilt meanwhile
         widgets = self.board_cards[index]
+        if widgets is None:   # folded away: kept for when its chapter opens
+            if event != "not_made":
+                self.board_notes[index] = payload.get("note", "")
+                if payload.get("path"):
+                    self._board_show(index, payload["path"])
+            return
         if event == "not_made":
             widgets["status"].configure(text=ellipsize(payload["message"], 70),
                                         text_color=ERR_COLOR)
@@ -8880,6 +8974,14 @@ class App(ctk.CTk):
     def _board_show(self, index, path):
         from PIL import Image, ImageOps
 
+        if self.board_cards[index] is None:   # folded: the panel, timeline and thumbnail still use it
+            if path:
+                self.board_paths[index] = path
+                if index == self.board_selected:
+                    self._show_preview()
+                self._draw_timeline()
+                self._schedule_thumb()
+            return
         picture, box = self.board_cards[index]["picture"], self.board_box()
         try:
             with Image.open(path) as opened:
@@ -9706,6 +9808,13 @@ class App(ctk.CTk):
                 upload = upload or writer.upload_fallback(script)
             except ScriptError:
                 return
+            for video in videos[:1]:   # a long video's chapters (render._write_chapters)
+                try:
+                    with open(os.path.splitext(video)[0] + ".chapters.txt",
+                              encoding="utf-8") as fh:
+                        upload = writer.with_chapters(upload, fh.read().split("\n")[:-1])
+                except OSError:
+                    pass
             self._queue.put(("upload", {"upload": upload, "videos": videos, "project": pid}))
 
         threading.Thread(target=worker, daemon=True).start()

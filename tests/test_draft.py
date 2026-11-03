@@ -105,7 +105,9 @@ def test_a_short_length_keeps_the_hook_and_drops_the_rest_in_order():
 
 def test_a_longer_length_is_offered_when_sentences_were_dropped():
     assert draft.write(TEXT, length="15 s").longer in ("30 s", "60 s")
-    assert draft.write(TEXT * 6, length="60 s").longer == draft.KEEP_ALL  # nothing fixed fits it
+    # Nothing up to a minute fits it: the shortest long length that does is offered.
+    assert draft.write(TEXT * 6, length="60 s").longer == "3 min"
+    assert draft.write(TEXT * 60, length="60 s").longer == draft.KEEP_ALL
 
 
 def test_putting_a_sentence_back_keeps_it():

@@ -30,6 +30,51 @@ def _over(part, under, a):
     return ((x + (x >> 8)) >> 8).astype(np.uint8)
 
 
+class Lazy:
+    """A layer whose clip is made when it first shows and closed when it is over.
+
+    An open 1080p video reader holds about 370 MB (ffmpeg decodes with a thread per core;
+    measured 2026-11-03), so a long video's chunk opens each shot only while it plays.
+    ``make(keep)`` builds the clip, registering what it opens with ``keep``.
+    """
+
+    layer_index = 0
+
+    def __init__(self, make, start, end):
+        self.make, self.start, self.end = make, start, end
+        self._clip, self._open = None, []
+
+    def is_playing(self, t):
+        return self.start <= t < self.end
+
+    def clip(self):
+        if self._clip is None:
+            self._clip = self.make(self._keep)
+        return self._clip
+
+    def _keep(self, opened):
+        self._open.append(opened)
+        return opened
+
+    def get_frame(self, t):
+        return self.clip().get_frame(t)
+
+    def pos(self, t):
+        return self.clip().pos(t)
+
+    @property
+    def mask(self):
+        return self.clip().mask
+
+    def release(self):
+        for opened in reversed(self._open):
+            try:
+                opened.close()
+            except Exception:  # noqa: BLE001 - closing a reader that is already gone
+                pass
+        self._open, self._clip = [], None
+
+
 def layered(layers, size, duration):
     """One clip showing ``layers`` (MoviePy clips with start, position and maybe a mask)."""
     from moviepy import VideoClip
@@ -42,6 +87,8 @@ def layered(layers, size, duration):
         out = None
         for clip in clips:
             if not clip.is_playing(t):
+                if isinstance(clip, Lazy) and t >= clip.end:
+                    clip.release()   # frames are made in order: it won't show again
                 continue
             ct = t - clip.start
             picture = clip.get_frame(ct)
