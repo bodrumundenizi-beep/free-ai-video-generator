@@ -161,7 +161,7 @@ from vidgen.voice import generate_voiceover  # noqa: E402
 
 
 APP_NAME = "AI Video Studio"
-APP_VERSION = "4.9.0"
+APP_VERSION = "4.9.1"
 # Must match AppUserModelID in packaging/installer.iss, or a pinned taskbar
 # shortcut will not group with the running window.
 APP_MODEL_ID = "AIVideoStudio.Desktop.3"
@@ -1305,6 +1305,8 @@ WHATS_NEW = (
     "The new Thumbnails page: edit any video's thumbnail (the one next to the video is "
     "replaced), start over, or make free thumbnails that belong to no video.",
     "Blur or darken the background so the words stand out; Undo, Redo and arrow keys work.",
+    "Important fix: the portable version updates itself even where its folder is locked "
+    "(school PCs, USB sticks): the new version goes to AppData, with a Desktop shortcut.",
 )
 
 
@@ -6827,7 +6829,19 @@ class App(ctk.CTk):
             return False
         if updates.is_installed_copy(self._app_dir()):
             return found.can_install
-        return found.can_unpack and updates.can_write(self._app_dir())
+        return found.can_unpack and updates.update_target(self._app_dir()) is not None
+
+    def _why_no_update(self) -> str:
+        """Why Update now isn't offered, in a few words for the bar and the log."""
+        found = self.update_release
+        if not IS_FROZEN:
+            return "This copy runs from source, so it can't replace itself."
+        if updates.is_installed_copy(self._app_dir()):
+            return "" if found.can_install else "This release has no installer the app can use."
+        if not found.can_unpack:
+            return "This release has no portable version the app can use."
+        return ("This PC doesn't let the app write its own folder or AppData, so it can't "
+                "update itself.")
 
     def _offer_update(self, message=None, allow_install=True):
         """Show the bar: Update now where the app can do it, the release page otherwise."""
@@ -6838,6 +6852,11 @@ class App(ctk.CTk):
             self.update_action.configure(text="Update now", command=self.start_update,
                                          state="normal")
         else:
+            why = self._why_no_update() if allow_install else ""
+            if why and not message:   # say why, instead of only sending to the page
+                self.update_bar_label.configure(
+                    text=f"Version {found.version} is available. {why}")
+                self.append_log(f"ℹ️ Update: {why} Download it from the release page.")
             self.update_action.configure(text="Download", command=self.open_update_page,
                                          state="normal")
         self.update_later.configure(text="Later", command=self.update_bar.grid_remove)
@@ -6924,10 +6943,16 @@ class App(ctk.CTk):
                 # Detached: the installer must outlive this process, which it replaces.
                 flags = getattr(subprocess, "DETACHED_PROCESS", 0)
             else:
-                # Portable: a script copies the unpacked app over this one once it has closed.
+                # Portable: a script copies the unpacked app over this one once it has closed,
+                # or into AppData when this folder can't be written (a school PC, a USB stick).
+                target = updates.update_target(self._app_dir()) or self._app_dir()
+                moved = os.path.normcase(target) != os.path.normcase(self._app_dir())
+                if moved:
+                    self.append_log(f"📦 This copy's folder is locked: the new version goes to "
+                                    f"{target} and opens from there.")
                 script = os.path.join(TEMP_ROOT, "update", "update.cmd")
                 with open(script, "w", encoding="utf-8") as fh:
-                    fh.write(updates.portable_script(path, self._app_dir(), os.getpid()))
+                    fh.write(updates.portable_script(path, target, os.getpid(), shortcut=moved))
                 command = ["cmd", "/c", script]
                 # A hidden console, shared by robocopy, instead of windows popping up.
                 flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)

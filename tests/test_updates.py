@@ -293,3 +293,24 @@ def test_the_swap_script_waits_copies_without_deleting_and_reopens():
 
 def test_a_folder_that_takes_files_can_be_updated(tmp_path):
     assert updates.can_write(str(tmp_path)) and not updates.can_write(str(tmp_path / "missing"))
+
+
+def test_a_locked_portable_folder_updates_into_appdata(tmp_path, monkeypatch):
+    """4.9.1: a school PC or USB stick that can't be written used to only open the page."""
+    app, fallback = str(tmp_path / "locked"), str(tmp_path / "appdata" / "AI Video Studio")
+    assert updates.update_target(str(tmp_path), fallback) == str(tmp_path)   # own folder
+    monkeypatch.setattr(updates, "can_write", lambda folder: folder == fallback)
+    assert updates.update_target(app, fallback) == fallback
+    monkeypatch.setattr(updates, "can_write", lambda folder: False)
+    assert updates.update_target(app, fallback) is None
+
+
+def test_the_fallback_is_in_local_appdata(monkeypatch):
+    monkeypatch.setenv("LOCALAPPDATA", r"C:\Users\Ana\AppData\Local")
+    assert updates.fallback_dir() == r"C:\Users\Ana\AppData\Local\AI Video Studio"
+
+
+def test_a_moved_update_leaves_a_desktop_shortcut():
+    moved = updates.portable_script(r"C:\T\new", r"C:\A\AI Video Studio", 7, shortcut=True)
+    assert "CreateShortcut" in moved and r"C:\A\AI Video Studio\AIVideoStudio.exe" in moved
+    assert "CreateShortcut" not in updates.portable_script(r"C:\T\new", r"C:\A", 7)

@@ -273,20 +273,46 @@ def can_write(folder: str) -> bool:
         return False
 
 
-def portable_script(new: str, app_dir: str, pid: int) -> str:
+def fallback_dir() -> str:
+    """Where a portable copy that can't write its own folder (a school PC, a USB stick, a
+    locked Downloads folder) puts the new version: the user's own AppData."""
+    base = os.environ.get("LOCALAPPDATA") or os.path.expanduser(r"~\AppData\Local")
+    return os.path.join(base, "AI Video Studio")
+
+
+def update_target(app_dir: str, fallback: str | None = None) -> str | None:
+    """The folder a portable update goes to: this copy's own folder when it can be written,
+    else the AppData folder; None when neither can (4.9.1: it used to only open the page)."""
+    if can_write(app_dir):
+        return app_dir
+    fallback = fallback or fallback_dir()
+    try:
+        os.makedirs(fallback, exist_ok=True)
+    except OSError:
+        return None
+    return fallback if can_write(fallback) else None
+
+
+def portable_script(new: str, app_dir: str, pid: int, shortcut: bool = False) -> str:
     """A .cmd that waits for the app (``pid``) to close, copies ``new`` over ``app_dir``
     and reopens it.
 
     robocopy /E adds and replaces files but never deletes any: whatever else is in the
     folder stays. Wait-Process rather than tasklist, whose messages are translated.
+    ``shortcut``: the copy went to AppData, so a Desktop shortcut points at it.
     """
+    exe = os.path.join(app_dir, APP_EXE)
+    link = ('powershell -NoProfile -Command "$s=(New-Object -ComObject WScript.Shell)'
+            ".CreateShortcut([Environment]::GetFolderPath('Desktop')+'\\AI Video Studio.lnk');"
+            f"$s.TargetPath='{exe}';$s.Save()\" >nul 2>&1") if shortcut else "rem"
     return "\r\n".join([
         "@echo off",
         f'powershell -NoProfile -Command "Wait-Process -Id {int(pid)} -Timeout 120 '
         f'-ErrorAction SilentlyContinue"',
         "timeout /t 1 /nobreak >nul",
         f'robocopy "{new}" "{app_dir}" /E /R:10 /W:1 /NFL /NDL /NJH /NJS /NP >nul',
-        f'start "" "{os.path.join(app_dir, APP_EXE)}"',
+        link,
+        f'start "" "{exe}"',
         f'rmdir /s /q "{new}"',
         '(goto) 2>nul & del "%~f0"',
         "",

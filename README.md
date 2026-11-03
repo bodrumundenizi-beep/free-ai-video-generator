@@ -71,7 +71,7 @@ You can confirm you have the real file by checking its hash against
 `SHA256SUMS.txt` on the release page:
 
 ```powershell
-Get-FileHash .\AIVideoStudio-4.9.0-setup.exe -Algorithm SHA256
+Get-FileHash .\AIVideoStudio-4.9.1-setup.exe -Algorithm SHA256
 ```
 
 ## The quick way
@@ -731,7 +731,7 @@ python -m pytest
 python packaging/make_icon.py
 python packaging/fetch_llama.py
 pyinstaller --noconfirm --clean packaging/ai_video_studio.spec
-"%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe" /DMyAppVersion=4.9.0 packaging\installer.iss
+"%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe" /DMyAppVersion=4.9.1 packaging\installer.iss
 ```
 
 That is where Inno Setup goes when installed for one user; installed for everyone, it is
