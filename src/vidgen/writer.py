@@ -69,6 +69,27 @@ MODEL = Model(
     licence="Apache 2.0",
 )
 
+# Chosen on 2026-11-03: the smallest model that says what is in a photo (photos.py), run by
+# the same llama.cpp. It comes with the Smart writer's download, not as one of its own.
+_SMOL = "https://huggingface.co/ggml-org/SmolVLM-500M-Instruct-GGUF/resolve/main/"
+VISION = Model(
+    name="SmolVLM 500M",
+    file="SmolVLM-500M-Instruct-Q8_0.gguf",
+    url=_SMOL + "SmolVLM-500M-Instruct-Q8_0.gguf",
+    size=436_806_912,
+    sha256="9d4612de6a42214499e301494a3ecc2be0abdd9de44e663bda63f1152fad1bf4",
+    licence="Apache 2.0",
+)
+VISION_PROJ = Model(   # the part that turns a picture into something the model can read
+    name="SmolVLM 500M image reader",
+    file="mmproj-SmolVLM-500M-Instruct-Q8_0.gguf",
+    url=_SMOL + "mmproj-SmolVLM-500M-Instruct-Q8_0.gguf",
+    size=108_783_360,
+    sha256="d1eb8b6b23979205fdf63703ed10f788131a3f812c7b1f72e0119d5d81295150",
+    licence="Apache 2.0",
+)
+FILES = (MODEL, VISION, VISION_PROJ)
+
 SERVER_EXE = "llama-server.exe"
 GPU_LAYERS = "99"  # more layers than the model has: all of it on the graphics card
 CONTEXT = 4096  # tokens the model can hold: instructions, the text and its answer
@@ -106,6 +127,17 @@ def installed(model: Model | None = None) -> bool:
         return os.path.getsize(model_path(model)) == model.size
     except OSError:
         return False
+
+
+def sees() -> bool:
+    """Whether the photo model is there too (photos.py)."""
+    return installed(VISION) and installed(VISION_PROJ)
+
+
+def missing() -> list[Model]:
+    """The Smart writer's files still to download: all three, or only the photo model for a
+    copy downloaded before 5.0."""
+    return [m for m in FILES if not installed(m)]
 
 
 def remove(model: Model | None = None) -> None:
@@ -242,6 +274,18 @@ def download(progress=None, should_stop=None, session=None, model: Model | None 
     return model_path(model)
 
 
+def download_all(progress=None, should_stop=None, session=None) -> None:
+    """Every file in ``missing()``, with one ``progress(done, total)`` across them."""
+    files = missing()
+    total, before = sum(m.size for m in files), 0
+    for model in files:
+        def report(done, _total, base=before):
+            if progress is not None:
+                progress(base + done, total)
+        download(report, should_stop, session, model)
+        before += model.size
+
+
 # --- what the model is asked -------------------------------------------------------
 
 # One worked example, given as a past exchange. It teaches the shape of the
@@ -294,8 +338,27 @@ def is_idea(text: str) -> bool:
     return words <= 40 and (bool(_IDEA_START.search(text)) or words <= 12)
 
 
+def photo_list(photos, shown=None) -> str:
+    """The user's photos as the model reads them, numbered from 1. ``shown``: the numbers
+    still free to show (a long video's later parts leave out the ones used)."""
+    lines = []
+    for number, photo in enumerate(photos, 1):
+        if photo.show and shown is not None and number not in shown:
+            continue
+        lines.append(f"{number}. {photo.about or 'a photo'} "
+                     + ("(show it)" if photo.show else "(don't show it, only write about it)"))
+    return "\n\nPhotos the user added:\n" + "\n".join(lines) if lines else ""
+
+
+_PHOTO_RULE = ("- The user added photos, listed after the text: write about what they show. "
+               "\"photo\" is the number of a photo marked (show it) when this scene's line is "
+               "about what that photo shows, else 0. Each of those photos goes in exactly one "
+               "scene. Never put a photo marked (don't show it) in a scene.\n")
+
+
 def build_prompt(audience: draft.Audience, words: int, pictures: bool = False,
-                 idea: str = "", facts: bool = False, part: str = "") -> str:
+                 idea: str = "", facts: bool = False, part: str = "",
+                 photos: bool = False) -> str:
     """The instructions for writing a script of about ``words`` spoken words.
 
     With ``pictures`` every scene also gets a description an image model can draw. With
@@ -338,6 +401,7 @@ def build_prompt(audience: draft.Audience, words: int, pictures: bool = False,
         + ("- \"picture\" is one sentence describing a photo for this scene: who or what is "
            "in it, what they are doing and where. Things you can see, not ideas. No writing, "
            "logos or brand names in the picture.\n" if pictures else "")
+        + (_PHOTO_RULE if photos else "")
         + ("- Use only the facts given after the request, with names and numbers exactly "
            "as written there. Leave out anything they don't say. No greetings, hashtags or "
            "emojis.\n" if facts else
@@ -347,9 +411,14 @@ def build_prompt(audience: draft.Audience, words: int, pictures: bool = False,
     )
 
 
-def script_schema(scenes: int, pictures: bool = False) -> dict:
-    """Fixing the number of scenes is what makes the length land (see MODEL's test)."""
-    extra = {"picture": {"type": "string"}} if pictures else {}
+def script_schema(scenes: int, pictures: bool = False, photos=()) -> dict:
+    """Fixing the number of scenes is what makes the length land (see MODEL's test).
+    ``photos``: the numbers a scene may show (0, no photo, is always allowed)."""
+    # The photo before the picture: last in a scene, a number left the model writing the
+    # JSON's own brackets into the picture's words.
+    extra = {"photo": {"enum": [0, *photos]}} if photos else {}
+    if pictures:
+        extra["picture"] = {"type": "string"}
     return {
         "type": "object",
         "properties": {"scenes": {
@@ -590,9 +659,9 @@ def _repeats(voice: str, said) -> bool:
     return any(gist and len(gist & before) >= 0.75 * len(gist) for before in said)
 
 
-def part_schema(scenes: int, pictures: bool = False) -> dict:
+def part_schema(scenes: int, pictures: bool = False, photos=()) -> dict:
     """script_schema with the part's title, which a part written from a text names itself."""
-    schema = script_schema(scenes, pictures)
+    schema = script_schema(scenes, pictures, photos)
     schema["properties"]["title"] = {"type": "string", "maxLength": 40}
     schema["required"] = ["title", "scenes"]
     return schema
@@ -613,15 +682,16 @@ def split_text(text: str, parts: int) -> list[str]:
     return [p for p in pieces if p.strip()]
 
 
-def parse_scenes(content: str, topic: str = "") -> list[draft.DraftScene]:
-    """The model's answer as scenes. Repeated and empty lines are dropped."""
+def parse_scenes(content: str, topic: str = "", photos=()) -> list[draft.DraftScene]:
+    """The model's answer as scenes. Repeated and empty lines are dropped. A scene's
+    ``photo`` number becomes that shown photo's path, once per photo."""
     try:
         items = json.loads(content)["scenes"]
         if not isinstance(items, list):
             raise TypeError("scenes is not a list")
     except (ValueError, KeyError, TypeError) as exc:
         raise WriterError("The Smart writer gave an answer the app could not read.") from exc
-    scenes, said = [], set()
+    scenes, said, placed = [], set(), set()
     # Each video starts somewhere else in the generic shots, so videos don't all look alike.
     first = next((i.get("voice") for i in items if isinstance(i, dict)), "")
     generic = zlib.crc32(str(first).encode("utf-8"))
@@ -637,7 +707,14 @@ def parse_scenes(content: str, topic: str = "") -> list[draft.DraftScene]:
         picture = " ".join(str(item.get("picture") or "").split())
         visual = filmable(asked, generic, topic)
         generic += visual in _COMPUTER_SHOTS
-        scenes.append(draft.DraftScene(visual, voice, len(scenes), picture, visual != asked))
+        number = item.get("photo")
+        photo = ""
+        if isinstance(number, int) and 1 <= number <= len(photos) and photos[number - 1].show \
+                and number not in placed:
+            photo = photos[number - 1].path
+            placed.add(number)
+        scenes.append(draft.DraftScene(visual, voice, len(scenes), picture, visual != asked,
+                                       photo=photo))
     if not scenes:
         raise WriterError("The Smart writer gave an empty answer.")
     return scenes
@@ -900,8 +977,8 @@ class Session:
              max_tokens: int, temperature: float = 0.6) -> str:
         """One answer from the model, as text that fits ``schema``."""
         self.start()
-        messages = [{"role": "system", "content": system}]
-        messages += [{"role": role, "content": content} for role, content in turns]
+        messages = [{"role": "system", "content": system}] if system else []
+        messages +=[{"role": role, "content": content} for role, content in turns]
         body = {
             "messages": messages, "temperature": temperature, "max_tokens": max_tokens,
             "seed": random.randrange(1, 2 ** 31),
@@ -969,6 +1046,22 @@ class Session:
             raise WriterError("The Smart writer left out a line. Try again.")
         return found
 
+    def changed_picture(self, about: str, change: str) -> str:
+        """One description of a photo as it looks after ``change`` (imagegen.redraw)."""
+        schema = {"type": "object", "properties": {"picture": {"type": "string",
+                                                               "maxLength": 300}},
+                  "required": ["picture"]}
+        content = self._ask(
+            "You describe pictures for an image model. You get what a photo shows and a change "
+            "the user wants. Answer with one sentence describing the photo after the change: "
+            "keep everything the change doesn't touch (the place, the light, the angle) and "
+            "describe the changed part in concrete words. Answer as JSON.",
+            [("user", f"Photo: {about}\nChange: {change}")], schema, 120, 0.3)
+        try:
+            return " ".join(str(json.loads(content)["picture"]).split())
+        except (ValueError, KeyError, TypeError) as exc:
+            raise WriterError("The Smart writer gave an answer the app could not read.") from exc
+
     def upload_text(self, script: str) -> dict:
         """A title, description and tags for posting the video. Nothing is posted."""
         spoken = " ".join(s.voice for s in parse_script(script) if s.voice)
@@ -1004,10 +1097,12 @@ class Session:
     def write(self, text: str, audience: draft.Audience | None = None,
               length: str | None = None, padding: float = 0.3,
               cards: bool = True, ai: str = draft.AI_NONE, web: bool = False,
-              progress=None) -> draft.Draft:
+              progress=None, photos=()) -> draft.Draft:
         """A script for ``text``, rewritten for the audience and the length. With ``web``, an
         idea that asks for facts is first looked up on Wikipedia (vidgen.webfacts).
-        ``progress(message, fraction)`` hears how a long video's parts are going."""
+        ``progress(message, fraction)`` hears how a long video's parts are going.
+        ``photos`` (draft.Photo): the user's reference photos; the shown ones are put in
+        the scenes about them."""
         audience = audience or draft.Audience()
         length = length if length in draft.LENGTHS else audience.length
         persona = voices.persona(audience.voice)
@@ -1029,21 +1124,23 @@ class Session:
                            "knows: check the facts)")
         if target is not None and target > LONG:
             scenes, note = self._write_long(text, audience, words, target, persona, pictures,
-                                            facts, progress or (lambda *_a: None))
+                                            facts, progress or (lambda *_a: None), photos)
+            scenes = draft.place_photos(scenes, photos)
             script = draft.to_script(scenes, cards, ai)
             seconds = sum(pacing.estimate_voice(s.voice, persona.rate, persona.pause_scale,
                                                 persona.enhanced) + padding for s in scenes)
             return draft.Draft(script, scenes, seconds, length, persona.id, audience.aspect,
                                source=source + note)
-        scenes = self._write_once(text, audience, words, pictures, facts)
+        scenes = self._write_once(text, audience, words, pictures, facts, photos)
         if target is not None and not _fits(scenes, target, persona):
             # Too long. Ask once more for less, then cut what still does not fit.
             spoken = sum(len(draft.words_in(s.voice)) for s in scenes)
             fewer = max(8, round(words * words / max(spoken, words)))
             self._stopping()
-            scenes = self._write_once(text, audience, fewer, pictures, facts)
+            scenes = self._write_once(text, audience, fewer, pictures, facts, photos)
             if not _fits(scenes, target, persona):
                 scenes = _trim(scenes, target, persona)
+        scenes = draft.place_photos(scenes, photos)
         script = draft.to_script(scenes, cards, ai)
         seconds = sum(pacing.estimate_voice(s.voice, persona.rate, persona.pause_scale,
                                             persona.enhanced) + padding for s in scenes)
@@ -1103,27 +1200,32 @@ class Session:
             raise WriterError("The Smart writer gave an empty answer.")
         return found
 
-    def _write_once(self, text, audience, words, pictures=False, facts=""):
+    def _write_once(self, text, audience, words, pictures=False, facts="", photos=()):
         room = _answer_tokens(words, pictures)
         idea = text if is_idea(text) else ""
+        topic = topic_of(text)
         if facts:   # the request, then what to take its facts from
             text = f"{text}\n\nFacts to use:\n{facts}"
+        text += photo_list(photos)
         _check_fits(text, room)
         example = _EXAMPLE_OUT_PICTURES if pictures else _EXAMPLE_OUT
+        shown = [n for n, p in enumerate(photos, 1) if p.show]
         content = self._ask(
-            build_prompt(audience, words, pictures, idea, bool(facts)),
+            build_prompt(audience, words, pictures, idea, bool(facts), photos=bool(photos)),
             [("user", _EXAMPLE_IN), ("assistant", example), ("user", text)],
-            script_schema(scene_count(words), pictures), room)
-        return parse_scenes(content, topic_of(text))
+            script_schema(scene_count(words), pictures, shown), room)
+        return parse_scenes(content, topic, photos)
 
-    def _write_long(self, text, audience, words, target, persona, pictures, facts, progress):
+    def _write_long(self, text, audience, words, target, persona, pictures, facts, progress,
+                    photos=()):
         """A long video: an outline of parts, then each part in its own answer. Returns
         (scenes, a note for the source). Cancel keeps the parts already written."""
         parts = part_count(words)
         each = max(40, round(words / parts))
         idea = text if is_idea(text) else ""
-        asked = f"{text}\n\nFacts to use:\n{facts}" if facts else text
+        asked = (f"{text}\n\nFacts to use:\n{facts}" if facts else text) + photo_list(photos)
         topic = topic_of(text)
+        free = [n for n, p in enumerate(photos, 1) if p.show]   # shown photos not used yet
         outline_room = parts * 70 + 120
         titles, points, pieces = [], [[] for _ in range(parts)], None
         if len(asked) / CHARS_PER_TOKEN <= CONTEXT - outline_room - 700:
@@ -1154,19 +1256,26 @@ class Session:
                 break
             progress(f"Writing part {at + 1} of {parts}...", (at + 1) / (parts + 1))
             given = pieces[at] if pieces else asked
+            if photos:   # every part hears about the photos, but only the free ones to show
+                given = given.split("\n\nPhotos the user added:")[0] + photo_list(photos, free)
             try:
                 _check_fits(given, room)
                 content = self._ask(
                     build_prompt(audience, each, pictures, idea, bool(facts),
                                  part_note(at, parts, titles, points[at],
-                                           scenes[-1].voice if scenes else "")),
+                                           scenes[-1].voice if scenes else ""),
+                                 photos=bool(photos)),
                     [("user", _EXAMPLE_IN), ("assistant", example), ("user", given)],
-                    part_schema(scene_count(each), pictures), room)
+                    part_schema(scene_count(each), pictures, free), room)
             except Stopped:
                 if not done:
                     raise
                 break
-            found = [s for s in parse_scenes(content, topic) if not _repeats(s.voice, said)]
+            used = {photos[n - 1].path for n, p in enumerate(photos, 1) if p.show} - \
+                {photos[n - 1].path for n in free}
+            found = [dataclasses.replace(s, photo="") if s.photo in used else s
+                     for s in parse_scenes(content, topic, photos) if not _repeats(s.voice, said)]
+            free = [n for n in free if photos[n - 1].path not in {s.photo for s in found}]
             if not found:
                 continue
             try:
@@ -1227,6 +1336,13 @@ def write(text, audience=None, length=None, should_stop=None, padding: float = 0
     """Load the model, write one script, stop the model."""
     with Session(should_stop, gpu=gpu) as session:
         return session.write(text, audience, length, padding)
+
+
+def changed_picture(about: str, change: str, should_stop=None, gpu: bool = False) -> str:
+    """Load the model, describe the changed photo, stop the model (before the picture
+    program needs the memory)."""
+    with Session(should_stop, gpu=gpu) as session:
+        return session.changed_picture(about, change)
 
 
 def suggest(text, last=None, should_stop=None, padding: float = 0.3, gpu: bool = False):

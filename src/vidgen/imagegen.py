@@ -36,7 +36,7 @@ from .footage import Stopped
 from .writer import Model
 
 __all__ = ["CPU", "FILES", "GPU", "LOOKS", "ImageError", "Made", "Stopped", "download",
-           "installed", "make", "ready", "remove", "size_for"]
+           "installed", "make", "ready", "redraw", "remove", "size_for"]
 
 
 class ImageError(Exception):
@@ -120,6 +120,12 @@ LOOKS = {
     "Illustration": "flat digital illustration, bold colours, clean lines",
 }
 DEFAULT_LOOK = "Realistic photo"
+# Changing a photo with words (redraw): how much of it is drawn again. The amount works in
+# steps of 1/steps, so a change takes half as many steps again: at 8, 0.7 to 0.85 all came out
+# alike and 0.95 drew a new picture. Tested 2026-11-04 at 12 on a cake made chocolate: 0.6
+# tints it, 0.67 changes most of it, 0.75 all of it, each keeping the photo's layout.
+LITTLE, SOME, A_LOT = "Little", "Some", "A lot"
+AMOUNTS = {LITTLE: 0.6, SOME: 0.67, A_LOT: 0.75}
 
 
 # --- the files ---------------------------------------------------------------------
@@ -264,8 +270,17 @@ def cost(speed: str) -> float:
     return SPEED_COST.get(speed, 1.0)
 
 
+def shaped_like(photo_size, size) -> tuple[int, int]:
+    """About as many pixels as ``size``, in the shape of ``photo_size``, in steps of 16."""
+    width, height = photo_size
+    scale = ((size[0] * size[1]) / max(1, width * height)) ** 0.5
+    return (max(256, round(width * scale / 16) * 16), max(256, round(height * scale / 16) * 16))
+
+
 def command(exe: str, prompt: str, size, out_path: str, seed: int, backend: str = GPU,
-            steps: int = STEPS, threads: int = 0) -> list[str]:
+            steps: int = STEPS, threads: int = 0, init: tuple[str, float] | None = None
+            ) -> list[str]:
+    """``init``: (a photo at ``size``, how much of it to draw again) for redraw."""
     width, height = size
     return [exe, "--diffusion-model", writer.model_path(MODEL),
             "--vae", writer.model_path(DECODER), "--llm", writer.model_path(),
@@ -276,7 +291,8 @@ def command(exe: str, prompt: str, size, out_path: str, seed: int, backend: str 
             "--params-backend", "disk", "--diffusion-fa", "-o", out_path,
             # With nothing said the program takes the first graphics card it finds.
             *(["--backend", "cpu"] if backend == CPU else []),
-            *(["-t", str(threads)] if threads and backend == CPU else [])]
+            *(["-t", str(threads)] if threads and backend == CPU else []),
+            *(["-i", init[0], "--strength", f"{init[1]:.2f}"] if init else [])]
 
 
 # --- the processor's cores ----------------------------------------------------------
@@ -479,7 +495,7 @@ def _run(args, log_path, should_stop, launch, began, timeout: float | None = Non
 def make(prompt: str, size, out_path: str, look: str = DEFAULT_LOOK, seed: int | None = None,
          should_stop=None, launch=_launch, check=ready, backend: str = "", log=None,
          memory=writer.free_memory, verify=damaged_files, speed: str = BEST,
-         threads: tuple[int, int] = (0, 0)) -> Made:
+         threads: tuple[int, int] = (0, 0), init: tuple[str, float] | None = None) -> Made:
     """Make one picture at ``out_path`` (a .png) and say how it was made.
 
     The graphics card is tried first, then the processor: a card can start
@@ -489,7 +505,8 @@ def make(prompt: str, size, out_path: str, look: str = DEFAULT_LOOK, seed: int |
     told what is being tried and, on failure, what the program said.
 
     Raises Stopped when ``should_stop`` says so (the program is killed at
-    once) and ImageError when no attempt produced a picture.
+    once) and ImageError when no attempt produced a picture. ``init`` (a photo, how much
+    to draw again): the picture is that photo changed, in its shape (see redraw).
     """
     say = log or (lambda _line: None)
     count, affinity = threads
@@ -513,6 +530,19 @@ def make(prompt: str, size, out_path: str, look: str = DEFAULT_LOOK, seed: int |
             failure = failure or exc
             say(f"🎨 Not trying the {where}: {_gigabytes(free)} GB of memory free.")
             continue
+        start = None
+        if init:
+            steps = steps * 3 // 2   # finer amounts (see AMOUNTS)   # the photo's shape, at the size this PC can make, given at that size
+            from PIL import Image, ImageOps
+
+            try:
+                with Image.open(init[0]) as image:
+                    image = ImageOps.exif_transpose(image).convert("RGB")
+                    fitted = shaped_like(image.size, fitted)
+                    start = (out_path + ".start.png", init[1])
+                    image.resize(fitted, Image.LANCZOS).save(start[0])
+            except OSError as exc:
+                raise ImageError(f"The photo could not be read ({exc}).") from exc
         say(f"🎨 AI picture on the {where}: {fitted[0]}x{fitted[1]}, {steps} steps · memory "
             f"{_gigabytes(free)} of {_gigabytes(writer.total_memory())} GB free · {_file_sizes()}"
             + (f" · {count or 'all'} threads{' on the performance cores' if affinity else ''}"
@@ -520,8 +550,15 @@ def make(prompt: str, size, out_path: str, look: str = DEFAULT_LOOK, seed: int |
         began, ran = time.monotonic(), True
         if os.path.isfile(out_path):
             os.remove(out_path)   # a picture left by an earlier try must not pass for this one
-        code = _run(command(program_path() or EXE, text, fitted, out_path, seed, attempt, steps,
-                            count), log_path, should_stop, launch, began)
+        try:
+            code = _run(command(program_path() or EXE, text, fitted, out_path, seed, attempt,
+                                steps, count, start), log_path, should_stop, launch, began)
+        finally:
+            if start:
+                try:
+                    os.remove(start[0])
+                except OSError:
+                    pass
         lines = _output(log_path)
         device = device_name(lines) if attempt == GPU else ""
         if device:
@@ -542,6 +579,30 @@ def make(prompt: str, size, out_path: str, look: str = DEFAULT_LOOK, seed: int |
                              f"({', '.join(bad)}). Download it again in Settings > AI pictures.",
                              failure.detail)
     raise failure
+
+
+def redraw_prompt(change: str, about: str = "", rewrite=None) -> str:
+    """What to draw: the change on its own, or with ``rewrite(about, change)`` (the Smart
+    writer) one description of the photo as changed, when the photo's ``about`` is known."""
+    change = " ".join((change or "").split())
+    if not change:
+        raise ImageError("Say what to change first.")
+    if rewrite is not None and about:
+        try:
+            return rewrite(about, change) or change
+        except (writer.WriterError, OSError):
+            pass   # the words as typed still work
+    return change
+
+
+def redraw(photo: str, change: str, out_path: str, amount: str = SOME, about: str = "",
+           rewrite=None, seed: int | None = None, **kwargs) -> Made:
+    """``photo`` changed the way ``change`` says ("make it a chocolate cake"), as a .png at
+    ``out_path`` in the photo's shape. ``amount`` is one of AMOUNTS. Everything else is
+    make()'s: the graphics card then the processor, Stopped and ImageError."""
+    prompt = redraw_prompt(change, about, rewrite)
+    return make(prompt, SIZES["16:9"], out_path, seed=seed,
+                init=(photo, AMOUNTS.get(amount, AMOUNTS[SOME])), **kwargs)
 
 
 def auto_threads(cores) -> tuple[int, int]:

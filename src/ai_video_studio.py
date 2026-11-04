@@ -149,8 +149,8 @@ from vidgen.script import (  # noqa: E402
 from vidgen import voices  # noqa: E402
 from vidgen.render import TEMP_ROOT  # noqa: E402
 from vidgen import (  # noqa: E402
-    cache, captions, diagnostics, draft, footage, pacing, paths, preview, projects, scenes,
-    updates, writer,
+    cache, captions, diagnostics, draft, footage, pacing, paths, photos, preview, projects,
+    scenes, updates, writer,
 )
 from vidgen import board as boards  # noqa: E402
 from vidgen import (  # noqa: E402
@@ -161,7 +161,7 @@ from vidgen.voice import generate_voiceover  # noqa: E402
 
 
 APP_NAME = "AI Video Studio"
-APP_VERSION = "4.9.2"
+APP_VERSION = "5.0.0"
 # Must match AppUserModelID in packaging/installer.iss, or a pinned taskbar
 # shortcut will not group with the running window.
 APP_MODEL_ID = "AIVideoStudio.Desktop.3"
@@ -1300,12 +1300,12 @@ TOUR = (
 # Shown once after updating to this version (WhatsNewDialog). Short: the release notes have
 # the whole story.
 WHATS_NEW = (
-    "Long videos: 3, 5 and 10 minutes. The Smart writer plans the video in chapters, then "
-    "writes one chapter at a time.",
-    "Chapters fold open and shut on the Storyboard, show as titles in the video and as "
-    "chapter times in the upload text, ready for YouTube.",
-    "Long videos are made in parts with the sound mixed once, and every video now uses far "
-    "less memory: a clip is opened only while it is on screen.",
+    "Your photos in the video: add photos on Make new video. The app sees what is in each one, "
+    "writes the script around them and puts each photo in the scene about it.",
+    "Image editor: change a photo with words (\"make it a chocolate cake\"), keeping its "
+    "layout. Also on each photo and in the thumbnail editor.",
+    "The Smart writer's download now includes a small photo model (0.5 GB more). If you have "
+    "the writer already, Settings offers just that part.",
 )
 
 
@@ -3046,6 +3046,8 @@ class ThumbEditor(ctk.CTkFrame):
                                          "and photos with the tools on the left.",
                          font=app.font_body, text_color=TEXT_MUTED, wraplength=240,
                          justify="left", anchor="w").pack(fill="x", padx=8)
+            if layer is not None:
+                self._change_words_button()
             if layer is not None:   # blur or darken it so the words stand out
                 for key, text, low, high in (("blur", "Blur", 0, 30),
                                              ("darken", "Darken", 0, 80),
@@ -3072,6 +3074,7 @@ class ThumbEditor(ctk.CTkFrame):
             if layer["kind"] == "image":
                 self._button(self.side, "Use as the background", self.to_background,
                              200).pack(anchor="w", padx=8, pady=(14, 0))
+                self._change_words_button()
             if layer.get("credit"):
                 ctk.CTkLabel(self.side, text=layer["credit"], font=app.font_tiny,
                              text_color=TEXT_DIM, wraplength=240, justify="left",
@@ -3319,6 +3322,24 @@ class ThumbEditor(ctk.CTkFrame):
         self.history.record(self.layers)
         self._fill_side()
         self._schedule()
+
+    def _change_words_button(self):
+        self._button(self.side, "Change with words...", self.change_with_words,
+                     200).pack(anchor="w", padx=8, pady=(10, 0))
+
+    def change_with_words(self):
+        """The selected picture changed by the Image editor; Undo puts the old one back."""
+        at = self.selected
+        path = self.layers[at].get("path")
+        if not path or not os.path.isfile(path):
+            return
+
+        def use(new):
+            if at < len(self.layers) and self.layers[at].get("path") == path:
+                self.selected = at
+                self.change("path", new)
+                self._fill_side()
+        change_photo_window(self.app, path, "", use, "Change the picture")
 
     def to_background(self):
         """The selected picture becomes the background, filling the thumbnail."""
@@ -4083,6 +4104,389 @@ class ResultDialog(ctk.CTkToplevel):
 WRITER_MODES = ("Smart writer", "Quick split")
 
 
+def writer_size() -> str:
+    """What the Smart writer's download still has to fetch, for the buttons."""
+    size = sum(m.size for m in writer.missing()) or writer.MODEL.size
+    return f"{size / 1e9:.1f} GB"
+
+
+class ImageEditor(ctk.CTkFrame):
+    """Change a photo with words (imagegen.redraw): the photo and the try side by side, How
+    much, Change it, Try again, and a row of the tries. ``on_use(path)``: what the button
+    under the tries does with the one shown (Image editor page: none, then Save and Use in a
+    new video; a reference photo or a thumbnail layer: Use this)."""
+
+    VIEW = (440, 380)   # the smallest a picture is shown; it grows with its box
+
+    def __init__(self, master, app, photo="", about="", on_use=None, use_text="Use this"):
+        super().__init__(master, fg_color="transparent")
+        self.app, self.on_use = app, on_use
+        self.photo, self.about = "", ""
+        self.tries, self.shown, self.busy = [], None, False
+        self.stop = threading.Event()
+        self.grid_columnconfigure((0, 1), weight=1, uniform="views")
+
+        top = ctk.CTkFrame(self, fg_color="transparent")
+        top.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 8))
+        self._button(top, "Open photo...", self.open_photo).pack(side="left")
+        self.name = ctk.CTkLabel(top, text="", font=app.font_tiny, text_color=TEXT_DIM,
+                                 anchor="w")
+        self.name.pack(side="left", padx=10)
+        self.before_view = self._view(0, "Your photo")
+        self.after_view = self._view(1, "Changed")
+
+        ask = ctk.CTkFrame(self, fg_color="transparent")
+        ask.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+        ask.grid_columnconfigure(0, weight=1)
+        self.change = focus_accent(ctk.CTkEntry(
+            ask, height=34, corner_radius=4, font=app.font_body, fg_color=FIELD_BG,
+            border_color=FIELD_BORDER, text_color=TEXT,
+            placeholder_text="What should change? For example: make it a chocolate cake"))
+        self.change.grid(row=0, column=0, sticky="ew")
+        self.change.bind("<Return>", lambda _e: self.run())
+        self.amount = tk.StringVar(self, imagegen.SOME)
+        FluentSegmented(ask, app, list(imagegen.AMOUNTS), self.amount, 240).grid(
+            row=0, column=1, padx=(10, 0))
+        self.go = ctk.CTkButton(ask, text="Change it", width=110, height=34, corner_radius=4,
+                                font=app.font_body, fg_color=ACCENT, hover_color=ACCENT_HOVER,
+                                text_color=ACCENT_TEXT, command=self.run)
+        self.go.grid(row=0, column=2, padx=(10, 0))
+        self.again = self._button(ask, "Try again", lambda: self.run(again=True))
+        self.again.grid(row=0, column=3, padx=(8, 0))
+        self.status = ctk.CTkLabel(self, text="How much: each keeps the photo's layout. Little "
+                                              "changes it a bit, A lot changes all of it.",
+                                   font=app.font_tiny, text_color=TEXT_DIM, anchor="w",
+                                   justify="left", wraplength=880)
+        self.status.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+        self.strip = ctk.CTkFrame(self, fg_color="transparent")
+        self.strip.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+        bottom = ctk.CTkFrame(self, fg_color="transparent")
+        bottom.grid(row=6, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+        if on_use is None:
+            self.use_buttons = [
+                self._button(bottom, "Save as picture", self.save_as),
+                self._button(bottom, "Use in a new video", self.use_in_video)]
+        else:
+            self.use_buttons = [self._button(bottom, use_text, lambda: self.on_use(self.shown))]
+        for button in self.use_buttons:
+            button.pack(side="left", padx=(0, 8))
+        self._ready_buttons()
+        if photo:
+            self.set_photo(photo, about)
+
+    def _button(self, master, text, command):
+        return ctk.CTkButton(master, text=text, width=140, height=34, corner_radius=4,
+                             font=self.app.font_body, fg_color=FIELD_BG, hover_color=CARD_HOVER,
+                             border_width=1, border_color=FIELD_BORDER, text_color=TEXT,
+                             command=command)
+
+    def _view(self, column, title):
+        ctk.CTkLabel(self, text=title, font=self.app.font_tiny, text_color=TEXT_MUTED,
+                     anchor="w").grid(row=1, column=column, sticky="w", padx=4)
+        view = ctk.CTkLabel(self, text="", fg_color=FIELD_BG, corner_radius=4,
+                            width=self.VIEW[0], height=self.VIEW[1], text_color=TEXT_DIM)
+        view.grid(row=2, column=column, sticky="nsew", padx=4)
+        view.path, view.job = "", None
+
+        def resized(_event):   # the window changed size: the picture fills its box again
+            if view.path:
+                if view.job:
+                    self.after_cancel(view.job)
+                view.job = self.after(150, lambda: self._show(view, view.path))
+        view.bind("<Configure>", resized, add="+")
+        return view
+
+    def _show(self, view, path, size=None):
+        from PIL import Image, ImageOps
+
+        if size is None:   # as big as the box, in the units CTkImage takes
+            view.path, view.job = path, None
+            scale = ctk.ScalingTracker.get_widget_scaling(view)
+            size = (max(self.VIEW[0], round(view.winfo_width() / scale) - 8),
+                    max(self.VIEW[1], round(view.winfo_height() / scale) - 8))
+        try:
+            with Image.open(path) as image:
+                image = ImageOps.exif_transpose(image).convert("RGB")
+                image.thumbnail(size or self.VIEW)
+        except OSError:
+            view.path = ""
+            view.configure(image=None, text="This picture can't be opened.")
+            return None
+        picture = ctk.CTkImage(light_image=image, dark_image=image, size=image.size)
+        view.image = picture   # kept so Tk doesn't drop it; one per view, not one per resize
+        view.configure(image=picture, text="")
+        return picture
+
+    def _ready_buttons(self):
+        busy = "disabled" if self.busy or not self.photo else "normal"
+        self.go.configure(state=busy)
+        self.again.configure(state="disabled" if self.busy or not self.tries else "normal")
+        for button in self.use_buttons:
+            button.configure(state="disabled" if self.busy or not self.shown else "normal")
+
+    def open_photo(self):
+        path = filedialog.askopenfilename(
+            parent=self, title="Open a photo",
+            initialdir=paths.known_folder(paths.CSIDL_MYPICTURES, "Pictures"),
+            filetypes=[("Photos", " ".join("*" + e for e in sorted(footage.IMAGE_EXTS)))])
+        if path:
+            self.set_photo(os.path.normpath(path))
+
+    def set_photo(self, path, about=""):
+        if self.busy:
+            return
+        self.photo, self.about, self.tries, self.shown = path, about, [], None
+        self.name.configure(text=os.path.basename(path))
+        self._show(self.before_view, path)
+        self.after_view.path = ""
+        self.after_view.configure(image=None, text="Type a change below and press Change it.")
+        for child in self.strip.winfo_children():
+            child.destroy()
+        self._ready_buttons()
+
+    def run(self, again=False):
+        """Change the photo on a worker thread; Try again keeps the words, new seed."""
+        if self.busy or not self.photo:
+            return
+        change = " ".join(self.change.get().split())
+        if not change:
+            self.status.configure(text="Say what should change first.", text_color=ERR_COLOR)
+            return
+        if not imagegen.installed():
+            self.status.configure(text="Changing a photo uses AI pictures: download them in "
+                                       "Settings > AI pictures first.", text_color=ERR_COLOR)
+            return
+        app = self.app
+        self.busy = True
+        self.stop.clear()
+        self._ready_buttons()
+        self.status.configure(text="Changing your photo. This takes about 20 seconds with a "
+                                   "graphics card, a few minutes without one...",
+                              text_color=TEXT_MUTED)
+        photo, about, amount = self.photo, self.about, self.amount.get()
+        gpu = bool(app.var_writer_gpu.get())
+        backend, speed, threads = app.ai_backend_now(), app.ai_speed_now(), app.threads_pair()
+
+        def post(fn):
+            app._queue.put(("call", {"fn": fn}))
+
+        def worker():
+            nonlocal about
+            try:
+                if not about and photos.ready()[0]:
+                    about = photos.describe([photo], self.stop.is_set, gpu)[0]
+                rewrite = None
+                if writer.ready()[0]:
+                    rewrite = lambda a, c: writer.changed_picture(a, c, self.stop.is_set, gpu)  # noqa: E731
+                os.makedirs(PREVIEW_DIR, exist_ok=True)
+                out = os.path.join(PREVIEW_DIR, f"redraw_{projects.new_id()}.png")
+                made = imagegen.redraw(photo, change, out, amount, about, rewrite,
+                                       should_stop=self.stop.is_set, log=app.ui.log,
+                                       backend=backend, speed=speed, threads=threads)
+                post(lambda: self._made(out, about, made))
+            except imagegen.Stopped:
+                post(lambda: self._failed("Stopped."))
+            except Exception as exc:  # noqa: BLE001 - shown under the pictures
+                message = str(exc) or type(exc).__name__
+                post(lambda: self._failed(message))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _made(self, path, about, made):
+        self.busy, self.about = False, about or self.about
+        if made.backend == imagegen.CPU:
+            self.app.remember_ai_backend(imagegen.CPU)
+        self.tries.append(path)
+        self.status.configure(text=f"Made in {made.seconds:.0f} s. Try again for another "
+                                   "version, or pick one below.", text_color=TEXT_DIM)
+        self.pick(path)
+        thumb = ctk.CTkLabel(self.strip, text="", fg_color=FIELD_BG, corner_radius=4,
+                             cursor="hand2")
+        thumb.pack(side="left", padx=(0, 6))
+        self._show(thumb, path, (96, 64))
+        thumb.bind("<Button-1>", lambda _e: self.pick(path))
+
+    def _failed(self, message):
+        self.busy = False
+        self.status.configure(text=message, text_color=ERR_COLOR)
+        self._ready_buttons()
+
+    def pick(self, path):
+        self.shown = path
+        self._show(self.after_view, path)
+        self._ready_buttons()
+
+    def close(self):
+        self.stop.set()
+
+    def save_as(self):
+        if not self.shown:
+            return
+        base = os.path.splitext(os.path.basename(self.photo))[0]
+        dest = filedialog.asksaveasfilename(
+            parent=self, title="Save the picture", defaultextension=".png",
+            initialdir=paths.known_folder(paths.CSIDL_MYPICTURES, "Pictures"),
+            initialfile=f"{base} changed.png",
+            filetypes=[("PNG picture", "*.png"), ("JPEG picture", "*.jpg")])
+        if not dest:
+            return
+        from vidgen import thumbedit
+
+        try:
+            thumbedit.export(self.shown, dest)
+            self.status.configure(text=f"Saved as {os.path.basename(dest)}.", text_color=TEXT_DIM)
+        except OSError as exc:
+            self.status.configure(text=f"Couldn't save the picture: {exc}", text_color=ERR_COLOR)
+
+    def use_in_video(self):
+        """A new video from text, with this picture already added as a reference photo."""
+        if not self.shown:
+            return
+        keep = os.path.join(SETTINGS_DIR, "photos")
+        os.makedirs(keep, exist_ok=True)
+        path = os.path.join(keep, os.path.basename(self.shown))
+        shutil.copyfile(self.shown, path)   # previews are cleared; this one must stay
+        dialog = DraftDialog(self.app)
+        dialog.add_photo(path, self.about)
+
+
+class PhotoList(ctk.CTkFrame):
+    """Reference photos: + Add photos, then a row each with a thumbnail, what is in it (typed,
+    or filled by photos.describe), Use in the video, Change it... and remove. On the Make new
+    video page and in New from text. ``on_change(count)`` hears when photos come and go."""
+
+    def __init__(self, master, app, on_change=None):
+        super().__init__(master, fg_color="transparent")
+        self.app, self.on_change, self.photos = app, on_change, []
+        head = ctk.CTkFrame(self, fg_color="transparent")
+        head.pack(fill="x", padx=14)
+        ctk.CTkLabel(head, text="Photos", font=app.font_body, text_color=TEXT,
+                     anchor="w").pack(side="left")
+        ctk.CTkButton(head, text="+ Add photos", width=120, height=32, corner_radius=4,
+                      font=app.font_body, fg_color=FIELD_BG, hover_color=CARD_HOVER,
+                      border_width=1, border_color=FIELD_BORDER, text_color=TEXT,
+                      command=self.pick).pack(side="left", padx=(10, 0))
+        self.note = ctk.CTkLabel(head, text="Optional. The script is written around them.",
+                                 font=app.font_tiny, text_color=TEXT_DIM, anchor="w")
+        self.note.pack(side="left", padx=(10, 0))
+        self.rows = ctk.CTkScrollableFrame(self, height=112, fg_color="transparent")
+        # ponytail: CTk's scrollbar asks for 200 px and would make the list that tall
+        self.rows._scrollbar.configure(height=0)
+
+    def hint(self, text):
+        self.note.configure(text=text)
+
+    def pick(self):
+        room = photos.MAX_PHOTOS - len(self.photos)
+        if room <= 0:
+            self.hint(f"{photos.MAX_PHOTOS} photos at most.")
+            return
+        picked = filedialog.askopenfilenames(
+            parent=self, title="Add photos",
+            filetypes=[("Photos", " ".join("*" + e for e in sorted(footage.IMAGE_EXTS)))])
+        for path in [os.path.normpath(p) for p in picked if photos.is_photo(p)][:room]:
+            self.add(path)
+
+    def add(self, path, about="", show=True):
+        """One photo (Image editor's Use in a new video comes in here too)."""
+        if path in {p["path"] for p in self.photos} or len(self.photos) >= photos.MAX_PHOTOS:
+            return
+        app = self.app
+        row = ctk.CTkFrame(self.rows, fg_color="transparent")
+        row.pack(fill="x", pady=2)
+        picture = ctk.CTkLabel(row, text="?", width=64, text_color=TEXT_DIM)
+        picture.pack(side="left")
+        self._thumb(picture, path)
+        entry = ctk.CTkEntry(row, width=250, height=30, corner_radius=4, font=app.font_tiny,
+                             fg_color=FIELD_BG, border_color=FIELD_BORDER, text_color=TEXT,
+                             placeholder_text="What is in this photo?")
+        entry.pack(side="left", padx=8)
+        if about:
+            entry.insert(0, about)
+        chosen = tk.BooleanVar(self, show)
+        ctk.CTkSwitch(row, text="Use in the video", variable=chosen, font=app.font_tiny,
+                      text_color=TEXT, progress_color=ACCENT).pack(side="left")
+        photo = {"path": path, "entry": entry, "show": chosen, "row": row, "picture": picture}
+        ctk.CTkButton(row, text="✕", width=28, height=28, corner_radius=4, fg_color="transparent",
+                      hover_color=CARD_HOVER, text_color=TEXT_MUTED, font=app.font_body,
+                      command=lambda: self.remove(photo)).pack(side="right", padx=(0, 4))
+        ctk.CTkButton(row, text="Change it...", width=90, height=28, corner_radius=4,
+                      font=app.font_tiny, fg_color=FIELD_BG, hover_color=CARD_HOVER,
+                      border_width=1, border_color=FIELD_BORDER, text_color=TEXT,
+                      command=lambda: self.change(photo)).pack(side="right", padx=4)
+        self.photos.append(photo)
+        self.rows.pack(fill="x", padx=8, pady=(6, 0))
+        if self.on_change:
+            self.on_change(len(self.photos))
+
+    def change(self, photo):
+        """The Image editor on this photo; the picture kept replaces it for the video."""
+        def use(path):
+            keep = os.path.join(SETTINGS_DIR, "photos")
+            os.makedirs(keep, exist_ok=True)
+            kept = os.path.join(keep, os.path.basename(path))
+            shutil.copyfile(path, kept)   # previews are cleared; the video needs this one
+            photo["path"] = kept
+            self._thumb(photo["picture"], kept)
+        change_photo_window(self.app, photo["path"], " ".join(photo["entry"].get().split()),
+                            use)
+
+    @staticmethod
+    def _thumb(label, path):
+        from PIL import Image, ImageOps
+
+        try:
+            with Image.open(path) as image:
+                small = ImageOps.exif_transpose(image).convert("RGB")
+                small.thumbnail((64, 40))
+        except (OSError, ValueError):
+            return
+        picture = ctk.CTkImage(light_image=small, dark_image=small, size=small.size)
+        label.configure(image=picture, text="")
+        label.image = picture
+
+    def remove(self, photo):
+        photo["row"].destroy()
+        self.photos.remove(photo)
+        if not self.photos:
+            self.rows.pack_forget()
+        if self.on_change:
+            self.on_change(len(self.photos))
+
+    def clear(self):
+        for photo in list(self.photos):
+            self.remove(photo)
+
+    def photo_list(self) -> list:
+        """The photos as the writer takes them. Read on the UI thread."""
+        return [draft.Photo(p["path"], " ".join(p["entry"].get().split()), bool(p["show"].get()))
+                for p in self.photos]
+
+
+def change_photo_window(app, photo, about, on_use, title="Change the photo"):
+    """The Image editor in a window of its own, for a reference photo or a thumbnail layer.
+    ``on_use(path)`` gets the picture the user kept; the window then closes."""
+    window = ctk.CTkToplevel(app)
+    window.title(title)
+    window.configure(fg_color=MAIN_BG)
+    window.transient(app)
+
+    def use(path):
+        editor.close()
+        window.destroy()
+        on_use(path)
+
+    def close():
+        editor.close()
+        window.destroy()
+
+    editor = ImageEditor(window, app, photo, about, on_use=use, use_text="Use this")
+    editor.pack(fill="both", expand=True, padx=16, pady=16)
+    window.protocol("WM_DELETE_WINDOW", close)
+    centre_on(window, app)
+    return window
+
+
 class DraftDialog(ctk.CTkToplevel):
     """New from text: paste plain text, say who it is for, get a script.
 
@@ -4103,6 +4507,8 @@ class DraftDialog(ctk.CTkToplevel):
         self.stop = threading.Event()
         self.session = None      # the loaded model, kept from Analyse to Write script
         self.note = ""           # why Quick split was used instead of the Smart writer
+        self.looked = set()      # photo paths the photo model has already been asked about
+        self._after_described = self.analyse   # what carries on once the photos are described
         self._job = None
         self._idle = None
         self._after_download = None
@@ -4242,16 +4648,22 @@ class DraftDialog(ctk.CTkToplevel):
         args = (job, self.text(), self.audience(), self.var_length.get(),
                 self.app.settings["padding"], bool(self.app.var_writer_gpu.get()),
                 bool(self.app.var_auto_cards.get()), self.app.ai_mode(),
-                bool(self.app.var_web_facts.get()))
+                bool(self.app.var_web_facts.get()), self.photo_list())
         threading.Thread(target=self._work, args=args, daemon=True).start()
 
     def _post(self, **payload):
         self.app._queue.put(("draft", dict(payload, dialog=self)))
 
-    def _work(self, job, text, audience, length, padding, gpu, cards, ai, web=False):
+    def _work(self, job, text, audience, length, padding, gpu, cards, ai, web=False, shots=()):
         """Worker thread: never touches a widget."""
         keep_loaded = False
         try:
+            if job == "describe":   # the photo model runs alone, before the writer loads
+                paths = [p.path for p in shots if not p.about]
+                photos.describe(paths, self.stop.is_set, gpu, done=lambda i, about: self._post(
+                    event="photo", path=paths[i], about=about))
+                self._post(event="described")
+                return
             if self.session is None:
                 self.session = writer.Session(self.stop.is_set, gpu=gpu)
             if job == "suggest":
@@ -4263,7 +4675,8 @@ class DraftDialog(ctk.CTkToplevel):
                            result=self.session.write(
                                text, audience, length, padding, cards, ai, web,
                                progress=lambda message, fraction: self._post(
-                                   event="progress", message=message, fraction=fraction)))
+                                   event="progress", message=message, fraction=fraction),
+                               photos=shots))
         except writer.Stopped:
             self._post(event="stopped")
         except (writer.WriterError, draft.DraftError, ScriptError) as exc:
@@ -4284,6 +4697,11 @@ class DraftDialog(ctk.CTkToplevel):
             if self.busy:
                 self._working(payload["message"], payload["fraction"])
             return
+        if event == "photo":      # one photo described: fill its box unless the user typed
+            for photo in self.photos:
+                if photo["path"] == payload["path"] and not photo["entry"].get().strip():
+                    photo["entry"].insert(0, payload["about"])
+            return
         if payload.get("trace"):
             self.app.session_log.write(payload["trace"])
         if self.session is not None and self.session.gpu_failed:
@@ -4293,6 +4711,10 @@ class DraftDialog(ctk.CTkToplevel):
         self.busy = False
         if event == "stopped":
             self._rest()
+        elif event == "described":
+            self._rest()
+            after, self._after_described = self._after_described, self.analyse
+            after()
         elif event == "suggested":
             self._rest()
             self._apply(payload["found"])
@@ -4302,6 +4724,9 @@ class DraftDialog(ctk.CTkToplevel):
             self._rest()
             self.note, self.result = "", payload["result"]
             self.show_review()
+        elif payload["job"] == "describe":   # no descriptions: the user can type them
+            self._rest()
+            self.found.configure(text=payload["message"], text_color=ERR_COLOR)
         elif payload["job"] == "suggest":
             self._rest()
             self._apply(self._rule_suggestion())
@@ -4321,6 +4746,27 @@ class DraftDialog(ctk.CTkToplevel):
         self.found = ctk.CTkLabel(page, text="Paste or type your text above.", font=app.font_tiny,
                                   text_color=TEXT_DIM, anchor="w", justify="left", wraplength=600)
         self.found.pack(fill="x", padx=20, pady=(6, 8))
+        self.photo_box = PhotoList(page, app, self._photos_changed)
+        self.photo_box.pack(fill="x", padx=6)
+
+    # -- reference photos ---------------------------------------------------------
+    @property
+    def photos(self):
+        return self.photo_box.photos
+
+    def add_photo(self, path, about="", show=True):
+        self.photo_box.add(path, about, show)
+
+    def _photos_changed(self, count):
+        # The text box gives up the room, so the window still fits a laptop's screen.
+        self.text_box.configure(height=130 if count else 260)
+        if count:
+            self.photo_box.hint("Analyse looks at them first." if photos.ready()[0] else
+                                "Say what is in each one, or download the Smart writer to "
+                                "fill these in.")
+
+    def photo_list(self) -> list:
+        return self.photo_box.photo_list()
 
     def show_text(self):
         self._restore = self.show_text
@@ -4347,7 +4793,11 @@ class DraftDialog(ctk.CTkToplevel):
             self.found.configure(text="Paste some text first.", text_color=ERR_COLOR)
             return
         self.keep = set()
-        if self.smart() and writer.ready()[0]:
+        new = [p for p in self.photo_list() if not p.about and p.path not in self.looked]
+        if new and photos.ready()[0]:
+            self.looked.update(p.path for p in new)
+            self._start("describe", "Looking at your photos...")
+        elif self.smart() and writer.ready()[0]:
             self._start("suggest", "The Smart writer is reading your text...")
         else:
             self._apply(self._rule_suggestion())
@@ -4417,18 +4867,25 @@ class DraftDialog(ctk.CTkToplevel):
         self.found.configure(text=" · ".join(parts))
 
     def needs_download(self) -> bool:
-        return self.smart() and not writer.installed() and writer.runtime_path() is not None
+        """The writer isn't there, or photos were added and its photo part isn't."""
+        return self.smart() and writer.runtime_path() is not None and (
+            not writer.installed() or (bool(self.photos) and not writer.sees()))
 
     def _on_mode(self):
         """Say what the chosen writer does, and what the button will do."""
         if self._restore != self.show_ask or self.busy:
             return
-        model = writer.MODEL
-        if self.needs_download():
-            hint = (f"The Smart writer is a one-time download of {model.gigabytes} "
+        model, size = writer.MODEL, writer_size()
+        if self.needs_download() and writer.installed():
+            hint = (f"To look at your photos the Smart writer needs its photo part, a one-time "
+                    f"download of {size} ({writer.VISION.name}, {writer.VISION.licence} "
+                    "licence). It runs on this PC: your photos are never sent anywhere.")
+            button = f"Download ({size})"
+        elif self.needs_download():
+            hint = (f"The Smart writer is a one-time download of {size} "
                     f"({model.name}, {model.licence} licence). After that it runs on this PC: "
                     "your text is never sent anywhere.")
-            button = f"Download ({model.gigabytes})"
+            button = f"Download ({size})"
         elif self.smart():
             hint = ("The Smart writer rewrites your text to fit the length and picks the search "
                     "words. It runs on this PC and takes 10 to 60 seconds; a long video is "
@@ -4458,10 +4915,15 @@ class DraftDialog(ctk.CTkToplevel):
         elif self.needs_download():
             self._after_download = self.write
             self.app.start_writer_download()
-            self._working(f"Downloading the Smart writer ({writer.MODEL.gigabytes})...", 0)
+            self._working(f"Downloading the Smart writer ({writer_size()})...", 0)
         else:
             ok, why = writer.ready()
-            if ok:
+            new = [p for p in self.photo_list() if not p.about and p.path not in self.looked]
+            if ok and new and photos.ready()[0]:   # photos added after Analyse
+                self.looked.update(p.path for p in new)
+                self._after_described = self.write
+                self._start("describe", "Looking at your photos...")
+            elif ok:
                 self._start("write", "The Smart writer is writing your script. This takes "
                                      "10 to 60 seconds...")
             else:
@@ -4473,7 +4935,7 @@ class DraftDialog(ctk.CTkToplevel):
             self.result = draft.write(self.text(), self.audience(), self.var_length.get(),
                                       keep=self.keep, padding=self.app.settings["padding"],
                                       cards=bool(self.app.var_auto_cards.get()),
-                                      ai=self.app.ai_mode())
+                                      ai=self.app.ai_mode(), photos=self.photo_list())
         except (draft.DraftError, ScriptError) as exc:
             self.ask_error.configure(text=str(exc), text_color=ERR_COLOR)
             return
@@ -5034,6 +5496,7 @@ class App(ctk.CTk):
             ("dashboard", "chart", "Dashboard"),
             ("projects", "projects", "My videos"),
             ("thumbs", "images", "Thumbnails"),
+            ("photo", "edit", "Image editor"),
             ("board", "scenes", "Storyboard"),
         ):
             item = NavItem(self.sidebar, self, key, self.icon(glyph), label,
@@ -5134,7 +5597,7 @@ class App(ctk.CTk):
         item = self.nav_items["board"]
         if self.script_box.get("1.0", "end").strip() or self.current_page == "board":
             if not item.winfo_manager():
-                item.pack(fill="x", padx=6, pady=1, after=self.nav_items["thumbs"])
+                item.pack(fill="x", padx=6, pady=1, after=self.nav_items["photo"])
         else:
             item.pack_forget()
 
@@ -5208,6 +5671,7 @@ class App(ctk.CTk):
             "dashboard": self._build_dashboard(),
             "projects": self._build_projects(),
             "thumbs": self._build_thumbs(),
+            "photo": self._build_photo_editor(),
             "board": self._build_board(),
             "settings": self._build_settings(),
         }
@@ -5271,6 +5735,8 @@ class App(ctk.CTk):
             dropdown_fg_color=CARD_BG, dropdown_text_color=TEXT, dropdown_hover_color=CARD_HOVER,
             dropdown_font=self.font_body, dynamic_resizing=False).pack(side="left")
         self.door_box.grid(row=3, column=0, columnspan=3, sticky="ew", padx=14, pady=(8, 8))
+        self.door_photos = PhotoList(door, self)
+        self.door_photos.grid(row=4, column=0, columnspan=3, sticky="ew", pady=(0, 10))
         self.door_status = ctk.CTkLabel(door, text="", font=self.font_tiny, text_color=TEXT_DIM,
                                         anchor="w")
         self.door_status.grid(row=5, column=0, sticky="w", padx=16, pady=(0, 14))
@@ -5331,6 +5797,8 @@ class App(ctk.CTk):
         self._after_draft = "render" if self.var_straight.get() else "board"
         dialog = DraftDialog(self)
         dialog.prefill(text)
+        for photo in self.door_photos.photo_list():   # the dialog describes and places them
+            dialog.add_photo(photo.path, photo.about, photo.show)
         name = self.var_template.get()
         template = draft.TEMPLATES.get(name)
         if template is None:
@@ -7244,7 +7712,7 @@ class App(ctk.CTk):
             return
         self.writer_downloading = True
         self._writer_stop = stop = threading.Event()
-        self.append_log(f"⬇️ Downloading the Smart writer ({writer.MODEL.gigabytes})...")
+        self.append_log(f"⬇️ Downloading the Smart writer ({writer_size()})...")
 
         def worker():
             last = 0.0
@@ -7257,7 +7725,7 @@ class App(ctk.CTk):
                     self._queue.put(("writer", {"event": "progress", "done": done, "total": total}))
 
             try:
-                writer.download(progress, stop.is_set)
+                writer.download_all(progress, stop.is_set)
                 self._queue.put(("writer", {"event": "done"}))
             except writer.Stopped:
                 self._queue.put(("writer", {"event": "stopped"}))
@@ -7270,7 +7738,8 @@ class App(ctk.CTk):
 
         threading.Thread(target=worker, daemon=True).start()
         # Tell the listeners at once, so their buttons read Cancel before the first byte.
-        self._writer_event({"event": "progress", "done": 0, "total": writer.MODEL.size})
+        self._writer_event({"event": "progress", "done": 0,
+                            "total": sum(m.size for m in writer.missing()) or 1})
 
     def cancel_writer_download(self):
         self._writer_stop.set()
@@ -7278,7 +7747,8 @@ class App(ctk.CTk):
     def repair_writer(self):
         """Throw the model away and fetch it again."""
         if not self.writer_downloading:
-            writer.remove()
+            for model in writer.FILES:
+                writer.remove(model)
             self.start_writer_download()
 
     def _writer_event(self, payload):
@@ -7311,10 +7781,17 @@ class App(ctk.CTk):
             self.writer_state.configure(text=ellipsize(payload["message"], 60), text_color=ERR_COLOR)
         elif writer.runtime_path() is None:
             self.writer_state.configure(text="Not included in this copy", text_color=TEXT_MUTED)
+        elif writer.installed() and not writer.sees():
+            self.writer_state.configure(text=f"Photo part not downloaded · {writer_size()}",
+                                        text_color=TEXT_MUTED)
+            self.writer_button.configure(text="Download", command=self.start_writer_download)
+            return
         elif writer.installed():
-            self.writer_state.configure(text=f"Installed · {model.gigabytes}", text_color=OK_COLOR)
+            self.writer_state.configure(
+                text=f"Installed · {sum(m.size for m in writer.FILES) / 1e9:.1f} GB",
+                text_color=OK_COLOR)
         else:
-            self.writer_state.configure(text=f"Not downloaded · {model.gigabytes}",
+            self.writer_state.configure(text=f"Not downloaded · {writer_size()}",
                                         text_color=TEXT_MUTED)
         if writer.installed():
             self.writer_button.configure(text="Repair", command=self._confirm_repair)
@@ -7322,11 +7799,12 @@ class App(ctk.CTk):
             self.writer_button.configure(text="Download", command=self.start_writer_download)
 
     def _confirm_repair(self):
-        """Repair downloads 2.5 GB again, so it takes a second press."""
+        """Repair downloads all 3 GB again, so it takes a second press."""
         if not self._writer_confirm:
             self._writer_confirm = True
             self.writer_state.configure(
-                text=f"Press again to download {writer.MODEL.gigabytes} again",
+                text=f"Press again to download "
+                     f"{sum(m.size for m in writer.FILES) / 1e9:.1f} GB again",
                 text_color=ERR_COLOR)
             return
         self.repair_writer()
@@ -7363,6 +7841,15 @@ class App(ctk.CTk):
         return page
 
     # -------------------------------------------------------------- THUMBNAILS --
+    def _build_photo_editor(self):
+        """Change a photo with words (ImageEditor), on a page of its own."""
+        page = self._scroll_page()
+        page.grid_columnconfigure(0, weight=1)
+        self._caption(page, "Image editor", 0, pady=(0, 6))
+        self.photo_editor = ImageEditor(page, self)
+        self.photo_editor.grid(row=1, column=0, sticky="ew")
+        return page
+
     def _build_thumbs(self):
         """Every video's thumbnail to edit, and free thumbnails that belong to no video."""
         page = ctk.CTkFrame(self.content, fg_color="transparent")
@@ -7857,6 +8344,11 @@ class App(ctk.CTk):
         self.project = self.project if old is not None or videos is not None \
             else projects.new_id()
         folder = projects.folder(self.project)
+        kept = projects.keep_photos(folder, script)
+        if kept != script:   # the user's photos now live in the project
+            script = kept
+            self.script_box.delete("1.0", "end")
+            self.script_box.insert("1.0", script)
         first = None
         for scene in scenes_now:
             if not scene.is_ai:
@@ -8166,6 +8658,8 @@ class App(ctk.CTk):
         self.preview_title.configure(text=f"Scene {index + 1}")
         self.preview_line.configure(text=self.board.scenes[index].voice or "(no words)")
         box = (180, 320) if self.var_aspect.get() == "9:16" else (SIDE - 28, 194)
+        # Drop the old picture first: resizing redraws it, and it may already be freed.
+        self.preview_picture.configure(image=None)
         self.preview_picture.configure(width=box[0], height=box[1])
         path = self.board_paths.get(index)
         try:
@@ -8174,8 +8668,8 @@ class App(ctk.CTk):
             self._preview_image = ctk.CTkImage(light_image=fitted, dark_image=fitted, size=box)
             self.preview_picture.configure(image=self._preview_image, text="")
         except Exception:  # noqa: BLE001 - no picture yet
-            self._preview_image = None
             self.preview_picture.configure(image=None, text="No picture yet")
+            self._preview_image = None
 
     def _hear_selected(self):
         if self.board is not None and self.board_selected < len(self.board):

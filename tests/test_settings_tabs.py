@@ -100,7 +100,7 @@ def test_a_render_shows_the_storyboard_log_and_setup_is_one_click(app):
 
 
 def test_the_sidebar_entries_and_storyboard_only_with_a_video(app):
-    assert list(app.nav_items) == ["home", "dashboard", "projects", "thumbs", "board",
+    assert list(app.nav_items) == ["home", "dashboard", "projects", "thumbs", "photo", "board",
                                     "settings"]
     assert app.nav_items["projects"].label.cget("text") == "My videos"
     text = app.script_box.get("1.0", "end")

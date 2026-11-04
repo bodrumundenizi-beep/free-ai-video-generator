@@ -36,6 +36,8 @@ voiceover, and renders a 1080p or 720p MP4 in portrait or landscape.
 - **Watch it straight away:** When a render finishes, the video plays inside the app, with sound.
 - **Ready to post:** Every video gets a thumbnail and a suggested title, description and tags, with Copy buttons. Nothing is posted for you.
 - **Thumbnail editor:** Change the thumbnail with text, arrows, circles, stickers and Pexels or Pixabay photos.
+- **Your photos in the video:** Add up to 10 photos to Make new video. The app sees what is in each one, writes the script around them and puts each photo in the scene about it.
+- **Change a photo with words:** Type "make it a chocolate cake" and the **Image editor** draws the change on your PC, in the photo's own shape.
 - **Other languages:** Make the same video in Spanish, French, Italian, Portuguese or Hindi.
 - **Sound effects:** A soft pop when a card appears, made by the app itself.
 - **Portrait or landscape:** 9:16 for Shorts and TikTok, 16:9 for YouTube, at 1080p or 720p.
@@ -71,7 +73,7 @@ You can confirm you have the real file by checking its hash against
 `SHA256SUMS.txt` on the release page:
 
 ```powershell
-Get-FileHash .\AIVideoStudio-4.9.2-setup.exe -Algorithm SHA256
+Get-FileHash .\AIVideoStudio-5.0.0-setup.exe -Algorithm SHA256
 ```
 
 ## The quick way
@@ -204,13 +206,38 @@ tension, a turn, an ending). A pasted text is rewritten as before.
 
 ![New from text](docs/newfromtext.png)
 
+### Your photos
+
+Press **+ Add photos** under the text to add up to 10 photos (`.png .jpg .jpeg .webp
+.bmp`). When you press **Analyse**, the Smart writer looks at each one and writes a
+sentence about what is in it ("A red tractor is driving through a field of green
+wheat"). Fix the sentence if it's wrong, or type your own.
+
+- **Use in the video** (on by default): the photo is shown in the scene that talks
+  about it, once. Switch it off and the photo only tells the writer what to write
+  about.
+- **Change it...** opens the Image editor on that photo; the picture you keep is
+  used instead.
+- Quick split puts each photo in the scene whose words match its sentence best,
+  and spreads the rest evenly.
+- When the video is saved, the photos are copied into its project, so it still
+  works if you move or delete the originals.
+
+Looking at photos is done on your PC by
+[SmolVLM 500M](https://huggingface.co/ggml-org/SmolVLM-500M-Instruct-GGUF)
+(Apache 2.0 licence), part of the Smart writer's download (0.5 GB more). If you
+downloaded the Smart writer before 5.0, **Settings → Smart writer** offers just
+the photo part. It takes about a second a photo with a graphics card.
+
+![Photos in New from text](docs/photos.png)
+
 There are two writers:
 
 | | Smart writer | Quick split |
 |---|---|---|
 | What it does | Rewrites and shortens your text to fit the length, opens with a hook, and picks search words for each scene | Keeps your words exactly as written, splits them into scenes, and guesses search words from each sentence |
 | Speed | About 10 to 60 seconds | Instant |
-| Needs | A one-time 2.5 GB download and about 8 GB of RAM | Nothing |
+| Needs | A one-time 3 GB download and about 8 GB of RAM | Nothing |
 
 If a text is too long for the length you chose, the Smart writer shortens it.
 Quick split leaves out the least important sentences, lists them with a **Put
@@ -227,7 +254,7 @@ open-source language model (Apache 2.0 licence), run on your PC by
 [llama.cpp](https://github.com/ggml-org/llama.cpp) (MIT licence).
 
 - **Private:** your text never leaves your computer. No account and no key.
-- **One download:** 2.5 GB, saved in `%LOCALAPPDATA%\AIVideoStudio\models`. A
+- **One download:** 3 GB (the writer, and SmolVLM 500M for photos), saved in `%LOCALAPPDATA%\AIVideoStudio\models`. A
   cancelled download carries on from where it stopped. **Settings → Smart
   writer** shows its state and can download or repair it.
 - **Memory:** it uses about 5 GB while it writes and gives it back straight
@@ -353,6 +380,30 @@ processor if the card fails), **Graphics card** only (a scene whose picture fail
 clip), or **Processor** only.
 
 You are responsible for what you ask it to draw and for how you use the pictures.
+
+### Image editor: change a photo with words
+
+The **Image editor** page changes a photo the way you say: open a photo, type
+"make it a chocolate cake" or "make it night time", pick **How much** and press
+**Change it**.
+
+- All three keep the photo's layout: **Little** changes it a bit, **Some** most of
+  it, **A lot** all of what you asked for.
+- **Try again** makes another version; every try stays in the row underneath, and
+  you pick the one you want.
+- **Save as picture** saves it (Pictures folder by default), and **Use in a new
+  video** opens Make new video with it added as a photo.
+- The same editor opens from **Change it...** on a photo in Make new video, and from
+  **Change with words...** on a thumbnail's background or picture (Undo puts the
+  old one back).
+
+It uses the AI pictures model (see above), so it needs AI pictures downloaded: about
+20 to 30 seconds a change on an RTX 4060, a few minutes without a graphics card.
+When the Smart writer is there, it first turns what is in the photo and your words
+into one description of the changed picture, which keeps the rest of the photo
+better.
+
+![The Image editor](docs/imageeditor.png)
 
 ### Drawn styles: Blackboard and Drawing
 
@@ -763,7 +814,7 @@ python -m pytest
 python packaging/make_icon.py
 python packaging/fetch_llama.py
 pyinstaller --noconfirm --clean packaging/ai_video_studio.spec
-"%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe" /DMyAppVersion=4.9.2 packaging\installer.iss
+"%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe" /DMyAppVersion=5.0.0 packaging\installer.iss
 ```
 
 That is where Inno Setup goes when installed for one user; installed for everyone, it is

@@ -38,6 +38,35 @@ def picture_file(project_dir: str, key: str) -> str:
     return os.path.join(project_dir, "pictures", f"{name}.png")
 
 
+def keep_photos(project_dir: str, script: str) -> str:
+    """``script`` with each ``local:`` photo from outside the project copied into its
+    ``photos/`` folder and pointed there, so the video still works when the original moves.
+    A photo that can't be copied keeps its path."""
+    from .footage import IMAGE_EXTS
+    from .script import LOCAL_PREFIX
+
+    inside = os.path.join(os.path.realpath(project_dir), "photos")
+    lines = (script or "").split("\n")
+    for at, line in enumerate(lines):
+        head, _, rest = line.partition(":")
+        if head.strip().lower() != "visual" or not rest.strip().lower().startswith(LOCAL_PREFIX):
+            continue
+        raw = rest.strip()[len(LOCAL_PREFIX):].strip().strip("\"'")
+        if os.path.splitext(raw)[1].lower() not in IMAGE_EXTS or not os.path.isabs(raw) \
+                or os.path.dirname(os.path.realpath(raw)) == inside:
+            continue
+        name = hashlib.sha1(os.path.realpath(raw).lower().encode("utf-8")).hexdigest()[:16]
+        kept = os.path.join(inside, name + os.path.splitext(raw)[1].lower())
+        try:
+            if not os.path.isfile(kept):
+                os.makedirs(inside, exist_ok=True)
+                shutil.copyfile(raw, kept)
+        except OSError:
+            continue
+        lines[at] = f'Visual: local: "{kept}"'
+    return "\n".join(lines)
+
+
 def default_title(script: str, limit: int = 40) -> str:
     """The first spoken line, cut on a word."""
     for line in (script or "").splitlines():

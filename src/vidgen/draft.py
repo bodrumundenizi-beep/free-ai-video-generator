@@ -17,7 +17,7 @@ from __future__ import annotations
 import math
 import re
 from collections import Counter
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from . import pacing, voices
 from .footage import STOPWORDS
@@ -455,6 +455,7 @@ class DraftScene:
     picture: str = ""  # the Smart writer's description of an AI picture for the scene
     unfilmable: bool = False  # its search words named things no camera can film
     chapter: str = ""  # a long video's part that starts at this scene (writer._write_long)
+    photo: str = ""  # the path of the user's reference photo shown in this scene
 
 
 # Which scenes get an AI picture (imagegen.py) when the user has downloaded AI images.
@@ -488,6 +489,39 @@ def _one_line(text: str) -> str:
 def _visual(words: str) -> str:
     # No colons: "local:" has a meaning in a script, and search words must never read as one.
     return _clean(words.replace(":", " ")) or "abstract background"
+
+
+@dataclass(frozen=True)
+class Photo:
+    """A reference photo the user added: what is in it, and whether the video shows it."""
+    path: str
+    about: str = ""
+    show: bool = True
+
+
+def place_photos(scenes, photos) -> list:
+    """``scenes`` with each shown photo not placed yet put in a scene of its own: the one
+    whose words share most with its description, else spread evenly over the video."""
+    scenes = list(scenes)
+    taken = {i for i, s in enumerate(scenes) if getattr(s, "photo", "")}
+    used = {s.photo for s in scenes if getattr(s, "photo", "")}
+    waiting = [p for p in photos if p.show and p.path not in used]
+    for order, photo in enumerate(waiting):
+        free = [i for i in range(len(scenes)) if i not in taken]
+        if not free:
+            break
+        about = set(_content_words(photo.about))
+        best = max(free, key=lambda i: (len(about & set(_content_words(scenes[i].voice))), -i))
+        if not about & set(_content_words(scenes[best].voice)):
+            spot = round((order + 1) * len(scenes) / (len(waiting) + 1))
+            best = min(free, key=lambda i: abs(i - spot))
+        scenes[best] = replace(scenes[best], photo=photo.path)
+        taken.add(best)
+    return scenes
+
+
+def _photo_path(path: str) -> str:
+    return '"' + path.replace('"', "") + '"'
 
 
 # --- cards ---------------------------------------------------------------------------
@@ -572,13 +606,14 @@ def to_script(scenes, cards: bool = True, ai: str = AI_NONE) -> str:
     the app would then refuse.
     """
     spoken = [s for s in scenes if _one_line(s.voice)]
-    blocks = [f"Visual: {'ai: ' + picture_for(s) if wants_picture(s, ai) else _visual(s.visual)}"
+    blocks = [f"Visual: {'local: ' + _photo_path(s.photo) if getattr(s, 'photo', '') else 'ai: ' + picture_for(s) if wants_picture(s, ai) else _visual(s.visual)}"
               f"\nVoice: {_one_line(s.voice)}" for s in spoken]
     if ai:
         # A stock scene keeps its description too, so the Storyboard can switch it to an
         # AI picture without anyone having to write one.
         blocks = [block + (f"\nPicture: {picture_for(s)}"
-                           if getattr(s, "picture", "") and not wants_picture(s, ai) else "")
+                           if getattr(s, "picture", "") and (getattr(s, "photo", "")
+                                                             or not wants_picture(s, ai)) else "")
                   for block, s in zip(blocks, spoken)]
     if cards:
         found = add_cards([_one_line(s.voice) for s in spoken])
@@ -622,11 +657,13 @@ def shortest_fit(scene_lists: list[list[str]], persona) -> str | None:
 
 
 def write(text: str, audience: Audience | None = None, length: str | None = None,
-          keep=(), padding: float = 0.3, cards: bool = True, ai: str = AI_NONE) -> Draft:
+          keep=(), padding: float = 0.3, cards: bool = True, ai: str = AI_NONE,
+          photos=()) -> Draft:
     """The script for ``text``, keeping the user's words.
 
     ``length`` is an entry of LENGTHS (default: the audience's platform).
-    ``keep`` holds the sentence indexes the user asked to put back.
+    ``keep`` holds the sentence indexes the user asked to put back. ``photos`` (Photo)
+    shown in the video go to the scenes about them (place_photos).
     """
     audience = audience or Audience()
     length = length if length in LENGTHS else audience.length
@@ -651,6 +688,7 @@ def write(text: str, audience: Audience | None = None, length: str | None = None
 
         scenes = [DraftScene(s.visual, s.voice, s.sentence,
                              unfilmable=writer.filmable(s.visual) != s.visual) for s in scenes]
+    scenes = place_photos(scenes, photos)
     dropped = [(i, s) for i, s in enumerate(sentences) if i not in set(kept)]
     longer = None
     if dropped:
