@@ -161,7 +161,7 @@ from vidgen.voice import generate_voiceover  # noqa: E402
 
 
 APP_NAME = "AI Video Studio"
-APP_VERSION = "5.0.0"
+APP_VERSION = "5.1.0"
 # Must match AppUserModelID in packaging/installer.iss, or a pinned taskbar
 # shortcut will not group with the running window.
 APP_MODEL_ID = "AIVideoStudio.Desktop.3"
@@ -366,6 +366,7 @@ def default_settings() -> dict:
         "smart_motion": True,      # cuts on the music's beats, framing toward the detail
         "animate": "Off",          # which AI pictures become moving clips (vidgen.animate)
         "web_facts": True,         # fact ideas are looked up on Wikipedia first (webfacts)
+        "check_clips": True,       # stock clips looked at before the video (vidgen.clipcheck)
         "style": "Normal",         # Normal footage, or drawn on screen (vidgen.drawn)
         "quick_sync": False,       # encode on an Intel graphics chip when it works (render)
         "ai_images_speed": "",     # Fast / Balanced / Best; "" = chosen for this PC
@@ -373,6 +374,7 @@ def default_settings() -> dict:
         "ai_threads_best": "",     # "threads:affinity" the Test speed button found fastest
         "ai_fast_seconds": 0.0,    # a measured picture's time, scaled to the Fast setting
         "ai_gpu": "",              # "dedicated", "integrated" or "none", once detected
+        "gpu_looked": False,       # graphics for the Smart writer looked for (once per PC)
         "key_tip": True,           # after a keyless video: mention that a free key exists
         "music_path": AUTO_TRACK,
         "output_path": os.path.join(default_output_dir(), "final_video.mp4"),
@@ -408,6 +410,11 @@ def load_settings() -> dict:
             # Settings from before the tour existed: this is an update, not a first run.
             if "tour_seen" not in stored:
                 data["tour_seen"] = True
+            # Settings from before 5.1: an update keeps its own graphics choice (only a new
+            # install looks for graphics), and checks clips only where that choice is fast.
+            if "gpu_looked" not in stored:
+                data["gpu_looked"] = True
+                data["check_clips"] = bool(data["writer_gpu"])
     except (OSError, ValueError):
         pass
 
@@ -459,7 +466,7 @@ def load_settings() -> dict:
     if data["style"] not in drawn.STYLES:
         data["style"] = drawn.NORMAL
     for key in ("intro_on", "outro_on", "sound_effects", "smart_motion", "web_facts",
-                "whats_new_off", "quick_sync"):
+                "whats_new_off", "quick_sync", "check_clips", "gpu_looked"):
         data[key] = bool(data[key])
     for key in ("intro_text", "outro_text"):
         data[key] = " ".join(str(data[key]).split())[:60]
@@ -1300,12 +1307,13 @@ TOUR = (
 # Shown once after updating to this version (WhatsNewDialog). Short: the release notes have
 # the whole story.
 WHATS_NEW = (
-    "Your photos in the video: add photos on Make new video. The app sees what is in each one, "
-    "writes the script around them and puts each photo in the scene about it.",
-    "Image editor: change a photo with words (\"make it a chocolate cake\"), keeping its "
-    "layout. Also on each photo and in the thumbnail editor.",
-    "The Smart writer's download now includes a small photo model (0.5 GB more). If you have "
-    "the writer already, Settings offers just that part.",
+    "Stock clips are checked before a video is made: the Smart writer and its photo model look "
+    "at each clip and swap the ones that show something else (a pie for \"coffee fruit\"). "
+    "Settings > Smart writer > Check stock clips.",
+    "The Image editor keeps more of your photo: it describes the whole photo first, so the "
+    "sky, the light and the background stay as they were.",
+    "New installs use the graphics card for the Smart writer when the PC has one, including "
+    "Intel and AMD graphics.",
 )
 
 
@@ -2480,6 +2488,99 @@ class SlowPicturesDialog(ctk.CTkToplevel):
     def choose(self, overrides):
         self.destroy()
         self.app.start_after_slow_choice(overrides)
+
+
+class ClipQuestion(ctk.CTkToplevel):
+    """Asked once, before a video, about the scenes where no stock clip looked right and no
+    AI picture can stand in (vidgen.clipcheck): use the clip anyway, or the next one.
+
+    ``items``: dicts with index, still (a path or None), visual and voice. ``answer``
+    gets {index: "use" | "next"}, or None when the video is cancelled.
+    """
+
+    USE, NEXT = "Use this", "Try the next clip"
+
+    def __init__(self, app, items, answer, cancel):
+        from PIL import Image
+
+        super().__init__(app)
+        self.app, self.answer, self.cancel = app, answer, cancel
+        self.title("Some clips may not fit")
+        self.configure(fg_color=MAIN_BG)
+        self.transient(app)
+        self._images, self.picks = [], {}
+        card = Card(self)
+        card.pack(fill="both", expand=True, padx=14, pady=14)
+        ctk.CTkLabel(card, text="These clips may not show what the scene says",
+                     font=app.font_title, text_color=TEXT).pack(anchor="w", padx=18, pady=(16, 4))
+        ctk.CTkLabel(card, text="Pick what each scene uses, then the video is made.",
+                     font=app.font_body, text_color=TEXT_MUTED).pack(anchor="w", padx=18,
+                                                                    pady=(0, 8))
+        rows = ctk.CTkScrollableFrame(card, fg_color="transparent", width=560,
+                                      height=min(120 * len(items), 420))
+        rows.pack(fill="both", expand=True, padx=8)
+        for item in items:
+            row = ctk.CTkFrame(rows, fg_color="transparent")
+            row.pack(fill="x", pady=6)
+            still = None
+            if item.get("still"):
+                try:
+                    with Image.open(item["still"]) as picture:
+                        still = ctk.CTkImage(light_image=picture.convert("RGB").copy(),
+                                             size=(176, 99))
+                except OSError:
+                    still = None
+            if still is not None:
+                self._images.append(still)
+            ctk.CTkLabel(row, text="" if still else "No picture", image=still, width=176,
+                         height=99, fg_color=FIELD_BG, text_color=TEXT_MUTED,
+                         ).pack(side="left", padx=(0, 12))
+            words = ctk.CTkFrame(row, fg_color="transparent")
+            words.pack(side="left", fill="x", expand=True)
+            ctk.CTkLabel(words, text=f"Scene {item['index'] + 1}: {item['visual']}",
+                         font=app.font_body, text_color=TEXT, anchor="w").pack(anchor="w")
+            ctk.CTkLabel(words, text=ellipsize(item.get("voice") or "", 90),
+                         font=app.font_body, text_color=TEXT_MUTED, anchor="w",
+                         wraplength=340, justify="left").pack(anchor="w", pady=(2, 6))
+            pick = ctk.CTkSegmentedButton(words, values=[self.USE, self.NEXT],
+                                          font=app.font_body)
+            pick.set(self.USE)
+            pick.pack(anchor="w")
+            self.picks[item["index"]] = pick
+        buttons = ctk.CTkFrame(card, fg_color="transparent")
+        buttons.pack(fill="x", padx=18, pady=(10, 16))
+        ctk.CTkButton(buttons, text="Make the video", height=34, corner_radius=4,
+                      font=app.font_body, fg_color=ACCENT, hover_color=ACCENT_HOVER,
+                      text_color=ACCENT_TEXT, command=self.done).pack(side="right")
+        ctk.CTkButton(buttons, text="Cancel video", height=34, corner_radius=4,
+                      font=app.font_body, fg_color=FIELD_BG, hover_color=CARD_HOVER,
+                      border_width=1, border_color=FIELD_BORDER, text_color=TEXT,
+                      command=self.stop).pack(side="right", padx=(0, 8))
+        self.protocol("WM_DELETE_WINDOW", self.stop)
+        centre_on(self, app)
+        self.after(300, self._watch)
+
+    def _watch(self):
+        """Cancel pressed in the main window: the question goes away with the video."""
+        if self.answer is None:
+            return
+        if self.cancel.is_set():
+            self.stop()
+        else:
+            self.after(300, self._watch)
+
+    def _close(self, result):
+        answer, self.answer = self.answer, None   # answered once, however it closes
+        if answer is not None:
+            self.destroy()
+            answer(result)
+
+    def done(self):
+        self._close({i: ("next" if pick.get() == self.NEXT else "use")
+                     for i, pick in self.picks.items()})
+
+    def stop(self):
+        self._close(None)
 
 
 class BatchDialog(ctk.CTkToplevel):
@@ -4121,7 +4222,7 @@ class ImageEditor(ctk.CTkFrame):
     def __init__(self, master, app, photo="", about="", on_use=None, use_text="Use this"):
         super().__init__(master, fg_color="transparent")
         self.app, self.on_use = app, on_use
-        self.photo, self.about = "", ""
+        self.photo, self.about, self.detail = "", "", {}
         self.tries, self.shown, self.busy = [], None, False
         self.stop = threading.Event()
         self.grid_columnconfigure((0, 1), weight=1, uniform="views")
@@ -4273,14 +4374,19 @@ class ImageEditor(ctk.CTkFrame):
         def worker():
             nonlocal about
             try:
-                if not about and photos.ready()[0]:
-                    about = photos.describe([photo], self.stop.is_set, gpu)[0]
+                # The redraw needs the whole photo in words (sky, light, colours), not the
+                # short sentence the video writer uses, or the picture model makes them up.
+                looks = self.detail.get(photo, "")
+                if not looks and photos.ready()[0]:
+                    looks = photos.describe([photo], self.stop.is_set, gpu, detail=True)[0]
+                    self.detail[photo] = looks
+                about = about or looks
                 rewrite = None
                 if writer.ready()[0]:
                     rewrite = lambda a, c: writer.changed_picture(a, c, self.stop.is_set, gpu)  # noqa: E731
                 os.makedirs(PREVIEW_DIR, exist_ok=True)
                 out = os.path.join(PREVIEW_DIR, f"redraw_{projects.new_id()}.png")
-                made = imagegen.redraw(photo, change, out, amount, about, rewrite,
+                made = imagegen.redraw(photo, change, out, amount, looks or about, rewrite,
                                        should_stop=self.stop.is_set, log=app.ui.log,
                                        backend=backend, speed=speed, threads=threads)
                 post(lambda: self._made(out, about, made))
@@ -5370,6 +5476,7 @@ class App(ctk.CTk):
         self.var_outro_text = tk.StringVar(value=s["outro_text"])
         self.var_sfx = tk.BooleanVar(value=s["sound_effects"])
         self.var_smart_motion = tk.BooleanVar(value=s["smart_motion"])
+        self.var_check_clips = tk.BooleanVar(value=s["check_clips"])
         self.var_animate = tk.StringVar(value=s["animate"])
         self.var_web_facts = tk.BooleanVar(value=s["web_facts"])
         self.var_style = tk.StringVar(value=s["style"])
@@ -5379,6 +5486,7 @@ class App(ctk.CTk):
         self.whats_new_seen, self.whats_new_off = s["whats_new_seen"], s["whats_new_off"]
         self.key_tip = s["key_tip"]
         self.ai_gpu, self.ai_fast_seconds = s["ai_gpu"], s["ai_fast_seconds"]
+        self.gpu_looked = s["gpu_looked"]
         self.ai_threads_best = s["ai_threads_best"]
         self.ai_speed_chosen = bool(s["ai_images_speed"])
         self.var_ai_speed = tk.StringVar(value=s["ai_images_speed"] or self.default_ai_speed())
@@ -5402,7 +5510,7 @@ class App(ctk.CTk):
                     self.var_target, self.var_intro_on, self.var_intro_text,
                     self.var_outro_on, self.var_outro_text, self.var_sfx,
                     self.var_smart_motion, self.var_animate, self.var_web_facts,
-                    self.var_style, self.var_quick_sync,
+                    self.var_style, self.var_quick_sync, self.var_check_clips,
                     *self.caption_vars.values()):
             var.trace_add("write", self._on_setting_changed)
 
@@ -5435,6 +5543,7 @@ class App(ctk.CTk):
             "outro_text": self.var_outro_text.get().strip(),
             "sound_effects": bool(self.var_sfx.get()),
             "smart_motion": bool(self.var_smart_motion.get()),
+            "check_clips": bool(self.var_check_clips.get()),
             "animate": self.var_animate.get(),
             "web_facts": bool(self.var_web_facts.get()),
             "style": self.var_style.get(),
@@ -5447,6 +5556,7 @@ class App(ctk.CTk):
             "ai_threads_best": self.ai_threads_best,
             "ai_fast_seconds": self.ai_fast_seconds,
             "ai_gpu": self.ai_gpu,
+            "gpu_looked": self.gpu_looked,
             "music_path": self.music_path,
             "output_path": self.var_output.get().strip(),
             "aspect": self.var_aspect.get(),
@@ -6940,6 +7050,18 @@ class App(ctk.CTk):
             onvalue=True, offvalue=False, progress_color=ACCENT,
         ).pack(side="left")
 
+        self.check_clips_row = SettingRow(
+            page, self, self.icon("images"), "Check stock clips",
+            "Before a video is made, the Smart writer and the photo model look at each "
+            "stock clip and swap ones that show something else. Adds about a minute")
+        self.check_clips_row.grid(row=next(rows), column=0, sticky="ew", pady=PAD // 2)
+        ctk.CTkSwitch(
+            self.check_clips_row.control, text="", width=44, variable=self.var_check_clips,
+            onvalue=True, offvalue=False, progress_color=ACCENT,
+        ).pack(side="left")
+        self.writer_listeners.append(self._check_clips_row_shown)
+        self._check_clips_row_shown()
+
         cards_row = SettingRow(
             page, self, self.icon("script"), "Add cards automatically",
             "New from text puts key combos like Win + V and big numbers on screen as "
@@ -7246,6 +7368,7 @@ class App(ctk.CTk):
         elif not self._has_footage_key() and not self.welcome_seen:
             self.after(300, lambda: WelcomeDialog(self))
         self.detect_graphics()
+        self.look_for_graphics()
         if self.var_check_updates.get():
             self.check_for_updates()
 
@@ -7766,6 +7889,13 @@ class App(ctk.CTk):
                 listener(payload)
             except tk.TclError:
                 self.writer_listeners.remove(listener)   # its window is gone
+
+    def _check_clips_row_shown(self, _payload=None):
+        """Check stock clips needs both the Smart writer and its photo part."""
+        if writer.installed() and writer.sees():
+            self.check_clips_row.grid()
+        else:
+            self.check_clips_row.grid_remove()
 
     def _writer_row_changed(self, payload=None):
         """The Settings row: what state the Smart writer is in, and what the button does."""
@@ -9889,6 +10019,29 @@ class App(ctk.CTk):
 
         threading.Thread(target=worker, daemon=True).start()
 
+    def look_for_graphics(self):
+        """Once per PC, in the background: graphics the Smart writer can use (a card, or
+        the Intel or AMD chip in the processor) switch on "Use the graphics card" and Check
+        stock clips; none switches the check off, as on the processor it takes minutes."""
+        if self.gpu_looked or writer.runtime_path() is None:
+            return
+
+        def worker():
+            found = writer.has_graphics()
+            self._queue.put(("call", {"fn": lambda: self._graphics_looked(found)}))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _graphics_looked(self, found):
+        if found is None:
+            return   # couldn't ask: again at the next start
+        # ponytail: once per PC, so it can switch back on a "Use the graphics card" someone
+        # had turned off before this version; the writer falls back to the processor anyway.
+        self.gpu_looked = True
+        self.var_writer_gpu.set(found)
+        self.var_check_clips.set(found)
+        save_settings(self._collect_settings())
+
     def _graphics_found(self, found):
         if not found:
             return
@@ -10517,6 +10670,7 @@ class App(ctk.CTk):
                    ai_images_speed=self.ai_speed_now(), ai_threads=self.threads_pair(),
                    ai_images_backend=self.ai_backend_now(),
                    project_dir=projects.folder(self.project),
+                   ask_clips=None if self._batch else self._ask_clips,
                    target_length=pacing.TARGETS.get(settings["target_length"]),
                    thumbnail_scene=self._thumb_scene(), thumbnail_title=self.thumb_title())
 
@@ -10534,6 +10688,22 @@ class App(ctk.CTk):
             bar.set(0)
         self.select_page("log")
         threading.Thread(target=render_worker, args=(cfg, self.ui), daemon=True).start()
+
+    def _ask_clips(self, items):
+        """On the render thread: ClipQuestion on the window's thread, waited for. Returns
+        {scene index: "use" | "next"}, or None when the video is cancelled."""
+        done, got = threading.Event(), {}
+        cancel = self._cancel
+
+        def answer(result):
+            got["result"] = result
+            done.set()
+
+        self._queue.put(("call", {"fn": lambda: ClipQuestion(self, items, answer, cancel)}))
+        while not done.wait(0.2):
+            if cancel.is_set():
+                return None
+        return got["result"]
 
     # -- cache -----------------------------------------------------------------
     def _show_cache_size(self):

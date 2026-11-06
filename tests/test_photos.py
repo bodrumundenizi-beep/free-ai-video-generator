@@ -167,3 +167,12 @@ def test_a_project_keeps_its_own_copy_of_each_photo(tmp_path):
     assert projects.keep_photos(project, kept) == kept     # already inside: left alone
     os.remove(original)
     assert os.path.isfile(parse_script(kept)[0].local_path)
+
+
+def test_a_detailed_description_drops_repeats_and_keeps_five_sentences():
+    from vidgen.photos import tidy
+    text = ("The image shows a ball in a net. The ball is black. The sky is blue. The ball is "
+            "black. The light is cold. It is night. The image is a 3D render. The sky is blue.")
+    assert tidy(text, whole=True) == ("A ball in a net. The ball is black. The sky is blue. "
+                                      "The light is cold. It is night.")
+    assert tidy(text) == "A ball in a net"

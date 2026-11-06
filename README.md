@@ -19,7 +19,7 @@ voiceover, and renders a 1080p or 720p MP4 in portrait or landscape.
 - **My videos:** Every video you make is kept on the My videos page. Open it again in the Storyboard, change it, make a copy in the other shape or voice, rename it, search. An unfinished Storyboard is kept as a draft.
 - **Tell it what to change:** Type "make it shorter" or "more exciting start" and the built-in AI rewrites the script; you see what changed before anything is rendered.
 - **Paste any text, get a script:** Paste plain text, say who the video is for and how long it should be, and a built-in open-source AI writes the script. It runs on your PC: no account, no key, nothing sent anywhere.
-- **Automated Stock Footage:** Automatically fetches relevant video clips from Pexels or Pixabay, and picks the one whose description fits the scene best.
+- **Automated Stock Footage:** Automatically fetches relevant video clips from Pexels or Pixabay, and picks the one whose description fits the scene best. With the Smart writer, each clip is looked at before the video is made and swapped if it shows something else.
 - **Drawn styles:** Blackboard chalk or flat-colour drawing, each scene drawn on screen. Fast on any PC.
 - **Facts from Wikipedia:** Ask for "top 5..." and the Smart writer reads Wikipedia instead of guessing.
 - **Templates and batches:** Start from Tech tip, Story, Top 5 or Motivation, or make several videos in one go.
@@ -73,7 +73,7 @@ You can confirm you have the real file by checking its hash against
 `SHA256SUMS.txt` on the release page:
 
 ```powershell
-Get-FileHash .\AIVideoStudio-5.0.0-setup.exe -Algorithm SHA256
+Get-FileHash .\AIVideoStudio-5.1.0-setup.exe -Algorithm SHA256
 ```
 
 ## The quick way
@@ -262,11 +262,33 @@ open-source language model (Apache 2.0 licence), run on your PC by
   app uses Quick split and tells you why.
 - **Graphics card:** turn on **Settings → Use the graphics card** to run it on a
   dedicated NVIDIA, AMD or Intel card instead of the processor. On an RTX 4060 a
-  script takes about 3 seconds instead of about 20. It is off by default, needs
-  about 3 GB of video memory, and goes back to the processor by itself if the
-  card can't be used.
+  script takes about 3 seconds instead of about 20. A new install turns it on when
+  the PC has graphics it can use (Intel and AMD graphics built into the processor
+  count); an update keeps your choice. It needs about 3 GB of video memory, and
+  goes back to the processor by itself if the card can't be used.
 - **It can be wrong.** It is a small model. Read the script before you render:
   it sometimes changes a detail, such as "every workday" becoming "every day".
+
+### Stock clips checked before the video
+
+With the Smart writer downloaded, **Settings → Smart writer → Check stock clips**
+looks at every stock clip a video will show, before anything is made:
+
+- The writer reads what Pexels or Pixabay says the clip shows; a clear "no" (roast
+  pork for "roast thermometer") is skipped at once.
+- The photo model looks at the clip's preview picture, and the writer judges what
+  it saw. A clip that shows something else is swapped for the next one, so you
+  never see clips switching.
+- After 4 clips with no fit the scene becomes an AI picture (at most 1 scene in
+  10, if AI pictures are downloaded). Without AI pictures, one window before the
+  video asks about those scenes: **Use this** or **Try the next clip**.
+- A long line that shows two clips gets both checked. Clips you picked in the
+  Storyboard are left alone.
+
+It adds time before the video starts: on an RTX 4060 about 40 seconds for a 60
+second video and about 3 minutes for a 3 minute one. On the processor it is about
+4 times slower, so it is on by default only when the Smart writer uses the
+graphics card. The models are small and still miss some clips.
 
 ## Writing a script
 
@@ -399,9 +421,13 @@ The **Image editor** page changes a photo the way you say: open a photo, type
 
 It uses the AI pictures model (see above), so it needs AI pictures downloaded: about
 20 to 30 seconds a change on an RTX 4060, a few minutes without a graphics card.
-When the Smart writer is there, it first turns what is in the photo and your words
-into one description of the changed picture, which keeps the rest of the photo
-better.
+When the Smart writer is there, its photo model first describes the whole photo
+(the sky, the light, the background), and the writer turns that and your words into
+one description of the changed picture, so the rest of the photo stays as it was.
+
+Changing things works best ("make it a chocolate cake", "make it night time").
+Recolouring a strong pattern, like the black and white of a football, often doesn't
+take: the picture model keeps those colours.
 
 ![The Image editor](docs/imageeditor.png)
 
@@ -814,7 +840,7 @@ python -m pytest
 python packaging/make_icon.py
 python packaging/fetch_llama.py
 pyinstaller --noconfirm --clean packaging/ai_video_studio.spec
-"%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe" /DMyAppVersion=5.0.0 packaging\installer.iss
+"%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe" /DMyAppVersion=5.1.0 packaging\installer.iss
 ```
 
 That is where Inno Setup goes when installed for one user; installed for everyone, it is

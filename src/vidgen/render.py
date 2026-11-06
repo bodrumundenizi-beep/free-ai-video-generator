@@ -376,6 +376,7 @@ def _render(cfg, ui, work_dir, job):
             "Add a stock footage key (Pexels or Pixabay) in Settings > Footage keys "
             f"- the scene at line {needs_stock[0].line} needs stock footage."
         )
+    _check_clips(cfg, ui, plans, search, work_dir, stop)
 
     # MoviePy only now, so a script error is reported instantly.
     from moviepy import AudioFileClip
@@ -1137,6 +1138,93 @@ def _timeline_words(plans, starts):
 
 def _minutes(seconds: float) -> str:
     return f"{seconds:.0f} s" if seconds < 90 else f"{seconds / 60:.0f} min"
+
+
+def _check_clips(cfg, ui, plans, search, work_dir, stop, check=None):
+    """Before anything is made: the Smart writer and the photo model look at each stock
+    scene's clips (vidgen.clipcheck), so a clip that shows something else is swapped before
+    anyone sees it. Changes ``cfg["clip_choices"]`` and turns scenes into AI pictures.
+
+    Scenes picked in the Storyboard, your files and AI scenes are left alone. Without the
+    two models, or with the setting off, nothing happens. ``check``: clipcheck.run (tests).
+    """
+    if not cfg.get("check_clips"):
+        return
+    from . import clipcheck, imagegen, photos, scenes as previews, writer
+
+    if check is None:
+        if not (writer.installed() and writer.sees()):
+            return
+        ok, why = writer.ready()
+        if not ok or not photos.ready()[0]:
+            ui.log(f"⚠️ Stock clips not checked: {why or 'the photo model cannot run'}")
+            return
+        check = clipcheck.run
+    chosen = cfg.get("clip_choices") or {}
+    todo = [i for i, p in enumerate(plans)
+            if not p.scene.is_local and not p.scene.is_ai and i not in chosen]
+    if not todo:
+        return
+    ui.status("Checking stock clips...")
+    began = time.monotonic()
+    found = []
+    for n, i in enumerate(todo, 1):
+        _check(stop)
+        ui.status(f"Finding clips... {n} of {len(todo)}")
+        found.append(clipcheck.Scene(i, plans[i].scene.visual,
+                                     _candidates(plans[i], search, None, 2),
+                                     clipcheck.clips_for(plans[i].scene.voice)))
+
+    def tell(what, done, total):
+        _check(stop)
+        ui.status(f"{what}... {done} of {total}")
+
+    folder = os.path.join(work_dir, "stills")
+    ai_ready = imagegen.ready()[0]
+    try:
+        picked = check(found, folder, ai_ready, should_stop=stop,
+                       gpu=bool(cfg.get("writer_gpu")), tell=tell)
+    except (writer.Stopped, footage.Stopped, RenderCancelled):
+        raise RenderCancelled() from None
+    except Exception as exc:  # noqa: BLE001 - a failed check must never stop the video
+        ui.log(f"⚠️ Stock clips not checked ({_one_line(exc, 200)}); using the usual picks.")
+        return
+    if "Pexels" in search.disabled:
+        ui.log("⚠️ Pexels stopped answering during the check; Pixabay's clips are used.")
+
+    asked = [s for s in found if picked.get(s.index) and picked[s.index].ask]
+    answers = {}
+    if asked and cfg.get("ask_clips"):
+        items = [{"index": s.index, "visual": s.visual, "voice": plans[s.index].scene.voice,
+                  "still": previews.fetch_thumb(picked[s.index].clips[0], folder)
+                  if picked[s.index].clips else None} for s in asked]
+        answers = cfg["ask_clips"](items)
+        if answers is None:
+            raise RenderCancelled()
+    new = {}
+    swapped = made_ai = 0
+    for scene in found:
+        result = picked.get(scene.index)
+        if result is None or not result.clips and not result.ai:
+            continue
+        if result.ai:
+            plans[scene.index].scene = _ai_instead(plans[scene.index].scene)
+            made_ai += 1
+            continue
+        clips = result.clips
+        if answers.get(scene.index) == "next" and len(clips) > 1:
+            clips = clips[1:] + clips[:1]
+        if scene.candidates and clips[0] is not scene.candidates[0]:
+            swapped += 1
+        new[scene.index] = clips
+    cfg["clip_choices"] = {**new, **chosen}   # the Storyboard's picks win
+    if made_ai:
+        cfg["_ai_total"] = (cfg.get("_ai_total") or 0) + made_ai
+        if cfg.get("ai_reuse"):
+            cfg["_ai_total"] = min(cfg["_ai_total"], cfg["ai_reuse"])
+    ui.log(f"🔎 Checked the clips of {len(found)} scenes in {time.monotonic() - began:.0f} s: "
+           f"{swapped} swapped, {made_ai} AI picture{'' if made_ai == 1 else 's'}"
+           + (f", {len(asked)} asked about" if asked else ""))
 
 
 def _stand_in(plan, index, before, cfg, ratio, work_dir, ui, version, search, stop, why):

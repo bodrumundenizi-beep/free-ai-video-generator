@@ -11,6 +11,7 @@ Pure of Tk. The model process and the network can be replaced in tests.
 from __future__ import annotations
 
 import base64
+import contextlib
 import io
 import json
 import os
@@ -27,6 +28,13 @@ _PROMPT = ("Describe this photo in one sentence of 10 to 25 words: the main thin
            "what it is doing, the place and the light. Answer as JSON: {\"about\": \"...\"}.")
 _SCHEMA = {"type": "object", "properties": {"about": {"type": "string", "maxLength": 240}},
            "required": ["about"]}
+# For the Image editor: what the redraw must keep, so the picture model doesn't make it up.
+_DETAIL_PROMPT = ("Describe this photo in detail in 40 to 70 words: the main thing and its "
+                  "colours and pattern, what is around it, the background, the time of day, the "
+                  "light and the colours of the sky or walls. Answer as JSON: {\"about\": \"...\"}.")
+_DETAIL_SCHEMA = {"type": "object", "properties": {"about": {"type": "string",
+                                                             "maxLength": 500}},
+                  "required": ["about"]}
 
 
 def is_photo(path: str) -> bool:
@@ -65,26 +73,45 @@ def data_url(path: str) -> str:
     return "data:image/jpeg;base64," + base64.b64encode(buffer.getvalue()).decode("ascii")
 
 
-def tidy(about: str) -> str:
+def tidy(about: str, whole: bool = False) -> str:
     """One plain sentence: the model sometimes starts with "The image shows"."""
     about = " ".join(str(about).split())
     about = re.sub(r"^(the|this) (image|photo|picture) (shows|features|depicts|is of)\s+|"
                    r"^this is (a|an) (image|photo|picture) of\s+", "", about, flags=re.I)
-    about = re.split(r"(?<=[a-z0-9])\. ", about)[0]   # the first sentence: the rest wanders
+    sentences = re.split(r"(?<=[a-z0-9])\. ", about)
+    if not whole:
+        about = sentences[0]   # the first sentence: the rest wanders
+    else:   # the small model repeats itself and guesses more as it goes: the first 5, once each
+        kept = []
+        for sentence in sentences:
+            sentence = sentence.strip().rstrip(".")
+            if sentence and sentence.lower() not in (k.lower() for k in kept):
+                kept.append(sentence)
+        about = ". ".join(kept[:5]) + "."
     return (about[:1].upper() + about[1:]).rstrip(" ,;")
 
 
+def session_for(should_stop=None, gpu: bool = False, launch=_launch, http=None):
+    """The photo model, to pass to describe() several times; close it with ``with``."""
+    kwargs = {"http": http} if http is not None else {}
+    return writer.Session(should_stop, launch=launch, check=ready, gpu=gpu, **kwargs)
+
+
 def describe(paths, should_stop=None, gpu: bool = False, done=None,
-             launch=_launch, http=None) -> list[str]:
+             launch=_launch, http=None, detail: bool = False, session=None) -> list[str]:
     """A sentence for each photo ("" for one that could not be read).
 
     ``done(index, sentence)`` hears each one as it is ready. Raises writer.WriterError when
-    the model cannot run, Stopped when ``should_stop`` says so.
+    the model cannot run, Stopped when ``should_stop`` says so. ``detail``: a longer
+    description of everything in the photo, for the Image editor. ``session``: one from
+    session_for(), kept open by the caller (clipcheck asks several times: no restart).
     """
-    kwargs = {"http": http} if http is not None else {}
-    session = writer.Session(should_stop, launch=launch, check=ready, gpu=gpu, **kwargs)
+    prompt, schema, tokens = ((_DETAIL_PROMPT, _DETAIL_SCHEMA, 160) if detail
+                              else (_PROMPT, _SCHEMA, ABOUT_TOKENS))
+    own = session is None
+    session = session or session_for(should_stop, gpu, launch, http)
     found = []
-    with session:
+    with session if own else contextlib.nullcontext():
         session.start()
         for index, path in enumerate(paths):
             try:
@@ -94,9 +121,9 @@ def describe(paths, should_stop=None, gpu: bool = False, done=None,
             else:
                 content = session._ask("", [("user", [
                     {"type": "image_url", "image_url": {"url": picture}},
-                    {"type": "text", "text": _PROMPT}])], _SCHEMA, ABOUT_TOKENS, 0.2)
+                    {"type": "text", "text": prompt}])], schema, tokens, 0.2)
                 try:
-                    found.append(tidy(json.loads(content)["about"]))
+                    found.append(tidy(json.loads(content)["about"], whole=detail))
                 except (ValueError, KeyError, TypeError):
                     found.append("")
             if done is not None:

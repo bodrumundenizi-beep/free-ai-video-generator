@@ -722,6 +722,9 @@ def parse_scenes(content: str, topic: str = "", photos=()) -> list[draft.DraftSc
 
 # --- text for posting the video ---------------------------------------------------
 
+_TEXT_FITS_ITEM = {"type": "object", "properties": {
+    "main_subject": {"type": "string", "maxLength": 50},   # said first: it makes the answer think
+    "fits": {"enum": ["yes", "maybe", "no"]}}, "required": ["main_subject", "fits"]}
 _UPLOAD_TOKENS = 300
 _UPLOAD_PROMPT = (
     "You write the text for posting a short video online. The user gives what the video "
@@ -795,6 +798,23 @@ def _free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind(("127.0.0.1", 0))
         return sock.getsockname()[1]
+
+
+def has_graphics(run=subprocess.run) -> bool | None:
+    """Whether llama.cpp sees graphics it can run on: a dedicated card or the chip built into
+    the processor (Intel, AMD), through Vulkan. None when it could not be asked."""
+    exe = runtime_path()
+    if exe is None:
+        return None
+    try:
+        listed = run([exe, "--list-devices"], capture_output=True, timeout=60,
+                     cwd=os.path.dirname(exe),
+                     creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except (OSError, subprocess.SubprocessError):
+        return None
+    text = (listed.stdout or b"").decode("utf-8", "replace") + \
+        (listed.stderr or b"").decode("utf-8", "replace")
+    return bool(re.search(r"^\s*Vulkan\d+:", text, re.M))
 
 
 def _launch(exe: str, model_file: str, port: int, gpu: bool = False):
@@ -1049,18 +1069,43 @@ class Session:
     def changed_picture(self, about: str, change: str) -> str:
         """One description of a photo as it looks after ``change`` (imagegen.redraw)."""
         schema = {"type": "object", "properties": {"picture": {"type": "string",
-                                                               "maxLength": 300}},
+                                                               "maxLength": 600}},
                   "required": ["picture"]}
         content = self._ask(
             "You describe pictures for an image model. You get what a photo shows and a change "
-            "the user wants. Answer with one sentence describing the photo after the change: "
-            "keep everything the change doesn't touch (the place, the light, the angle) and "
-            "describe the changed part in concrete words. Answer as JSON.",
-            [("user", f"Photo: {about}\nChange: {change}")], schema, 120, 0.3)
+            "the user wants. Answer with the description of the photo after the change: "
+            "keep every detail the change doesn't touch word for word (the place, the sky, the "
+            "light, the colours, the angle) and describe the changed part in concrete words. "
+            "Answer as JSON.",
+            [("user", f"Photo: {about}\nChange: {change}")], schema, 220, 0.3)
         try:
             return " ".join(str(json.loads(content)["picture"]).split())
         except (ValueError, KeyError, TypeError) as exc:
             raise WriterError("The Smart writer gave an answer the app could not read.") from exc
+
+    def clips_text_fit(self, visual: str, texts: list[str]) -> list[str]:
+        """"yes", "maybe" or "no" for each clip described by ``texts`` (the stock site's title
+        or tags, or what the photo model saw) (clipcheck). One question a clip: asked about
+        six at once the model mixes them up, and it is no faster (the answers are the cost)."""
+        found = []
+        for text in texts:
+            content = self._ask(
+                "You check stock video clips for a video. You get the scene's search words and "
+                "a clip's description: the stock site's title or tags, or what a picture model "
+                "saw. Tags list everything in the clip, so first decide what the clip's MAIN "
+                "subject is, then compare it with the MAIN subject of the search words. A cup "
+                "of coffee is not a coffee plant; a pie is not coffee fruit; roast pork is not "
+                "a thermometer. Answer \"no\" when the main subjects differ, \"maybe\" when they "
+                "are related, \"yes\" when the clip clearly shows the search words. Answer as "
+                "JSON.",
+                [("user", f"Search words: {visual}\nClip: {' '.join(text.split())[:200]}")],
+                _TEXT_FITS_ITEM, 60, 0.0)
+            try:
+                found.append(str(json.loads(content)["fits"]))
+            except (ValueError, KeyError, TypeError) as exc:
+                raise WriterError("The Smart writer gave an answer the app could not read.") \
+                    from exc
+        return found
 
     def upload_text(self, script: str) -> dict:
         """A title, description and tags for posting the video. Nothing is posted."""
