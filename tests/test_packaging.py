@@ -57,7 +57,7 @@ def test_the_bundle_takes_the_server_and_its_libraries_only():
 
 
 def test_the_readme_and_the_app_agree_on_the_version():
-    version = re.search(r'APP_VERSION = "([^"]+)"', read("src", "ai_video_studio.py")).group(1)
+    version = re.search(r'APP_VERSION = "([^"]+)"', read("src", "gui", "base.py")).group(1)
     assert f"AIVideoStudio-{version}-setup.exe" in read("README.md")
     assert f"'ProductVersion', '{version}'" in read("packaging", "version_info.txt")
 

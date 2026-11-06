@@ -86,7 +86,7 @@ Source: "{#SourceDir}\*"; DestDir: "{app}"; \
 Source: "..\THIRD-PARTY-LICENSES.md"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-; AppUserModelID must match APP_MODEL_ID in src/ai_video_studio.py, or a pinned
+; AppUserModelID must match APP_MODEL_ID in src/gui/base.py, or a pinned
 ; taskbar shortcut will not group with the running window.
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; \
   AppUserModelID: "AIVideoStudio.Desktop.3"

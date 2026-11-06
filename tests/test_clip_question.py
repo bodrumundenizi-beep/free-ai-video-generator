@@ -5,6 +5,7 @@ import threading
 from PIL import Image
 
 import ai_video_studio as ai
+from split_names import everywhere  # noqa: E402
 from test_settings_tabs import app  # noqa: F401  (the window, shared)
 
 
@@ -44,7 +45,7 @@ def test_the_setting_shows_only_with_both_models(app, monkeypatch):  # noqa: F81
 
 def test_graphics_switch_on_the_card_and_the_check_once(app, monkeypatch):  # noqa: F811
     saved = []
-    monkeypatch.setattr(ai, "save_settings", saved.append)
+    everywhere(monkeypatch, "save_settings", saved.append)
     app.gpu_looked = False
     app.var_writer_gpu.set(False)
     saved.clear()                       # setting a switch saves by itself
@@ -79,7 +80,7 @@ def test_an_update_keeps_its_graphics_choice_and_a_new_install_looks(tmp_path, m
     import json
 
     path = tmp_path / "settings.json"
-    monkeypatch.setattr(ai, "SETTINGS_FILE", str(path))
+    everywhere(monkeypatch, "SETTINGS_FILE", str(path))
     for gpu in (False, True):   # settings from 5.0: no gpu_looked yet
         path.write_text(json.dumps({"writer_gpu": gpu, "tour_seen": True}), encoding="utf-8")
         loaded = ai.load_settings()

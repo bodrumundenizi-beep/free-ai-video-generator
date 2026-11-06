@@ -5,6 +5,7 @@ import pytest
 from PIL import Image
 
 import ai_video_studio as ai
+from split_names import everywhere  # noqa: E402
 from test_settings_tabs import app  # noqa: F401  (the window, shared)
 
 
@@ -46,8 +47,8 @@ def test_change_with_words_swaps_the_layer_picture_and_undo_puts_it_back(app, tm
     from vidgen import thumbedit
 
     old, new = picture(tmp_path, "old.png", "red"), picture(tmp_path, "new.png", "blue")
-    monkeypatch.setattr(ai, "FREE_THUMBS_DIR", str(tmp_path / "free"))
-    monkeypatch.setattr(ai, "change_photo_window",
+    everywhere(monkeypatch, "FREE_THUMBS_DIR", str(tmp_path / "free"))
+    everywhere(monkeypatch, "change_photo_window",
                         lambda _app, photo, _about, use, _title="": use(new))
     layers = thumbedit.blank((320, 180))
     layers.insert(0, {"kind": "background", "path": old, "hidden": False})

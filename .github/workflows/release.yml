@@ -30,7 +30,7 @@ jobs:
           if ($env:GITHUB_REF_TYPE -eq 'tag') {
             $v = $env:GITHUB_REF_NAME -replace '^v',''
           } else {
-            $src = Get-Content src/ai_video_studio.py -Raw
+            $src = Get-Content src/gui/base.py -Raw
             if ($src -notmatch 'APP_VERSION\s*=\s*"([^"]+)"') { throw "APP_VERSION not found" }
             $v = $Matches[1]
           }
@@ -44,11 +44,11 @@ jobs:
         if: github.ref_type == 'tag'
         shell: pwsh
         run: |
-          $src = Get-Content src/ai_video_studio.py -Raw
+          $src = Get-Content src/gui/base.py -Raw
           if ($src -notmatch 'APP_VERSION\s*=\s*"([^"]+)"') { throw "APP_VERSION not found" }
           $app = $Matches[1]
           if ($app -ne "${{ steps.ver.outputs.version }}") {
-            throw "APP_VERSION '$app' does not match tag '${{ steps.ver.outputs.version }}' - bump it in src/ai_video_studio.py and packaging/version_info.txt"
+            throw "APP_VERSION '$app' does not match tag '${{ steps.ver.outputs.version }}' - bump it in src/gui/base.py and packaging/version_info.txt"
           }
 
       - name: Install dependencies

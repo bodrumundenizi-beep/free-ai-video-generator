@@ -7,6 +7,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 import ai_video_studio as ai  # noqa: E402
+from split_names import everywhere  # noqa: E402
 
 TABS = ("footage", "video", "voice", "writer", "images", "app", "help", "advanced")
 
@@ -18,8 +19,8 @@ def app(tmp_path_factory):
     path.write_text(json.dumps({"welcome_seen": True, "tour_seen": True, "whats_new_off": True,
                                 "check_updates": False, "window": "1000x700"}), encoding="utf-8")
     patch = pytest.MonkeyPatch()
-    patch.setattr(ai, "SETTINGS_DIR", str(folder))
-    patch.setattr(ai, "SETTINGS_FILE", str(path))
+    everywhere(patch, "SETTINGS_DIR", str(folder))
+    everywhere(patch, "SETTINGS_FILE", str(path))
     patch.setattr(ai.projects, "ROOT", str(folder / "projects"))   # never the real My videos
     try:
         window = ai.App()
@@ -120,7 +121,7 @@ def made_picture(tmp_path, monkeypatch):
     preview = tmp_path / "preview"
     preview.mkdir()
     (preview / "ai_try.png").write_bytes(b"png")
-    monkeypatch.setattr(ai, "PREVIEW_DIR", str(preview))
+    everywhere(monkeypatch, "PREVIEW_DIR", str(preview))
 
 
 def test_save_picture_copies_the_made_picture(app, tmp_path, monkeypatch):
@@ -296,13 +297,12 @@ def test_the_new_page_offers_text_tip_and_several(app):
 def test_the_window_size_is_saved_and_a_bad_one_falls_back(app, tmp_path):
     assert ai.re.fullmatch(r"zoomed|\d+x\d+", app._collect_settings()["window"])
     path = tmp_path / "settings.json"
-    for stored, loaded in (("1180x780", "1180x780"), ("zoomed", "zoomed"), ("huge", "zoomed")):
-        path.write_text(ai.json.dumps({"window": stored}), encoding="utf-8")
-        ai.SETTINGS_FILE, old = str(path), ai.SETTINGS_FILE
-        try:
+    with pytest.MonkeyPatch.context() as patch:
+        everywhere(patch, "SETTINGS_FILE", str(path))
+        for stored, loaded in (("1180x780", "1180x780"), ("zoomed", "zoomed"),
+                               ("huge", "zoomed")):
+            path.write_text(ai.json.dumps({"window": stored}), encoding="utf-8")
             assert ai.load_settings()["window"] == loaded
-        finally:
-            ai.SETTINGS_FILE = old
 
 
 def test_side_panels_show_when_wide_and_options_button_when_narrow(app):
@@ -338,8 +338,8 @@ def test_this_video_box_holds_every_choice_and_settings_none(app):
 
 def test_each_feature_card_opens_its_place(app, monkeypatch):
     opened = []
-    monkeypatch.setattr(ai, "TipDialog", lambda _app: opened.append("tip"))
-    monkeypatch.setattr(ai, "MyVoiceDialog", lambda _app: opened.append("myvoice"))
+    everywhere(monkeypatch, "TipDialog", lambda _app: opened.append("tip"))
+    everywhere(monkeypatch, "MyVoiceDialog", lambda _app: opened.append("myvoice"))
     where = {}
     for _glyph, title, _line, _button, action in app._features():
         opened.clear()
@@ -419,7 +419,7 @@ def test_home_greets_and_continues_with_the_newest_video(app):
 
 def test_tip_ideas_open_show_it_on_my_pc_with_the_tip(app, monkeypatch):
     asked = []
-    monkeypatch.setattr(ai, "TipDialog", lambda _app, ask="": asked.append(ask))
+    everywhere(monkeypatch, "TipDialog", lambda _app, ask="": asked.append(ask))
     home(app)
     make = [b for b in buttons(app.home_body) if b.cget("text") == "Make it"]
     assert len(make) == 3

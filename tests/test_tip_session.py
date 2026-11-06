@@ -11,6 +11,7 @@ from types import SimpleNamespace
 import pytest
 
 ai = pytest.importorskip("ai_video_studio")
+from split_names import everywhere  # noqa: E402
 from vidgen import drive, screen, tips, uiread  # noqa: E402
 
 MAIN = threading.main_thread()
@@ -100,12 +101,12 @@ def session(monkeypatch, tmp_path):
     monkeypatch.setattr(uiread, "recall", lambda store, place_id: [])   # not this PC's cache
     monkeypatch.setattr(drive, "close", lambda hwnd: None)               # never a real window
     reports = []
-    monkeypatch.setattr(ai, "report_tip_failure", lambda app, message: reports.append(message))
+    everywhere(monkeypatch, "report_tip_failure", lambda app, message: reports.append(message))
     FakeBox.reports = reports
     monkeypatch.setattr(uiread, "read", lambda hwnd: [
         uiread.Control("Night light", "Button", switch["state"], 50, 60, 72, 40)])
-    monkeypatch.setattr(ai, "GuideBox", FakeBox)
-    monkeypatch.setattr(ai, "RECORDINGS_DIR", str(tmp_path))
+    everywhere(monkeypatch, "GuideBox", FakeBox)
+    everywhere(monkeypatch, "RECORDINGS_DIR", str(tmp_path))
     FakeBox.shown = []
     tip = tips.Tip(key="nightlight", title="night light", opens=["x"], read=lambda: None,
                    is_on=lambda s: False, restore=lambda s: None, steps=[
@@ -278,7 +279,7 @@ def test_a_click_on_the_steps_button_ends_the_step(session, monkeypatch):
 
 def flipping(monkeypatch, tmp_path, switch, works=True):
     from vidgen import putback
-    monkeypatch.setattr(ai, "SETTINGS_DIR", str(tmp_path))
+    everywhere(monkeypatch, "SETTINGS_DIR", str(tmp_path))
     monkeypatch.setattr(ai.time, "sleep", lambda _s: None)
     flips = []
 
@@ -341,7 +342,7 @@ def test_a_failed_put_back_keeps_the_note_for_the_next_start(session, monkeypatc
 
 def test_the_next_start_puts_back_what_a_crash_left(monkeypatch, tmp_path):
     from vidgen import putback
-    monkeypatch.setattr(ai, "SETTINGS_DIR", str(tmp_path))
+    everywhere(monkeypatch, "SETTINGS_DIR", str(tmp_path))
     putback.write(str(tmp_path), "nightlight", "Night light", "Off")
     monkeypatch.setattr(screen, "open_window", lambda cmd: 7)
     done = []
@@ -383,7 +384,7 @@ def test_a_plain_step_holds_then_goes_on_but_a_users_click_is_waited_for(session
 def test_the_video_starts_with_a_hook_and_what_is_about_to_happen(session, monkeypatch, tmp_path):
     s, app, switch = session
     s.hook = True
-    monkeypatch.setattr(ai, "SETTINGS_DIR", str(tmp_path))
+    everywhere(monkeypatch, "SETTINGS_DIR", str(tmp_path))
     monkeypatch.setattr(ai.mastering, "run_ffmpeg", lambda args: None)
     started(s, app)
     to_the_end(s, app, switch)
@@ -396,7 +397,7 @@ def test_the_video_starts_with_a_hook_and_what_is_about_to_happen(session, monke
 # --- check first, explain, never fail out of sight (school laptop, 2026-10-28) ---------------
 
 def test_a_pc_that_cannot_record_is_told_before_anything_opens(monkeypatch, tmp_path):
-    monkeypatch.setattr(ai, "RECORDINGS_DIR", str(tmp_path))
+    everywhere(monkeypatch, "RECORDINGS_DIR", str(tmp_path))
     monkeypatch.setattr(screen, "monitors", lambda: [(0, 0, 1366, 768)])
     asked = []
     monkeypatch.setattr(screen, "can_record", lambda rect: asked.append(rect) or "blocked here")
@@ -442,7 +443,7 @@ def test_report_this_sends_the_full_reason(monkeypatch):
 
     opened = []
     app = SimpleNamespace(open_report=lambda error: opened.append(error))
-    monkeypatch.setattr(ai, "Dialog", FakeDialog)
+    everywhere(monkeypatch, "Dialog", FakeDialog)
     monkeypatch.setattr(screen, "LAST_FAILURE", "gdi: refused || dda: refused")
     ai.report_tip_failure(app, "This PC doesn't allow recording the screen.")
     assert shown["ok"] is False and "couldn't record" in shown["title"]
