@@ -7,6 +7,11 @@
 <title>AI Video Studio: turn text into a finished video, free, on your PC</title>
 <meta name="theme-color" content="#0B0D12">
 <link rel="preload" href="tip-still.png" as="image">
+<!-- the backgrounds are found late (inside the CSS), so ask for them at once; phones get smaller copies -->
+<link rel="preload" href="beam-small.jpg" as="image" media="(max-width: 820px)">
+<link rel="preload" href="metal-small.jpg" as="image" media="(max-width: 820px)">
+<link rel="preload" href="beam.jpg?v=2" as="image" media="(min-width: 821px)">
+<link rel="preload" href="metal.jpg" as="image" media="(min-width: 821px)">
 <meta name="description" content="Paste text, get a finished video with footage, voice and captions. Free, open source, runs on your Windows PC with no account.">
 <link rel="preload" href="fonts/bricolage.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="fonts/atkinson-400.woff2" as="font" type="font/woff2" crossorigin>
@@ -368,6 +373,12 @@
     .js .story .w { opacity: 1; }
     footer a:hover, .get .act small a:hover, .name:hover { animation: none; }
   }
+  /* phones: half-size backgrounds (88 KB and 37 KB instead of 380 KB and 264 KB); the screen is
+     small enough that nobody can tell */
+  @media (max-width: 820px) {
+    .beam:not(.shade) { background-image: url("beam-small.jpg"); }
+    .waves span { background-image: url("metal-small.jpg"); }
+  }
 </style>
 </head>
 <body>
@@ -420,7 +431,7 @@
         <h3>See it before it’s made</h3>
         <p>The Storyboard shows a card for each scene. Change a line, swap a clip, reorder scenes or hear a line read out, then make the video.</p>
       </div>
-      <img class="shot grow" src="storyboard.png" loading="lazy" decoding="async" width="1500" height="880" alt="The Storyboard: one card per scene with its footage and spoken line">
+      <img class="shot grow" src="storyboard.webp" loading="lazy" decoding="async" width="1500" height="880" alt="The Storyboard: one card per scene with its footage and spoken line">
     </div>
 
     <div class="feature">
@@ -428,7 +439,7 @@
         <h3>Turn any text into a script</h3>
         <p>Paste an article, a tip or your notes, say who it’s for and how long it should be. A writer that runs on your PC turns it into scenes.</p>
       </div>
-      <img class="shot grow" src="create.png" loading="lazy" decoding="async" width="1180" height="780" alt="The New from text window with a pasted article and length options">
+      <img class="shot grow" src="create.webp" loading="lazy" decoding="async" width="1180" height="780" alt="The New from text window with a pasted article and length options">
     </div>
 
     <div class="feature">
@@ -436,7 +447,7 @@
         <h3>Your photos, in the video</h3>
         <p>Add your own photos. The app sees what is in each one, writes the script around them and puts each photo in the scene about it.</p>
       </div>
-      <img class="shot grow" src="photos.png" loading="lazy" decoding="async" width="1382" height="764" alt="Make new video with three photos, each with Use in the video and Change it">
+      <img class="shot grow" src="photos.webp" loading="lazy" decoding="async" width="1382" height="764" alt="Make new video with three photos, each with Use in the video and Change it">
     </div>
 
     <div class="feature">
@@ -444,7 +455,7 @@
         <h3>Change a photo with words</h3>
         <p>Type “make it a chocolate cake” and the Image editor changes your photo, keeping its layout. It runs on your PC.</p>
       </div>
-      <img class="shot grow" src="imageeditor.png" loading="lazy" decoding="async" width="1936" height="740" alt="The Image editor: a strawberry cake photo next to the same cake made chocolate">
+      <img class="shot grow" src="imageeditor.webp" loading="lazy" decoding="async" width="1936" height="740" alt="The Image editor: a strawberry cake photo next to the same cake made chocolate">
     </div>
 
     <div class="feature">
@@ -452,7 +463,7 @@
         <h3>Pictures for what stock footage can’t show</h3>
         <p>With a graphics card, the app draws an AI picture for a scene no clip fits. It’s made on your PC too.</p>
       </div>
-      <img class="shot grow" src="aiimages.png" loading="lazy" decoding="async" width="1500" height="880" alt="AI pictures made for scenes in the Storyboard">
+      <img class="shot grow" src="aiimages.webp" loading="lazy" decoding="async" width="1500" height="880" alt="AI pictures made for scenes in the Storyboard">
     </div>
 
     <div class="feature">
@@ -460,7 +471,7 @@
         <h3>Keys and numbers on screen</h3>
         <p>When a line says “press Windows and V”, the keys appear over the footage. Big numbers and short lists get a card too.</p>
       </div>
-      <img class="shot grow tall" src="card.png" loading="lazy" decoding="async" width="405" height="720" alt="A video frame with Win plus V drawn as two keys">
+      <img class="shot grow tall" src="card.webp" loading="lazy" decoding="async" width="405" height="720" alt="A video frame with Win plus V drawn as two keys">
     </div>
     </div>
   </section>
