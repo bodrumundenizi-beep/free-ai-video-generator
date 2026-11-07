@@ -73,6 +73,8 @@
   p, small, figcaption, footer, summary, h1, h2, h3 {
     text-shadow: 0 0 0.25em rgba(5, 7, 12, 0.85), 0 0 1em rgba(5, 7, 12, 0.75), 0 0 2.2em rgba(5, 7, 12, 0.55); }
   .download, .fade-text { text-shadow: none; }
+  /* WebP for browsers that read it, the PNG for older phones; the <picture> itself adds no box */
+  picture { display: contents; }
   img, video { display: block; max-width: 100%; height: auto; }
   a { color: inherit; text-underline-offset: 0.2em; }
   /* text links: the underline sweeps in from the left on hover, in Acid Lime */
@@ -431,7 +433,7 @@
         <h3>See it before it’s made</h3>
         <p>The Storyboard shows a card for each scene. Change a line, swap a clip, reorder scenes or hear a line read out, then make the video.</p>
       </div>
-      <img class="shot grow" src="storyboard.webp" loading="lazy" decoding="async" width="1500" height="880" alt="The Storyboard: one card per scene with its footage and spoken line">
+      <picture><source srcset="storyboard.webp" type="image/webp"><img class="shot grow" src="storyboard.png" loading="lazy" decoding="async" width="1500" height="880" alt="The Storyboard: one card per scene with its footage and spoken line"></picture>
     </div>
 
     <div class="feature">
@@ -439,7 +441,7 @@
         <h3>Turn any text into a script</h3>
         <p>Paste an article, a tip or your notes, say who it’s for and how long it should be. A writer that runs on your PC turns it into scenes.</p>
       </div>
-      <img class="shot grow" src="create.webp" loading="lazy" decoding="async" width="1180" height="780" alt="The New from text window with a pasted article and length options">
+      <picture><source srcset="create.webp" type="image/webp"><img class="shot grow" src="create.png" loading="lazy" decoding="async" width="1180" height="780" alt="The New from text window with a pasted article and length options"></picture>
     </div>
 
     <div class="feature">
@@ -447,7 +449,7 @@
         <h3>Your photos, in the video</h3>
         <p>Add your own photos. The app sees what is in each one, writes the script around them and puts each photo in the scene about it.</p>
       </div>
-      <img class="shot grow" src="photos.webp" loading="lazy" decoding="async" width="1382" height="764" alt="Make new video with three photos, each with Use in the video and Change it">
+      <picture><source srcset="photos.webp" type="image/webp"><img class="shot grow" src="photos.png" loading="lazy" decoding="async" width="1382" height="764" alt="Make new video with three photos, each with Use in the video and Change it"></picture>
     </div>
 
     <div class="feature">
@@ -455,7 +457,7 @@
         <h3>Change a photo with words</h3>
         <p>Type “make it a chocolate cake” and the Image editor changes your photo, keeping its layout. It runs on your PC.</p>
       </div>
-      <img class="shot grow" src="imageeditor.webp" loading="lazy" decoding="async" width="1936" height="740" alt="The Image editor: a strawberry cake photo next to the same cake made chocolate">
+      <picture><source srcset="imageeditor.webp" type="image/webp"><img class="shot grow" src="imageeditor.png" loading="lazy" decoding="async" width="1936" height="740" alt="The Image editor: a strawberry cake photo next to the same cake made chocolate"></picture>
     </div>
 
     <div class="feature">
@@ -463,7 +465,7 @@
         <h3>Pictures for what stock footage can’t show</h3>
         <p>With a graphics card, the app draws an AI picture for a scene no clip fits. It’s made on your PC too.</p>
       </div>
-      <img class="shot grow" src="aiimages.webp" loading="lazy" decoding="async" width="1500" height="880" alt="AI pictures made for scenes in the Storyboard">
+      <picture><source srcset="aiimages.webp" type="image/webp"><img class="shot grow" src="aiimages.png" loading="lazy" decoding="async" width="1500" height="880" alt="AI pictures made for scenes in the Storyboard"></picture>
     </div>
 
     <div class="feature">
@@ -471,7 +473,7 @@
         <h3>Keys and numbers on screen</h3>
         <p>When a line says “press Windows and V”, the keys appear over the footage. Big numbers and short lists get a card too.</p>
       </div>
-      <img class="shot grow tall" src="card.webp" loading="lazy" decoding="async" width="405" height="720" alt="A video frame with Win plus V drawn as two keys">
+      <picture><source srcset="card.webp" type="image/webp"><img class="shot grow tall" src="card.png" loading="lazy" decoding="async" width="405" height="720" alt="A video frame with Win plus V drawn as two keys"></picture>
     </div>
     </div>
   </section>
