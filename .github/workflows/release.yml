@@ -71,6 +71,14 @@ jobs:
         # The program that tells the offline voice how words sound.
         run: python packaging/fetch_espeak.py
 
+      - name: Fetch BiRefNet lite (pinned, checksum-verified)
+        # The Image editor's background remover, bundled inside the app.
+        run: python packaging/fetch_birefnet.py
+
+      - name: Fetch LaMa (pinned, checksum-verified)
+        # The Image editor's eraser, bundled inside the app; its weights are halved on the way.
+        run: python packaging/fetch_lama.py
+
       - name: Build with PyInstaller
         run: pyinstaller --noconfirm --clean packaging/ai_video_studio.spec
 
@@ -123,6 +131,9 @@ jobs:
         run: |
           & "${{ steps.inno.outputs.iscc }}" /DMyAppVersion=${{ steps.ver.outputs.version }} packaging\installer.iss
           Copy-Item dist/installer/*.exe dist/artifacts/
+          # The Image editor's two models: the app downloads them from this release on first
+          # use (vidgen.cutout.RELEASE, pinned by SHA-256 there).
+          Copy-Item vendor/birefnet/birefnet-lite-int8w.onnx, vendor/lama/lama-fp16w.onnx dist/artifacts/
 
       - name: Checksums
         shell: pwsh

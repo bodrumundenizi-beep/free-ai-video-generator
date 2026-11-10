@@ -7,69 +7,145 @@ from gui.base import *  # noqa: F401,F403  (the names these had in one file)
 # ---- moved from ai_video_studio.py, unchanged below ----
 
 
+def checkerboard(size, square=8):
+    """The grey squares that show where a picture is see-through."""
+    import numpy as np
+    from PIL import Image
+
+    ys, xs = np.indices((size[1], size[0]))
+    grey = np.where((xs // square + ys // square) % 2, 205, 245).astype(np.uint8)
+    return Image.fromarray(grey).convert("RGB")
+
+
 class ImageEditor(ctk.CTkFrame):
-    """Change a photo with words (imagegen.redraw): the photo and the try side by side, How
-    much, Change it, Try again, and a row of the tries. ``on_use(path)``: what the button
+    """Change a photo: paint a part, then Change it (imagegen.redraw), Erase it
+    (vidgen.eraser), or Remove the background (vidgen.cutout). The photo and the try
+    side by side, a row of the tries. ``on_use(path)``: what the button
     under the tries does with the one shown (Image editor page: none, then Save and Use in a
     new video; a reference photo or a thumbnail layer: Use this)."""
 
     VIEW = (440, 380)   # the smallest a picture is shown; it grows with its box
+    PAINT, RUB_OUT = "Paint", "Rub out"
+    CHANGE, ERASE, CUT = "Change", "Erase", "Remove background"
+    # Each tool: (what the box asks, the button, its one line of help, whether How much shows)
+    TOOLS = {
+        CHANGE: ("What should the painted part become? For example: make the car green",
+                 "Change it",
+                 "Change: paint over a part of Your photo (or press Select all), then say what it "
+                 "should become, naming it (\"make the shoes blue\", not \"make it blue\"). Only "
+                 "the painted part changes.", True),
+        ERASE: ("Nothing to type: paint over it, and its shadow, then press Erase", "Erase",
+                "Erase: paint over something, and its shadow, then press Erase. With AI pictures "
+                "you get two results to pick from. Very big things can leave a smudge.", False),
+        CUT: ("Nothing to type: press Remove", "Remove",
+              "Remove background: the background goes. To fix it, brush on the right: Paint "
+              "brings a part back, Rub out removes more.", False),
+    }
+    PAINT_COLOUR = (150, 80, 255)   # the painted part, seen through
 
     def __init__(self, master, app, photo="", about="", on_use=None, use_text="Use this"):
         super().__init__(master, fg_color="transparent")
         self.app, self.on_use = app, on_use
-        self.photo, self.about, self.detail = "", "", {}
+        self.photo, self.about = "", ""
         self.tries, self.shown, self.busy = [], None, False
+        self.mask, self.last, self.redraw_job = None, None, None   # the painted area, photo size
+        self.cuts = {}   # a try with its background removed: (colours, see-through), photo size
         self.stop = threading.Event()
         self.grid_columnconfigure((0, 1), weight=1, uniform="views")
 
         top = ctk.CTkFrame(self, fg_color="transparent")
         top.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 8))
         self._button(top, "Open photo...", self.open_photo).pack(side="left")
+        self.mode = tk.StringVar(self, self.CHANGE)
+        FluentSegmented(top, app, list(self.TOOLS), self.mode, 460).pack(side="left", padx=(12, 0))
         self.name = ctk.CTkLabel(top, text="", font=app.font_tiny, text_color=TEXT_DIM,
                                  anchor="w")
         self.name.pack(side="left", padx=10)
         self.before_view = self._view(0, "Your photo")
         self.after_view = self._view(1, "Changed")
+        for view in (self.before_view, self.after_view):
+            view.configure(cursor="crosshair")
+            for event, handler in (("<Button-1>", self._paint_start), ("<B1-Motion>", self._paint),
+                                   ("<ButtonRelease-1>", self._paint_end)):
+                view.bind(event, lambda e, h=handler, v=view: h(e, v), add="+")
+
+        brush = ctk.CTkFrame(self, fg_color="transparent")
+        brush.grid(row=3, column=0, columnspan=2, sticky="ew", padx=4, pady=(8, 0))
+        self.tool = tk.StringVar(self, self.PAINT)
+        FluentSegmented(brush, app, [self.PAINT, self.RUB_OUT], self.tool, 170).pack(side="left")
+        ctk.CTkLabel(brush, text="Brush size", font=app.font_tiny,
+                     text_color=TEXT_MUTED).pack(side="left", padx=(12, 6))
+        self.brush = ctk.CTkSlider(brush, from_=6, to=90, width=130, button_color=ACCENT,
+                                   progress_color=ACCENT)
+        self.brush.set(30)
+        self.brush.pack(side="left")
+        clear = self._button(brush, "Clear", self.clear_area)
+        clear.configure(width=80)
+        clear.pack(side="left", padx=(10, 0))
+        everything = self._button(brush, "Select all", self.select_all)
+        everything.configure(width=100)
+        everything.pack(side="left", padx=(8, 0))
 
         ask = ctk.CTkFrame(self, fg_color="transparent")
-        ask.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+        ask.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(10, 0))
         ask.grid_columnconfigure(0, weight=1)
         self.change = focus_accent(ctk.CTkEntry(
             ask, height=34, corner_radius=4, font=app.font_body, fg_color=FIELD_BG,
             border_color=FIELD_BORDER, text_color=TEXT,
-            placeholder_text="What should change? For example: make it a chocolate cake"))
+            placeholder_text=self.TOOLS[self.CHANGE][0]))
         self.change.grid(row=0, column=0, sticky="ew")
-        self.change.bind("<Return>", lambda _e: self.run())
+        self.change.bind("<Return>", lambda _e: self.act())
         self.amount = tk.StringVar(self, imagegen.SOME)
-        FluentSegmented(ask, app, list(imagegen.AMOUNTS), self.amount, 240).grid(
-            row=0, column=1, padx=(10, 0))
+        self.amounts = FluentSegmented(ask, app, list(imagegen.AMOUNTS), self.amount, 240)
+        self.amounts.grid(row=0, column=1, padx=(10, 0))
         self.go = ctk.CTkButton(ask, text="Change it", width=110, height=34, corner_radius=4,
                                 font=app.font_body, fg_color=ACCENT, hover_color=ACCENT_HOVER,
-                                text_color=ACCENT_TEXT, command=self.run)
+                                text_color=ACCENT_TEXT, command=self.act)
         self.go.grid(row=0, column=2, padx=(10, 0))
-        self.again = self._button(ask, "Try again", lambda: self.run(again=True))
+        self.again = self._button(ask, "Try again", lambda: self.act(again=True))
         self.again.grid(row=0, column=3, padx=(8, 0))
-        self.status = ctk.CTkLabel(self, text="How much: each keeps the photo's layout. Little "
-                                              "changes it a bit, A lot changes all of it.",
-                                   font=app.font_tiny, text_color=TEXT_DIM, anchor="w",
-                                   justify="left", wraplength=880)
-        self.status.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+        self.status = ctk.CTkLabel(self, text=self.TOOLS[self.CHANGE][2], font=app.font_tiny,
+                                   text_color=TEXT_DIM, anchor="w", justify="left",
+                                   wraplength=880)
+        self.status.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(6, 0))
         self.strip = ctk.CTkFrame(self, fg_color="transparent")
-        self.strip.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+        self.strip.grid(row=6, column=0, columnspan=2, sticky="ew", pady=(8, 0))
         bottom = ctk.CTkFrame(self, fg_color="transparent")
-        bottom.grid(row=6, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+        bottom.grid(row=7, column=0, columnspan=2, sticky="ew", pady=(10, 0))
         if on_use is None:
             self.use_buttons = [
                 self._button(bottom, "Save as picture", self.save_as),
                 self._button(bottom, "Use in a new video", self.use_in_video)]
         else:
-            self.use_buttons = [self._button(bottom, use_text, lambda: self.on_use(self.shown))]
+            self.use_buttons = [self._button(bottom, use_text,
+                                             lambda: self.on_use(self._usable()))]
         for button in self.use_buttons:
             button.pack(side="left", padx=(0, 8))
+        self.mode.trace_add("write", lambda *_a: self._tool_chosen())
         self._ready_buttons()
         if photo:
             self.set_photo(photo, about)
+
+    def _tool_chosen(self):
+        asks, button, help_text, how_much = self.TOOLS[self.mode.get()]
+        self.change.configure(placeholder_text=asks)
+        self.go.configure(text=button)
+        if how_much:
+            self.amounts.grid()
+        else:
+            self.amounts.grid_remove()
+        if not self.busy:
+            self.status.configure(text=help_text, text_color=TEXT_DIM)
+
+    def act(self, again=False):
+        """The chosen tool's button (and Try again)."""
+        mode = self.mode.get()
+        if mode == self.CUT:
+            self.remove_background()
+        elif mode == self.ERASE:
+            self.erase()
+        else:
+            self.run(again)
 
     def _button(self, master, text, command):
         return ctk.CTkButton(master, text=text, width=140, height=34, corner_radius=4,
@@ -96,22 +172,41 @@ class ImageEditor(ctk.CTkFrame):
     def _show(self, view, path, size=None):
         from PIL import Image, ImageOps
 
+        scale = ctk.ScalingTracker.get_widget_scaling(view)
         if size is None:   # as big as the box, in the units CTkImage takes
             view.path, view.job = path, None
-            scale = ctk.ScalingTracker.get_widget_scaling(view)
             size = (max(self.VIEW[0], round(view.winfo_width() / scale) - 8),
                     max(self.VIEW[1], round(view.winfo_height() / scale) - 8))
         try:
             with Image.open(path) as image:
-                image = ImageOps.exif_transpose(image).convert("RGB")
+                image = ImageOps.exif_transpose(image)
+                alpha = image.convert("RGBA").getchannel("A") \
+                    if "A" in image.getbands() or "transparency" in image.info else None
+                image = image.convert("RGB")
                 image.thumbnail(size or self.VIEW)
         except OSError:
             view.path = ""
             view.configure(image=None, text="This picture can't be opened.")
             return None
+        view.base, view.shown = image, (image.width * scale, image.height * scale)
+        view.alpha = alpha.resize(image.size, Image.BILINEAR) if alpha else None
+        return self._put(view, image)
+
+    def _put(self, view, image):
+        from PIL import Image
+
+        alpha = getattr(view, "alpha", None)
+        if view is self.after_view and self.shown in self.cuts:   # as painted so far
+            alpha = self.cuts[self.shown][1].resize(image.size, Image.BILINEAR)
+        if alpha is not None:   # see-through parts on a checkerboard
+            image = Image.composite(image, checkerboard(image.size), alpha)
+        if view is self.before_view and self.mask is not None and self.mask.getbbox():
+            tint = Image.blend(image, Image.new("RGB", image.size, self.PAINT_COLOUR), 0.55)
+            image = Image.composite(tint, image, self.mask.resize(image.size, Image.NEAREST))
         picture = ctk.CTkImage(light_image=image, dark_image=image, size=image.size)
-        view.image = picture   # kept so Tk doesn't drop it; one per view, not one per resize
+        # Shown before the old one is let go: Tk still points at it until then.
         view.configure(image=picture, text="")
+        view.image = picture   # kept so Tk doesn't drop it; one per view, not one per resize
         return picture
 
     def _ready_buttons(self):
@@ -132,57 +227,227 @@ class ImageEditor(ctk.CTkFrame):
     def set_photo(self, path, about=""):
         if self.busy:
             return
+        from PIL import Image, ImageOps
+
         self.photo, self.about, self.tries, self.shown = path, about, [], None
+        self.cuts = {}
         self.name.configure(text=os.path.basename(path))
+        try:
+            with Image.open(path) as image:   # the size the photo is shown and changed at
+                self.mask = Image.new("L", ImageOps.exif_transpose(image).size, 0)
+        except OSError:
+            self.mask = None
         self._show(self.before_view, path)
         self.after_view.path = ""
-        self.after_view.configure(image=None, text="Type a change below and press Change it.")
+        self.after_view.configure(image=None, text="Paint a part of your photo, then pick "
+                                                   "what to do with it below.")
         for child in self.strip.winfo_children():
             child.destroy()
         self._ready_buttons()
 
+    # --- the brush: on Your photo it paints the part that may change (white in self.mask);
+    # on a try with its background removed, Paint brings a part back and Rub out removes it.
+    def _target(self, view):
+        if view is self.after_view:
+            return self.cuts[self.shown][1] if self.shown in self.cuts else None
+        return self.mask
+
+    def _photo_point(self, event, view, target):
+        """Where on the photo the mouse is, and photo pixels per screen pixel."""
+        if target is None or not getattr(view, "shown", None):
+            return None
+        width, height = view.shown
+        x = event.x_root - view.winfo_rootx() - (view.winfo_width() - width) / 2
+        y = event.y_root - view.winfo_rooty() - (view.winfo_height() - height) / 2
+        per = target.width / width
+        return x * per, y * per, per
+
+    def _paint_start(self, event, view=None):
+        view = view or self.before_view
+        self.last = None
+        self._paint(event, view)
+
+    def _paint(self, event, view=None):
+        view = view or self.before_view
+        target = self._target(view)
+        point = self._photo_point(event, view, target)
+        if point is None:
+            return
+        from PIL import ImageDraw
+
+        x, y, per = point
+        radius = self.brush.get() / 2 * per
+        fill = 255 if self.tool.get() == self.PAINT else 0
+        draw = ImageDraw.Draw(target)
+        if self.last:
+            draw.line((self.last, (x, y)), fill=fill, width=round(radius * 2))
+        draw.ellipse((x - radius, y - radius, x + radius, y + radius), fill=fill)
+        self.last = (x, y)
+        if not self.redraw_job:   # at most 25 redraws a second while the mouse moves
+            self.redraw_job = self.after(40, lambda: self._refresh_paint(view))
+
+    def _paint_end(self, _event, view=None):
+        view = view or self.before_view
+        self.last = None
+        if view is self.after_view:
+            if self.shown in self.cuts:   # Save and Use take the fixed cut-out
+                colours, alpha = self.cuts[self.shown]
+                fixed = colours.copy()
+                fixed.putalpha(alpha)
+                fixed.save(self.shown, "PNG", compress_level=1)   # 0.5 s, not 1.5, at 6000 px
+
+    def _refresh_paint(self, view=None):
+        view = view or self.before_view
+        self.redraw_job = None
+        base = getattr(view, "base", None)
+        if base is not None:
+            self._put(view, base)
+
+    def clear_area(self):
+        if self.mask is not None:
+            self.mask.paste(0, (0, 0, *self.mask.size))
+        self._refresh_paint()
+
+    def select_all(self):
+        """Paint the whole photo: Change then changes all of it."""
+        if self.mask is not None:
+            self.mask.paste(255, (0, 0, *self.mask.size))
+        self._refresh_paint()
+
+    def _with_model(self, module, then):
+        """Run ``then`` now if ``module``'s model (vidgen.cutout or .eraser) is downloaded;
+        otherwise ask once, download it with progress in the status line, then run ``then``."""
+        if module.installed():
+            then()
+            return
+        size = module.WEIGHTS.size / 1e6
+        name = module.WEIGHTS.name
+
+        def fetch():
+            app = self.app
+            self.busy = True
+            self.stop.clear()
+            self._ready_buttons()
+
+            def post(fn):
+                app._queue.put(("call", {"fn": fn}))
+
+            def shown(done, total):
+                post(lambda: self.status.configure(
+                    text=f"Downloading the {name}: {done / 1e6:.0f} of {total / 1e6:.0f} MB...",
+                    text_color=TEXT_MUTED))
+
+            def worker():
+                try:
+                    module.download(shown, self.stop.is_set)
+                    post(lambda: (setattr(self, "busy", False), self._ready_buttons(), then()))
+                except imagegen.Stopped:
+                    post(lambda: self._failed("Stopped. The download carries on next time."))
+                except Exception as exc:  # noqa: BLE001 - shown under the pictures
+                    message = f"The {name} couldn't be downloaded: {exc or type(exc).__name__}"
+                    post(lambda: self._failed(message))
+
+            threading.Thread(target=worker, daemon=True).start()
+
+        Dialog(self.app, "One-time download",
+               f"The {name} runs on your PC. It needs a one-time download of {size:.0f} MB; "
+               "after that it works offline.", confirm=fetch, confirm_text="Download")
+
+    def remove_background(self):
+        """The photo with its background see-through (cutout, on a worker thread)."""
+        if self.busy or not self.photo:
+            return
+        from vidgen import cutout
+
+        if not cutout.installed():
+            self._with_model(cutout, self.remove_background)
+            return
+
+        self.busy = True
+        self.stop.clear()
+        self._ready_buttons()
+        self.status.configure(text="Removing the background. This takes about 10 seconds (the "
+                                   "first time a little longer, and up to half a minute on a "
+                                   "slower PC)...", text_color=TEXT_MUTED)
+        photo, queue = self.photo, self.app._queue
+
+        def worker():
+            def post(fn):
+                queue.put(("call", {"fn": fn}))
+            try:
+                os.makedirs(PREVIEW_DIR, exist_ok=True)
+                out = os.path.join(PREVIEW_DIR, f"cutout_{projects.new_id()}.png")
+                seconds = cutout.cut_out(photo, out, self.stop.is_set)
+                post(lambda: self._cut_made(out, seconds))
+            except imagegen.Stopped:
+                post(lambda: self._failed("Stopped."))
+            except Exception as exc:  # noqa: BLE001 - shown under the pictures
+                message = str(exc) or type(exc).__name__
+                post(lambda: self._failed(message))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _cut_made(self, path, seconds):
+        from PIL import Image
+
+        with Image.open(path) as image:
+            image = image.convert("RGBA")
+        self.cuts[path] = (image.convert("RGB"), image.getchannel("A"))
+        self.busy = False
+        from vidgen import cutout
+
+        if not cutout.clear_subject(self.cuts[path][1]):
+            self._add_try(path, "No clear subject found. This works best on a person or thing in "
+                                "front.")
+            self.status.configure(text_color=ERR_COLOR)
+            return
+        self._add_try(path, f"Background removed in {seconds:.0f} s. To fix it, brush on the "
+                            "right: Paint brings a part back, Rub out removes more.")
+
     def run(self, again=False):
-        """Change the photo on a worker thread; Try again keeps the words, new seed."""
+        """Change the painted part (all of it after Select all) the way the words say, on a
+        worker thread; Try again keeps the words and the painting, new seed. The words are used
+        as typed: the Smart writer's rewrite dropped "stormy" and kept a calm sky (tested)."""
         if self.busy or not self.photo:
             return
         change = " ".join(self.change.get().split())
+        if self.mask is None or not self.mask.getbbox():
+            self.status.configure(text="Paint the part to change first, or press Select all.",
+                                  text_color=ERR_COLOR)
+            return
         if not change:
-            self.status.configure(text="Say what should change first.", text_color=ERR_COLOR)
+            self.status.configure(text="Say what the painted part should become first.",
+                                  text_color=ERR_COLOR)
             return
         if not imagegen.installed():
             self.status.configure(text="Changing a photo uses AI pictures: download them in "
                                        "Settings > AI pictures first.", text_color=ERR_COLOR)
             return
         app = self.app
+        whole = self.mask.getextrema() == (255, 255)   # Select all: no part is kept as it was
         self.busy = True
         self.stop.clear()
         self._ready_buttons()
-        self.status.configure(text="Changing your photo. This takes about 20 seconds with a "
-                                   "graphics card, a few minutes without one...",
-                              text_color=TEXT_MUTED)
+        self.status.configure(text=("Changing your photo. " if whole else
+                                    "Changing only the painted part; the rest stays as it is. ")
+                              + "This takes about 20 seconds with a graphics card, a few "
+                                "minutes without one...", text_color=TEXT_MUTED)
         photo, about, amount = self.photo, self.about, self.amount.get()
-        gpu = bool(app.var_writer_gpu.get())
+        mask = None
+        if not whole:
+            os.makedirs(PREVIEW_DIR, exist_ok=True)
+            mask = os.path.join(PREVIEW_DIR, f"area_{projects.new_id()}.png")
+            self.mask.save(mask)   # a copy: painting on while it runs changes nothing
         backend, speed, threads = app.ai_backend_now(), app.ai_speed_now(), app.threads_pair()
 
         def post(fn):
             app._queue.put(("call", {"fn": fn}))
 
         def worker():
-            nonlocal about
             try:
-                # The redraw needs the whole photo in words (sky, light, colours), not the
-                # short sentence the video writer uses, or the picture model makes them up.
-                looks = self.detail.get(photo, "")
-                if not looks and photos.ready()[0]:
-                    looks = photos.describe([photo], self.stop.is_set, gpu, detail=True)[0]
-                    self.detail[photo] = looks
-                about = about or looks
-                rewrite = None
-                if writer.ready()[0]:
-                    rewrite = lambda a, c: writer.changed_picture(a, c, self.stop.is_set, gpu)  # noqa: E731
                 os.makedirs(PREVIEW_DIR, exist_ok=True)
                 out = os.path.join(PREVIEW_DIR, f"redraw_{projects.new_id()}.png")
-                made = imagegen.redraw(photo, change, out, amount, looks or about, rewrite,
+                made = imagegen.redraw(photo, change, out, amount, mask=mask,
                                        should_stop=self.stop.is_set, log=app.ui.log,
                                        backend=backend, speed=speed, threads=threads)
                 post(lambda: self._made(out, about, made))
@@ -194,13 +459,88 @@ class ImageEditor(ctk.CTkFrame):
 
         threading.Thread(target=worker, daemon=True).start()
 
+    def erase(self):
+        """The painted part erased by LaMa (vidgen.eraser), shown at once; then, with AI
+        pictures, a touched-up version added and picked. Both stay in the row."""
+        if self.busy or not self.photo:
+            return
+        if self.mask is None or not self.mask.getbbox():
+            self.status.configure(text="Paint over what to erase first, and its shadow.",
+                                  text_color=ERR_COLOR)
+            return
+        from vidgen import eraser
+
+        if not eraser.installed():
+            self._with_model(eraser, self.erase)
+            return
+
+        app = self.app
+        os.makedirs(PREVIEW_DIR, exist_ok=True)
+        mask = os.path.join(PREVIEW_DIR, f"erase_{projects.new_id()}.png")
+        self.mask.save(mask)
+        big = eraser.share(mask) >= eraser.BIG
+        touch = imagegen.installed()
+        self.busy = True
+        self.stop.clear()
+        self._ready_buttons()
+        self.status.configure(text="Erasing...", text_color=TEXT_MUTED)
+        photo, about, gpu = self.photo, self.about, bool(app.var_writer_gpu.get())
+        backend, speed, threads = app.ai_backend_now(), app.ai_speed_now(), app.threads_pair()
+
+        def post(fn):
+            app._queue.put(("call", {"fn": fn}))
+
+        def worker():
+            try:
+                name = projects.new_id()
+                out = os.path.join(PREVIEW_DIR, f"erased_{name}.png")
+                seconds, hole = eraser.erase(photo, mask, out, self.stop.is_set)
+                post(lambda: self._erased(out, seconds, touch, big))
+                if not touch:
+                    return
+                describe = None
+                if photos.ready()[0]:
+                    describe = lambda path: photos.describe(  # noqa: E731
+                        [path], self.stop.is_set, gpu, detail=True)[0]
+                real = os.path.join(PREVIEW_DIR, f"erased_{name}_real.png")
+                made = eraser.touch_up(photo, out, hole, real, describe,
+                                       should_stop=self.stop.is_set, log=app.ui.log,
+                                       backend=backend, speed=speed, threads=threads)
+                post(lambda: self._touched(real, about, made, big))
+            except imagegen.Stopped:
+                post(lambda: self._failed("Stopped."))
+            except Exception as exc:  # noqa: BLE001 - shown under the pictures
+                message = str(exc) or type(exc).__name__
+                post(lambda: self._failed(message))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _erased(self, path, seconds, touching, big):
+        self.busy = touching   # still busy while the touch-up runs
+        smudge = " This is a big part of the photo, so it may leave a smudge." if big else ""
+        self._add_try(path, f"Erased in {seconds:.0f} s." + (
+            " Now making it look like a real photo (about 30 seconds)..." if touching else
+            " AI pictures (Settings > AI pictures) can make it look more real.") + smudge)
+        if touching:
+            self.status.configure(text_color=TEXT_MUTED)
+            self._ready_buttons()
+
+    def _touched(self, path, about, made, big):
+        self._made(path, about, made)
+        self.status.configure(text=f"Touched up in {made.seconds:.0f} s. The plain erase is next "
+                                   "to it below: pick whichever looks better." + (
+                                       " Big parts may leave a smudge." if big else ""))
+
     def _made(self, path, about, made):
         self.busy, self.about = False, about or self.about
         if made.backend == imagegen.CPU:
             self.app.remember_ai_backend(imagegen.CPU)
+        self._add_try(path, f"Made in {made.seconds:.0f} s. Try again for another version, or "
+                            "pick one below.")
+
+    def _add_try(self, path, message):
         self.tries.append(path)
-        self.status.configure(text=f"Made in {made.seconds:.0f} s. Try again for another "
-                                   "version, or pick one below.", text_color=TEXT_DIM)
+        self.status.configure(text=message, text_color=TEXT_DIM)
         self.pick(path)
         thumb = ctk.CTkLabel(self.strip, text="", fg_color=FIELD_BG, corner_radius=4,
                              cursor="hand2")
@@ -219,7 +559,24 @@ class ImageEditor(ctk.CTkFrame):
         self._ready_buttons()
 
     def close(self):
+        from vidgen import cutout, eraser
+
         self.stop.set()
+        cutout.release()
+        eraser.release()
+
+    def _usable(self):
+        """The shown try for a video or a layer: a cut-out on white (videos have no
+        see-through), anything else as it is."""
+        if self.shown not in self.cuts:
+            return self.shown
+        from PIL import Image
+        from vidgen import cutout
+
+        flat = os.path.splitext(self.shown)[0] + " on white.png"
+        with Image.open(self.shown) as image:
+            cutout.flatten(image).save(flat)
+        return flat
 
     def save_as(self):
         if not self.shown:
@@ -228,7 +585,7 @@ class ImageEditor(ctk.CTkFrame):
         dest = filedialog.asksaveasfilename(
             parent=self, title="Save the picture", defaultextension=".png",
             initialdir=paths.known_folder(paths.CSIDL_MYPICTURES, "Pictures"),
-            initialfile=f"{base} changed.png",
+            initialfile=f"{base} {'cut out' if self.shown in self.cuts else 'changed'}.png",
             filetypes=[("PNG picture", "*.png"), ("JPEG picture", "*.jpg")])
         if not dest:
             return
@@ -246,8 +603,9 @@ class ImageEditor(ctk.CTkFrame):
             return
         keep = os.path.join(SETTINGS_DIR, "photos")
         os.makedirs(keep, exist_ok=True)
-        path = os.path.join(keep, os.path.basename(self.shown))
-        shutil.copyfile(self.shown, path)   # previews are cleared; this one must stay
+        usable = self._usable()
+        path = os.path.join(keep, os.path.basename(usable))
+        shutil.copyfile(usable, path)   # previews are cleared; this one must stay
         dialog = DraftDialog(self.app)
         dialog.add_photo(path, self.about)
 

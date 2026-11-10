@@ -525,13 +525,16 @@ def video_backgrounds(project_dir: str, videos, frames: int = 8) -> list[tuple[s
 
 
 def export(picture: str, dest: str) -> str:
-    """``picture`` (the saved PNG) as ``dest``: a .jpg next to a video, or a PNG anywhere."""
+    """``picture`` (the saved PNG) as ``dest``: a .jpg next to a video, or a PNG anywhere. A
+    see-through picture stays see-through as a PNG and goes on white as a .jpg."""
     from PIL import Image
 
+    from . import cutout
+
     with Image.open(picture) as opened:
-        image = opened.convert("RGB")
+        image = opened.convert("RGBA" if "A" in opened.getbands() else "RGB")
     if dest.lower().endswith((".jpg", ".jpeg")):
-        image.save(dest, quality=92)
+        cutout.flatten(image).save(dest, quality=92)
     else:
         image.save(dest)
     return dest

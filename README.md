@@ -37,7 +37,7 @@ voiceover, and renders a 1080p or 720p MP4 in portrait or landscape.
 - **Ready to post:** Every video gets a thumbnail and a suggested title, description and tags, with Copy buttons. Nothing is posted for you.
 - **Thumbnail editor:** Change the thumbnail with text, arrows, circles, stickers and Pexels or Pixabay photos.
 - **Your photos in the video:** Add up to 10 photos to Make new video. The app sees what is in each one, writes the script around them and puts each photo in the scene about it.
-- **Change a photo with words:** Type "make it a chocolate cake" and the **Image editor** draws the change on your PC, in the photo's own shape.
+- **Image editor:** Paint a part of a photo and **Change** it with words ("make the car green"), **Erase** it, or **Remove the background**, all on your PC.
 - **Other languages:** Make the same video in Spanish, French, Italian, Portuguese or Hindi.
 - **Sound effects:** A soft pop when a card appears, made by the app itself.
 - **Portrait or landscape:** 9:16 for Shorts and TikTok, 16:9 for YouTube, at 1080p or 720p.
@@ -82,7 +82,7 @@ You can confirm you have the real file by checking its hash against
 `SHA256SUMS.txt` on the release page:
 
 ```powershell
-Get-FileHash .\AIVideoStudio-5.1.0-setup.exe -Algorithm SHA256
+Get-FileHash .\AIVideoStudio-5.2.0-setup.exe -Algorithm SHA256
 ```
 
 ## The quick way
@@ -420,31 +420,38 @@ clip), or **Processor** only.
 
 You are responsible for what you ask it to draw and for how you use the pictures.
 
-### Image editor: change a photo with words
+### Image editor: change, erase, remove the background
 
-The **Image editor** page changes a photo the way you say: open a photo, type
-"make it a chocolate cake" or "make it night time", pick **How much** and press
-**Change it**.
+The **Image editor** page has three tools, and one habit for all of them: **paint first, then
+act.** Open a photo, paint over a part of it with the brush (**Paint**, **Rub out**, **Brush
+size**, **Clear**), and pick a tool:
 
-- All three keep the photo's layout: **Little** changes it a bit, **Some** most of
-  it, **A lot** all of what you asked for.
-- **Try again** makes another version; every try stays in the row underneath, and
-  you pick the one you want.
-- **Save as picture** saves it (Pictures folder by default), and **Use in a new
-  video** opens Make new video with it added as a photo.
-- The same editor opens from **Change it...** on a photo in Make new video, and from
-  **Change with words...** on a thumbnail's background or picture (Undo puts the
-  old one back).
+- **Change:** type what the painted part should become and press **Change it**. Only that part
+  changes; the rest of the photo stays exactly as it was. Name the thing: "make the car green"
+  works, "make it green" may not. **Select all** paints the whole photo, to change all of it
+  ("make it look old"). **How much** (Little, Some, A lot) sets how far it may go.
+- **Erase:** paint over something and its shadow, and press **Erase**. It's gone in a few
+  seconds. With AI pictures downloaded, a second version follows about 20 seconds later,
+  touched up to look like a real photo; both stay in the row, so you can pick. Very big things
+  (a third of the photo or more) can leave a smudge.
+- **Remove background:** press **Remove** and the background goes. To fix it, brush on the
+  result: **Paint** brings a part back, **Rub out** removes more. **Save as picture** keeps it
+  see-through as a PNG; in a video or as a thumbnail layer it goes on white.
 
-It uses the AI pictures model (see above), so it needs AI pictures downloaded: about
-20 to 30 seconds a change on an RTX 4060, a few minutes without a graphics card.
-When the Smart writer is there, its photo model first describes the whole photo
-(the sky, the light, the background), and the writer turns that and your words into
-one description of the changed picture, so the rest of the photo stays as it was.
+Every try stays in the row underneath, and **Try again** makes another version. **Save as
+picture** saves it (Pictures folder by default), and **Use in a new video** opens Make new
+video with it added as a photo. The same editor opens from **Change it...** on a photo in Make
+new video, and from **Change with words...** on a thumbnail's background or picture (Undo puts
+the old one back).
 
-Changing things works best ("make it a chocolate cake", "make it night time").
-Recolouring a strong pattern, like the black and white of a football, often doesn't
-take: the picture model keeps those colours.
+**What it needs:** Erase and Remove background work without a graphics card: about 3 and 7
+seconds a photo on the processor. The first time you use each one, it asks to download its model
+once (106 MB for Erase, 91 MB for Remove background); after that it works offline, and an
+update keeps it. Change, and Erase's touched-up version,
+use the AI pictures model (see above): about 20 seconds with a graphics card, a few minutes
+without one. Erase uses [LaMa](https://github.com/advimman/lama) and Remove background
+[BiRefNet](https://github.com/ZhengPeng7/BiRefNet), both open source; see
+`THIRD-PARTY-LICENSES.md`.
 
 ![The Image editor](docs/imageeditor.png)
 
@@ -856,8 +863,11 @@ pip install -r requirements.txt -r requirements-build.txt
 python -m pytest
 python packaging/make_icon.py
 python packaging/fetch_llama.py
+python packaging/fetch_espeak.py
+python packaging/fetch_birefnet.py
+python packaging/fetch_lama.py
 pyinstaller --noconfirm --clean packaging/ai_video_studio.spec
-"%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe" /DMyAppVersion=5.1.0 packaging\installer.iss
+"%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe" /DMyAppVersion=5.2.0 packaging\installer.iss
 ```
 
 That is where Inno Setup goes when installed for one user; installed for everyone, it is

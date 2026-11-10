@@ -137,7 +137,7 @@ from vidgen.voice import generate_voiceover  # noqa: E402
 
 
 APP_NAME = "AI Video Studio"
-APP_VERSION = "5.1.0"
+APP_VERSION = "5.2.0"
 # Must match AppUserModelID in packaging/installer.iss, or a pinned taskbar
 # shortcut will not group with the running window.
 APP_MODEL_ID = "AIVideoStudio.Desktop.3"
@@ -1151,13 +1151,11 @@ TOUR = (
 # Shown once after updating to this version (WhatsNewDialog). Short: the release notes have
 # the whole story.
 WHATS_NEW = (
-    "Stock clips are checked before a video is made: the Smart writer and its photo model look "
-    "at each clip and swap the ones that show something else (a pie for \"coffee fruit\"). "
-    "Settings > Smart writer > Check stock clips.",
-    "The Image editor keeps more of your photo: it describes the whole photo first, so the "
-    "sky, the light and the background stay as they were.",
-    "New installs use the graphics card for the Smart writer when the PC has one, including "
-    "Intel and AMD graphics.",
+    "The Image editor has a brush: paint a part of a photo and Change only that part (\"make "
+    "the car green\"), or press Select all to change the whole photo.",
+    "Erase: paint over something, or someone, and it's gone. With AI pictures you get two "
+    "results to pick from: the plain one, and one touched up to look like a real photo.",
+    "Remove background: one click, then brush to fix it. Saves a see-through PNG.",
 )
 
 

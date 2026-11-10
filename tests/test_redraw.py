@@ -5,7 +5,7 @@ import os
 import pytest
 from PIL import Image
 
-from test_imagegen import launcher, ok, plenty
+from test_imagegen import FakeProcess, launcher, ok, plenty
 from vidgen import imagegen, writer
 
 
@@ -60,6 +60,84 @@ def test_the_writer_joins_the_description_and_the_change():
     assert imagegen.redraw_prompt("make it chocolate") == "make it chocolate"
 
 
+def painter(seen):
+    """A fake program that paints its whole picture blue and notes what it was given."""
+    def launch(args, log_path):
+        open(log_path, "w").close()
+        size = int(args[args.index("-W") + 1]), int(args[args.index("-H") + 1])
+        if "--mask" in args:
+            with Image.open(args[args.index("--mask") + 1]) as given:
+                seen.append({"args": args, "mask": given.size,
+                             "start": Image.open(args[args.index("-i") + 1]).convert("RGB")})
+        else:
+            seen.append({"args": args})
+        Image.new("RGB", size, (0, 0, 255)).save(args[args.index("-o") + 1])
+        return FakeProcess(args, write=False)
+    return launch
+
+
+def ball(tmp_path):
+    """A white photo with a painted square in the middle (white = may change)."""
+    path, mask = str(tmp_path / "ball.png"), str(tmp_path / "mask.png")
+    Image.new("RGB", (800, 600), "white").save(path)
+    painted = Image.new("L", (400, 300), 0)   # the view's size, not the photo's
+    painted.paste(255, (150, 100, 250, 200))
+    painted.save(mask)
+    return path, mask
+
+
+def masked(tmp_path, seen, photo, mask, change="make the ball blue", **kwargs):
+    return imagegen.redraw(photo, change, str(tmp_path / "out.png"), mask=mask, check=ok,
+                           launch=painter(seen), memory=plenty, verify=lambda _stop: [],
+                           **kwargs)
+
+
+def test_the_mask_is_given_only_when_an_area_is_painted(tmp_path, photo):
+    seen = []
+    redraw(tmp_path, photo, seen)
+    assert "--mask" not in seen[0].args
+    args = imagegen.command("sd", "p", (512, 512), "o.png", 1, init=("i.png", 0.7), mask="m.png")
+    assert args[args.index("--mask") + 1] == "m.png"
+    assert "--mask" not in imagegen.command("sd", "p", (512, 512), "o.png", 1, mask="m.png")
+
+
+def test_only_the_painted_part_changes_and_the_rest_is_pixel_identical(tmp_path):
+    photo, mask = ball(tmp_path)
+    seen = []
+    made = masked(tmp_path, seen, photo, mask, amount=imagegen.SOME)
+    args = seen[0]["args"]
+    assert seen[0]["mask"] == (int(args[args.index("-W") + 1]), int(args[args.index("-H") + 1]))
+    assert args[args.index("--strength") + 1] == "0.75"   # more than a whole-photo change
+    with Image.open(str(tmp_path / "out.png")) as out:
+        assert out.size == (800, 600) == made.size          # the photo's own size
+        assert out.getpixel((400, 300)) == (0, 0, 255)       # the painted middle changed
+        assert out.getpixel((20, 20)) == out.getpixel((780, 580)) == (255, 255, 255)
+    assert sorted(os.listdir(tmp_path)) == ["ball.png", "mask.png", "out.png", "out.png.log"]
+
+
+def test_a_colour_word_tints_the_painted_part_first(tmp_path):
+    photo, mask = ball(tmp_path)
+    seen = []
+    masked(tmp_path, seen, photo, mask)
+    start = seen[0]["start"]
+    red, green, blue = start.getpixel((start.width // 2, start.height // 2))
+    assert blue > 200 and red < 80                           # the white middle given as blue
+    assert start.getpixel((2, 2)) == (255, 255, 255)         # the rest as it was
+    seen = []
+    masked(tmp_path, seen, photo, mask, change="make it a basketball")
+    start = seen[0]["start"]
+    assert start.getpixel((start.width // 2, start.height // 2)) == (255, 255, 255)
+    assert imagegen.colour_in("Make the ball Blue!") == imagegen.COLOURS["blue"]
+    assert imagegen.colour_in("redo the sky") is None
+
+
+def test_nothing_painted_says_paint_first(tmp_path):
+    photo, mask = ball(tmp_path)
+    Image.new("L", (400, 300), 0).save(mask)
+    with pytest.raises(imagegen.ImageError, match="Paint the part to change first"):
+        masked(tmp_path, [], photo, mask)
+
+
 def test_without_the_writer_the_words_are_used_as_typed():
     def broken(_about, _change):
         raise writer.WriterError("not downloaded")
@@ -67,3 +145,13 @@ def test_without_the_writer_the_words_are_used_as_typed():
     assert imagegen.redraw_prompt("  make it  blue ", "a car", broken) == "make it blue"
     with pytest.raises(imagegen.ImageError, match="Say what to change"):
         imagegen.redraw_prompt("  ")
+
+
+def test_the_touch_up_redraws_lightly_without_a_colour_hint(tmp_path):
+    photo, mask = ball(tmp_path)
+    seen = []
+    masked(tmp_path, seen, photo, mask, change="a red floor, a natural photo",
+           amount=imagegen.TOUCH_UP)
+    args, start = seen[0]["args"], seen[0]["start"]
+    assert args[args.index("--strength") + 1] == "0.30"
+    assert start.getpixel((start.width // 2, start.height // 2)) == (255, 255, 255)   # no tint

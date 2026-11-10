@@ -10,7 +10,9 @@ portable ZIP redistribute the components below, each under its own licence.
 | [Requests](https://github.com/psf/requests) | Apache-2.0 | Pexels API calls |
 | [imageio-ffmpeg](https://github.com/imageio/imageio-ffmpeg) | BSD-2-Clause | Locates and ships the ffmpeg binary |
 | [edge-tts](https://github.com/rany2/edge-tts) | **LGPL-3.0** | The optional online voices |
-| [ONNX Runtime](https://github.com/microsoft/onnxruntime) | MIT | Runs the offline voice's model |
+| [ONNX Runtime](https://github.com/microsoft/onnxruntime) | MIT | Runs the offline voice's model, the background remover and the eraser |
+| [BiRefNet lite](https://github.com/ZhengPeng7/BiRefNet) (bundled model) | MIT | Remove background, see below |
+| [LaMa](https://github.com/advimman/lama) (bundled model) | Apache-2.0 | Erase, see below |
 | [espeak-ng](https://github.com/espeak-ng/espeak-ng) (bundled program) | **GPL-3.0** | See below |
 | [pywinstyles](https://github.com/Akascape/py-win-styles) | MIT | Mica backdrop |
 | [FFmpeg](https://ffmpeg.org/) (bundled binary) | **GPL-3.0** | See below |
@@ -76,6 +78,27 @@ The voiceover is spoken on the user's PC. Three things are involved:
   permits; espeak-ng itself stays GPL-3.0. Its licence text ships beside it
   (`LICENSE-espeak-ng-GPL-3.0.txt`), its source is at the link above, and the
   exact release and checksum are pinned in `packaging/fetch_espeak.py`.
+
+## Remove background: BiRefNet lite (MIT)
+
+The Image editor's **Remove background** runs
+**[BiRefNet](https://github.com/ZhengPeng7/BiRefNet)** (MIT, Copyright (c) 2024 ZhengPeng),
+the "lite" model, on the user's PC with ONNX Runtime. It is downloaded the first time Remove background is used,
+from this project's GitHub release, and checked by SHA-256. It is the ONNX export published by [onnx-community/BiRefNet_lite-ONNX](https://huggingface.co/onnx-community/BiRefNet_lite-ONNX),
+changed in one way: its weights are stored as 8-bit numbers and turned back into fp32 when it
+loads. Its licence ships in the app's `birefnet` folder (`LICENSE-BiRefNet-MIT.txt`).
+The original file, the change and both checksums are pinned in `packaging/fetch_birefnet.py`.
+
+## Erase: LaMa (Apache 2.0)
+
+The Image editor's **Erase** runs **[LaMa](https://github.com/advimman/lama)** (Apache 2.0,
+Copyright (c) 2021 Samsung AI Center) on the user's PC with ONNX Runtime. It is downloaded the
+first time Erase is used, from this project's GitHub release, and checked by SHA-256. It is the
+ONNX export published by [Carve/LaMa-ONNX](https://huggingface.co/Carve/LaMa-ONNX)
+(Apache 2.0), changed in one way: its weights are stored as fp16 and turned back into fp32 when it
+loads. Its licence and a notice of that change ship in the app's `lama` folder
+(`LICENSE-LaMa-Apache-2.0.txt`). The original file, the change and both checksums are pinned in
+`packaging/fetch_lama.py`.
 
 ## AI images (optional): Z-Image Turbo (Apache 2.0) and stable-diffusion.cpp (MIT)
 

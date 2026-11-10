@@ -61,8 +61,13 @@ OutputBaseFilename=AIVideoStudio-{#MyAppVersion}-setup
 Compression=none
 SolidCompression=no
 #else
-Compression=lzma2/max
+; ultra64 with a 256 MB dictionary: measured on the 5.2.0 build (the AI models barely
+; compress, so the gain is small). Installing then needs about 256 MB of free memory.
+Compression=lzma2/ultra64
 SolidCompression=yes
+LZMAUseSeparateProcess=yes
+LZMADictionarySize=262144
+LZMANumFastBytes=273
 #endif
 WizardStyle=modern
 ; An update started from inside the app runs this installer silently while the

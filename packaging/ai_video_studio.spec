@@ -49,6 +49,21 @@ fetch_espeak = importlib.util.module_from_spec(_fetch)
 _fetch.loader.exec_module(fetch_espeak)
 ESPEAK = fetch_espeak.bundle_files()
 
+# The Image editor's background remover (BiRefNet lite, MIT) and eraser (LaMa, Apache 2.0) are
+# downloaded the first time they're used (vidgen.cutout, vidgen.eraser), from the release the
+# workflow uploads them to. Only their licences ship inside the app.
+_fetch = importlib.util.spec_from_file_location(
+    "fetch_birefnet", os.path.join(ROOT, "packaging", "fetch_birefnet.py"))
+fetch_birefnet = importlib.util.module_from_spec(_fetch)
+_fetch.loader.exec_module(fetch_birefnet)
+BIREFNET = [f for f in fetch_birefnet.bundle_files() if not f[0].endswith(".onnx")]
+
+_fetch = importlib.util.spec_from_file_location(
+    "fetch_lama", os.path.join(ROOT, "packaging", "fetch_lama.py"))
+fetch_lama = importlib.util.module_from_spec(_fetch)
+_fetch.loader.exec_module(fetch_lama)
+LAMA = [f for f in fetch_lama.bundle_files() if not f[0].endswith(".onnx")]
+
 a = Analysis(
     [os.path.join(ROOT, "src", "ai_video_studio.py")],
     pathex=[os.path.join(ROOT, "src")],
@@ -57,7 +72,7 @@ a = Analysis(
     # imageio reads its own version from package metadata when imported (the
     # only bundled library that does); without it the frozen app fails every
     # render with "No package metadata was found for imageio".
-    datas=[(ICON, "assets")] + MUSIC + LLAMA + ESPEAK + copy_metadata("imageio"),
+    datas=[(ICON, "assets")] + MUSIC + LLAMA + ESPEAK + BIREFNET + LAMA + copy_metadata("imageio"),
     hiddenimports=[
         # Imported inside a try/except in apply_window_effects(); PyInstaller's
         # scan does find it, but being explicit costs nothing.
@@ -69,8 +84,8 @@ a = Analysis(
         "vidgen.motion", "vidgen.render", "vidgen.script", "vidgen.timeline",
         "vidgen.voice", "vidgen.voices", "vidgen.mastering",
         "vidgen.draft", "vidgen.writer", "vidgen.localvoice", "vidgen.cards",
-        "vidgen.imagegen", "vidgen.board",
-        # Runs the offline voice's model; imported when the first line is spoken.
+        "vidgen.imagegen", "vidgen.board", "vidgen.cutout", "vidgen.eraser",
+        # Runs the offline voice's model and the background remover; imported when needed.
         "onnxruntime",
         # Voice preview playback; imported only when Preview is clicked.
         "winsound",
@@ -103,6 +118,14 @@ a = Analysis(
 #                    does collect_data_files('imageio_ffmpeg', subdir="binaries")
 #   - ctk themes   : hook-customtkinter.py already does collect_data_files()
 # If you ever downgrade pyinstaller-hooks-contrib, re-add them here.
+
+# The helper programs above are copied as data into their own folders, where they load their
+# DLLs from. PyInstaller's dependency scan also put a second copy of each of those DLLs at the
+# top of the bundle (llama.cpp's and espeak's, 24.5 MB in 5.2.0); nothing loads them there.
+VENDOR = os.path.join(ROOT, "vendor") + os.sep
+a.binaries = [entry for entry in a.binaries
+              if not (os.sep not in entry[0] and "/" not in entry[0]
+                      and os.path.abspath(entry[1]).startswith(VENDOR))]
 
 pyz = PYZ(a.pure)
 

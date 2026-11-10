@@ -22,12 +22,12 @@ VSVersionInfo(
       StringTable('040904B0', [
         StringStruct('CompanyName', 'AI Video Studio'),
         StringStruct('FileDescription', 'AI Video Studio'),
-        StringStruct('FileVersion', '5.1.0.0'),
+        StringStruct('FileVersion', '5.2.0.0'),
         StringStruct('InternalName', 'AIVideoStudio'),
         StringStruct('LegalCopyright', 'Copyright (c) 2026. MIT License.'),
         StringStruct('OriginalFilename', 'AIVideoStudio.exe'),
         StringStruct('ProductName', 'AI Video Studio'),
-        StringStruct('ProductVersion', '5.1.0'),
+        StringStruct('ProductVersion', '5.2.0'),
       ])
     ]),
     VarFileInfo([VarStruct('Translation', [1033, 1200])])

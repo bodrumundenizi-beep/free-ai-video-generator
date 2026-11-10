@@ -32,6 +32,7 @@ import zipfile
 from dataclasses import dataclass
 
 from . import writer
+from .cutout import flatten   # a see-through photo goes on white, not on what is hidden
 from .footage import Stopped
 from .writer import Model
 
@@ -278,9 +279,10 @@ def shaped_like(photo_size, size) -> tuple[int, int]:
 
 
 def command(exe: str, prompt: str, size, out_path: str, seed: int, backend: str = GPU,
-            steps: int = STEPS, threads: int = 0, init: tuple[str, float] | None = None
-            ) -> list[str]:
-    """``init``: (a photo at ``size``, how much of it to draw again) for redraw."""
+            steps: int = STEPS, threads: int = 0, init: tuple[str, float] | None = None,
+            mask: str | None = None) -> list[str]:
+    """``init``: (a photo at ``size``, how much of it to draw again) for redraw; ``mask``: a
+    black and white picture at ``size``, white where the photo may change."""
     width, height = size
     return [exe, "--diffusion-model", writer.model_path(MODEL),
             "--vae", writer.model_path(DECODER), "--llm", writer.model_path(),
@@ -292,7 +294,8 @@ def command(exe: str, prompt: str, size, out_path: str, seed: int, backend: str 
             # With nothing said the program takes the first graphics card it finds.
             *(["--backend", "cpu"] if backend == CPU else []),
             *(["-t", str(threads)] if threads and backend == CPU else []),
-            *(["-i", init[0], "--strength", f"{init[1]:.2f}"] if init else [])]
+            *(["-i", init[0], "--strength", f"{init[1]:.2f}"] if init else []),
+            *(["--mask", mask] if mask and init else [])]
 
 
 # --- the processor's cores ----------------------------------------------------------
@@ -495,7 +498,8 @@ def _run(args, log_path, should_stop, launch, began, timeout: float | None = Non
 def make(prompt: str, size, out_path: str, look: str = DEFAULT_LOOK, seed: int | None = None,
          should_stop=None, launch=_launch, check=ready, backend: str = "", log=None,
          memory=writer.free_memory, verify=damaged_files, speed: str = BEST,
-         threads: tuple[int, int] = (0, 0), init: tuple[str, float] | None = None) -> Made:
+         threads: tuple[int, int] = (0, 0), init: tuple[str, float] | None = None,
+         mask: str | None = None) -> Made:
     """Make one picture at ``out_path`` (a .png) and say how it was made.
 
     The graphics card is tried first, then the processor: a card can start
@@ -506,7 +510,8 @@ def make(prompt: str, size, out_path: str, look: str = DEFAULT_LOOK, seed: int |
 
     Raises Stopped when ``should_stop`` says so (the program is killed at
     once) and ImageError when no attempt produced a picture. ``init`` (a photo, how much
-    to draw again): the picture is that photo changed, in its shape (see redraw).
+    to draw again): the picture is that photo changed, in its shape (see redraw). ``mask``
+    (with ``init``): white where it may change, any size (see redraw).
     """
     say = log or (lambda _line: None)
     count, affinity = threads
@@ -530,17 +535,21 @@ def make(prompt: str, size, out_path: str, look: str = DEFAULT_LOOK, seed: int |
             failure = failure or exc
             say(f"🎨 Not trying the {where}: {_gigabytes(free)} GB of memory free.")
             continue
-        start = None
+        start, area = None, None
         if init:
             steps = steps * 3 // 2   # finer amounts (see AMOUNTS)   # the photo's shape, at the size this PC can make, given at that size
             from PIL import Image, ImageOps
 
             try:
                 with Image.open(init[0]) as image:
-                    image = ImageOps.exif_transpose(image).convert("RGB")
+                    image = flatten(ImageOps.exif_transpose(image))
                     fitted = shaped_like(image.size, fitted)
                     start = (out_path + ".start.png", init[1])
                     image.resize(fitted, Image.LANCZOS).save(start[0])
+                if mask:
+                    with Image.open(mask) as painted:
+                        area = out_path + ".area.png"
+                        painted.convert("L").resize(fitted, Image.BILINEAR).save(area)
             except OSError as exc:
                 raise ImageError(f"The photo could not be read ({exc}).") from exc
         say(f"🎨 AI picture on the {where}: {fitted[0]}x{fitted[1]}, {steps} steps · memory "
@@ -552,13 +561,14 @@ def make(prompt: str, size, out_path: str, look: str = DEFAULT_LOOK, seed: int |
             os.remove(out_path)   # a picture left by an earlier try must not pass for this one
         try:
             code = _run(command(program_path() or EXE, text, fitted, out_path, seed, attempt,
-                                steps, count, start), log_path, should_stop, launch, began)
+                                steps, count, start, area), log_path, should_stop, launch, began)
         finally:
-            if start:
-                try:
-                    os.remove(start[0])
-                except OSError:
-                    pass
+            for leftover in (start and start[0], area):
+                if leftover:
+                    try:
+                        os.remove(leftover)
+                    except OSError:
+                        pass
         lines = _output(log_path)
         device = device_name(lines) if attempt == GPU else ""
         if device:
@@ -595,14 +605,91 @@ def redraw_prompt(change: str, about: str = "", rewrite=None) -> str:
     return change
 
 
+# A painted area: the rest of the photo is kept, so more of the area can be drawn again.
+# Erase's touch-up (vidgen.eraser): light, or Z-Image draws new things in the hole (tested).
+TOUCH_UP = "Touch up"
+AREA_AMOUNTS = {LITTLE: 0.65, SOME: 0.75, A_LOT: 0.85, TOUCH_UP: 0.3}
+# Z-Image keeps an area's colours however it is asked (a white ball stayed white at 0.95,
+# tested 2026-11-07), so the area is first tinted the colour asked for; then it draws well.
+COLOURS = {"red": (215, 35, 35), "orange": (240, 130, 30), "yellow": (245, 215, 40),
+           "green": (50, 165, 60), "blue": (40, 110, 235), "purple": (130, 60, 190),
+           "violet": (140, 80, 210), "pink": (240, 120, 175), "brown": (130, 80, 45),
+           "gold": (225, 180, 60), "golden": (225, 180, 60), "silver": (195, 200, 205),
+           "white": (250, 250, 250), "grey": (140, 140, 140), "gray": (140, 140, 140),
+           "black": (60, 60, 60), "cyan": (40, 200, 220), "turquoise": (50, 200, 190),
+           "teal": (30, 140, 140), "navy": (30, 45, 120), "beige": (225, 205, 170)}
+
+
+def colour_in(change: str) -> tuple[int, int, int] | None:
+    """The first colour named in ``change`` ("make the ball blue" -> blue), or None."""
+    for word in re.findall(r"[a-z]+", (change or "").lower()):
+        if word in COLOURS:
+            return COLOURS[word]
+    return None
+
+
+def painted_area(photo_size, mask_path: str):
+    """(hard, soft) masks at ``photo_size`` from the painted ``mask_path``: hard is the
+    painting grown a little (what the model may change), soft is that with a feathered edge
+    (how much of the change is kept). Raises ImageError when nothing is painted."""
+    from PIL import Image, ImageFilter
+
+    try:
+        with Image.open(mask_path) as painted:
+            mask = painted.convert("L").resize(photo_size, Image.NEAREST)
+    except OSError as exc:
+        raise ImageError(f"The painted area could not be read ({exc}).") from exc
+    if not mask.point(lambda v: 255 if v > 127 else 0).getbbox():
+        raise ImageError("Paint the part to change first.")
+    edge = max(2, min(photo_size) // 100)
+    # A brush rarely reaches the very edge of a thing; a rim of the old colour shows there.
+    hard = mask.filter(ImageFilter.GaussianBlur(edge)).point(lambda v: 255 if v > 16 else 0)
+    return hard, hard.filter(ImageFilter.GaussianBlur(edge))
+
+
 def redraw(photo: str, change: str, out_path: str, amount: str = SOME, about: str = "",
-           rewrite=None, seed: int | None = None, **kwargs) -> Made:
+           rewrite=None, seed: int | None = None, mask: str | None = None, **kwargs) -> Made:
     """``photo`` changed the way ``change`` says ("make it a chocolate cake"), as a .png at
-    ``out_path`` in the photo's shape. ``amount`` is one of AMOUNTS. Everything else is
-    make()'s: the graphics card then the processor, Stopped and ImageError."""
+    ``out_path`` in the photo's shape. ``amount`` is one of AMOUNTS. ``mask``: a black and
+    white picture, white where the photo may change; the rest stays pixel for pixel and the
+    picture is the photo's own size. Everything else is make()'s: the graphics card then the
+    processor, Stopped and ImageError."""
     prompt = redraw_prompt(change, about, rewrite)
-    return make(prompt, SIZES["16:9"], out_path, seed=seed,
-                init=(photo, AMOUNTS.get(amount, AMOUNTS[SOME])), **kwargs)
+    if not mask:
+        return make(prompt, SIZES["16:9"], out_path, seed=seed,
+                    init=(photo, AMOUNTS.get(amount, AMOUNTS[SOME])), **kwargs)
+    from PIL import Image, ImageOps
+
+    try:
+        with Image.open(photo) as image:
+            original = flatten(ImageOps.exif_transpose(image))
+    except OSError as exc:
+        raise ImageError(f"The photo could not be read ({exc}).") from exc
+    hard, soft = painted_area(original.size, mask)
+    hint, area = out_path + ".hint.png", out_path + ".mask.png"
+    colour = None if amount == TOUCH_UP else colour_in(change)   # a touch-up, never a tint
+    start = original
+    if colour:
+        tinted = ImageOps.colorize(original.convert("L"), (0, 0, 0), colour)
+        start = Image.composite(tinted, original, soft)
+    try:
+        start.save(hint)
+        hard.save(area)
+        made = make(prompt, SIZES["16:9"], out_path, seed=seed, mask=area,
+                    init=(hint, AREA_AMOUNTS.get(amount, AREA_AMOUNTS[SOME])), **kwargs)
+        try:
+            with Image.open(out_path) as drawn:
+                drawn = drawn.convert("RGB").resize(original.size, Image.LANCZOS)
+        except OSError as exc:
+            raise ImageError(f"The changed picture could not be read ({exc}).") from exc
+        Image.composite(drawn, original, soft).save(out_path)
+    finally:
+        for leftover in (hint, area):
+            try:
+                os.remove(leftover)
+            except OSError:
+                pass
+    return Made(made.seconds, made.backend, original.size)
 
 
 def auto_threads(cores) -> tuple[int, int]:

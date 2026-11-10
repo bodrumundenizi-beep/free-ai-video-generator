@@ -5,3 +5,4 @@ pyinstaller==6.22.2
 pyinstaller-hooks-contrib>=2026.7
 pytest==9.1.1           # run before every release build
 # Pillow (for packaging/make_icon.py) is pinned in requirements.txt.
+onnx==1.23.2            # packaging/fetch_lama.py stores LaMa's weights at half size
