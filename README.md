@@ -1,6 +1,6 @@
 # AI Video Studio
 
-**[🌐 Website](https://bodrumundenizi-beep.github.io/free-ai-video-generator/) · [⬇ Download for Windows](https://github.com/bodrumundenizi-beep/free-ai-video-generator/releases/latest)**
+**[🌐 Website](https://freeaivideostudio.com/) · [⬇ Download for Windows](https://github.com/bodrumundenizi-beep/free-ai-video-generator/releases/latest)**
 
 A professional-grade automated video generation tool that turns written scripts
 into fully edited, high-quality videos. Pick the visuals in words, write the
