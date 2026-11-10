@@ -68,7 +68,7 @@ API keys, projects and the Smart writer are kept.
 | | Needs |
 |---|---|
 | **Windows** | 10 or 11, 64-bit |
-| **Memory (RAM)** | 8 GB for the Smart writer, which uses about 5 GB while it writes. With less, the app uses Quick split. |
+| **Memory (RAM)** | 16 GB. The Smart writer uses about 5 GB while it writes; if the PC is short of memory, the app uses Quick split. |
 | **Disk** | About 3.5 GB: the app (0.3 GB) and its AI models (2.9 GB). AI pictures add 4.2 GB. |
 | **Graphics card** | Not needed. It only speeds up the optional extras: AI pictures, Moving pictures and My voice. |
 
@@ -246,7 +246,7 @@ There are two writers:
 |---|---|---|
 | What it does | Rewrites and shortens your text to fit the length, opens with a hook, and picks search words for each scene | Keeps your words exactly as written, splits them into scenes, and guesses search words from each sentence |
 | Speed | About 10 to 60 seconds | Instant |
-| Needs | A one-time 3 GB download and about 8 GB of RAM | Nothing |
+| Needs | A one-time 3 GB download and 16 GB of RAM | Nothing |
 
 If a text is too long for the length you chose, the Smart writer shortens it.
 Quick split leaves out the least important sentences, lists them with a **Put
