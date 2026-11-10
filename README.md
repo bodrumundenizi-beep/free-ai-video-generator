@@ -63,6 +63,15 @@ API keys, projects and the Smart writer are kept.
 
 **The AI models are a separate 2.9 GB download:** the voice (0.4 GB) and the Smart writer (2.5 GB). The installer fetches both during setup; the portable version fetches the voice the first time you make a video and the Smart writer the first time you use **New from text**. They are downloaded once and kept when you update the app. See [New from text](#new-from-text) below.
 
+### System requirements
+
+| | Needs |
+|---|---|
+| **Windows** | 10 or 11, 64-bit |
+| **Memory (RAM)** | 8 GB for the Smart writer, which uses about 5 GB while it writes. With less, the app uses Quick split. |
+| **Disk** | About 3.5 GB: the app (0.3 GB) and its AI models (2.9 GB). AI pictures add 4.2 GB. |
+| **Graphics card** | Not needed. It only speeds up the optional extras: AI pictures, Moving pictures and My voice. |
+
 ### Windows will warn you the first time
 
 These builds are not code-signed, because a signing certificate costs several
@@ -369,11 +378,19 @@ press **Download** there.
 
 ![The AI pictures tab](docs/aiimages.png)
 
-- **It needs a graphics card with about 8 GB of video memory.** A picture takes around
-  20 seconds on an RTX 4060. If the graphics card can't make the picture, the app tries
-  again on the processor with a smaller picture, which can take several minutes, and
-  remembers that for next time. It needs about 5 GB of free memory for a full-size picture
-  and makes a smaller one with less.
+- **What it runs on:**
+
+  | Your PC | What to expect |
+  |---|---|
+  | A graphics card with about 8 GB of video memory | Best. A picture takes around 20 seconds on an RTX 4060. |
+  | No graphics card, or one that can't make the picture | The app makes a smaller picture on the processor, which can take several minutes, and remembers that for next time. |
+
+  Integrated graphics (the graphics built into many laptop processors) haven't been
+  tested yet. A picture needs about 5 GB of free memory at full size, and the app makes
+  a smaller one with less.
+- **No stock footage key needed.** With AI pictures downloaded and no Pexels or Pixabay
+  key, the app draws a picture for every scene. The welcome screen still offers to add a
+  key; press **Skip for now**.
 - **The download is about 4.2 GB**, once. It also uses the Smart writer's file.
 - Ask for a picture in any script with `ai:` and a description:
 
