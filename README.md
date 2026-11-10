@@ -369,11 +369,17 @@ press **Download** there.
 
 ![The AI pictures tab](docs/aiimages.png)
 
-- **It needs a graphics card with about 8 GB of video memory.** A picture takes around
-  20 seconds on an RTX 4060. If the graphics card can't make the picture, the app tries
-  again on the processor with a smaller picture, which can take several minutes, and
-  remembers that for next time. It needs about 5 GB of free memory for a full-size picture
-  and makes a smaller one with less.
+**What it runs on.** AI pictures run on your PC's graphics, and no dedicated card is required:
+
+| Your PC | What to expect |
+|---|---|
+| Dedicated NVIDIA, AMD or Intel card with about 8 GB of video memory | Best case. A picture takes around 20 seconds on an RTX 4060. |
+| Integrated graphics (Intel, or AMD built into the processor), as on most laptops | Works. A picture takes about 90 seconds on [your iGPU model, e.g. Intel Iris Xe]. Integrated graphics share your system memory, so [N] GB of free RAM is recommended. |
+| No usable graphics | The app falls back to the processor with a smaller picture, which can take several minutes. It remembers this for next time. |
+
+A picture needs about 5 GB of free memory at full size, and the app makes a smaller one when there is less.
+
+**No stock footage key? No problem.** With AI pictures downloaded, the app draws a picture for every scene and never asks for a Pexels or Pixabay key. This is the fully offline path, apart from the one-time model downloads.
 - **The download is about 4.2 GB**, once. It also uses the Smart writer's file.
 - Ask for a picture in any script with `ai:` and a description:
 
