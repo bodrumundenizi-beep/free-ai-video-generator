@@ -75,7 +75,9 @@ API keys, projects and the Smart writer are kept.
 ### Windows will warn you the first time
 
 These builds are not code-signed, because a signing certificate costs several
-hundred dollars a year. SmartScreen will show **"Windows protected your PC"**,
+hundred dollars a year. The project has applied to the
+[SignPath Foundation](https://signpath.org/) for free open-source code signing
+and is waiting for a reply. Until then, SmartScreen will show **"Windows protected your PC"**,
 where the only obvious button is *Don't run*. Click **More info** → **Run anyway**.
 
 You can confirm you have the real file by checking its hash against
@@ -884,8 +886,9 @@ Releases are built automatically by GitHub Actions when a `v*` tag is pushed.
 
 The Windows builds are **not code-signed**, so Windows shows a SmartScreen
 warning the first time you run them (see [Download](#download) for how to get
-past it and how to check the file's SHA-256 hash). Signing is planned once the
-project is established enough to qualify for an open-source signing programme.
+past it and how to check the file's SHA-256 hash). The project has applied to
+the [SignPath Foundation](https://signpath.org/) for free open-source code
+signing; signed builds will follow if it is accepted.
 
 - **Builds:** every release is built from this repository by GitHub Actions
   ([release workflow](.github/workflows/release.yml)); nothing is built or
