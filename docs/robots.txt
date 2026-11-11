@@ -1,0 +1,3 @@
+User-agent: *
+Disallow: /old-
+Sitemap: https://freeaivideostudio.com/sitemap.xml
