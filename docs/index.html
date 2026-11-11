@@ -692,6 +692,15 @@
     if (document.fonts) document.fonts.ready.then(aim);
   })();
 
+  // The app is Windows-only: Mac, Linux, phones and tablets get a note instead of a download.
+  if (!/Windows NT/.test(navigator.userAgent)) {
+    document.querySelectorAll("a.download").forEach(function (a) {
+      a.removeAttribute("href");
+      a.textContent = "Windows PC only: open this page on a Windows PC";
+      a.style.cssText = "opacity:.6;cursor:default;pointer-events:none";
+    });
+  }
+
   // Download buttons start the newest installer itself, not the GitHub releases page; the
   // 4.8.0 link written in the page is kept if GitHub can't be asked.
   fetch("https://api.github.com/repos/bodrumundenizi-beep/free-ai-video-generator/releases/latest")
@@ -699,7 +708,7 @@
     .then(function (release) {
       var setup = release && release.assets.filter(function (a) { return /-setup\.exe$/.test(a.name); })[0];
       if (!setup) return;
-      document.querySelectorAll("a.download").forEach(function (a) { a.href = setup.browser_download_url; });
+      document.querySelectorAll("a.download[href]").forEach(function (a) { a.href = setup.browser_download_url; });
       document.querySelectorAll(".size").forEach(function (el) {
         el.textContent = Math.round(setup.size / 1048576) + " MB";
       });
