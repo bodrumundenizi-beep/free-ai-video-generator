@@ -61,7 +61,7 @@ folder is somewhere Windows won't let it write, such as Program Files). Your set
 API keys, projects and the Smart writer are kept.
 (Running from source still needs all three; see below.)
 
-**The AI models are a separate 2.9 GB download:** the voice (0.4 GB) and the Smart writer (2.5 GB). The installer fetches both during setup; the portable version fetches the voice the first time you make a video and the Smart writer the first time you use **New from text**. They are downloaded once and kept when you update the app. See [New from text](#new-from-text) below.
+**The AI models are a separate 2.9 GB download:** the voice (0.4 GB) and the Smart writer (2.5 GB). The installer fetches both during setup (and, if you leave its box ticked, the 0.2 GB AI photo tools for the Image editor); the portable version fetches the voice the first time you make a video and the Smart writer the first time you use **New from text**. They are downloaded once and kept when you update the app. See [New from text](#new-from-text) below.
 
 ### System requirements
 
@@ -84,7 +84,7 @@ You can confirm you have the real file by checking its hash against
 `SHA256SUMS.txt` on the release page:
 
 ```powershell
-Get-FileHash .\AIVideoStudio-5.2.0-setup.exe -Algorithm SHA256
+Get-FileHash .\AIVideoStudio-5.2.1-setup.exe -Algorithm SHA256
 ```
 
 ## The quick way
@@ -447,9 +447,10 @@ new video, and from **Change with words...** on a thumbnail's background or pict
 the old one back).
 
 **What it needs:** Erase and Remove background work without a graphics card: about 3 and 7
-seconds a photo on the processor. The first time you use each one, it asks to download its model
-once (106 MB for Erase, 91 MB for Remove background); after that it works offline, and an
-update keeps it. Change, and Erase's touched-up version,
+seconds a photo on the processor. Their models (106 MB for Erase, 91 MB for Remove background)
+are downloaded once: by the installer if **Download the AI photo tools now** is ticked (it is by
+default), otherwise the editor asks the first time you use each one. After that they work
+offline, and an update keeps them. Change, and Erase's touched-up version,
 use the AI pictures model (see above): about 20 seconds with a graphics card, a few minutes
 without one. Erase uses [LaMa](https://github.com/advimman/lama) and Remove background
 [BiRefNet](https://github.com/ZhengPeng7/BiRefNet), both open source; see
@@ -869,7 +870,7 @@ python packaging/fetch_espeak.py
 python packaging/fetch_birefnet.py
 python packaging/fetch_lama.py
 pyinstaller --noconfirm --clean packaging/ai_video_studio.spec
-"%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe" /DMyAppVersion=5.2.0 packaging\installer.iss
+"%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe" /DMyAppVersion=5.2.1 packaging\installer.iss
 ```
 
 That is where Inno Setup goes when installed for one user; installed for everyone, it is

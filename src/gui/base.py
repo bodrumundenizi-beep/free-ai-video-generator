@@ -137,7 +137,7 @@ from vidgen.voice import generate_voiceover  # noqa: E402
 
 
 APP_NAME = "AI Video Studio"
-APP_VERSION = "5.2.0"
+APP_VERSION = "5.2.1"
 # Must match AppUserModelID in packaging/installer.iss, or a pinned taskbar
 # shortcut will not group with the running window.
 APP_MODEL_ID = "AIVideoStudio.Desktop.3"
@@ -1151,6 +1151,8 @@ TOUR = (
 # Shown once after updating to this version (WhatsNewDialog). Short: the release notes have
 # the whole story.
 WHATS_NEW = (
+    "The installer can now download the AI photo tools (Erase, Remove background) for you, so "
+    "they're ready the first time. Untick the box and the editor downloads them when needed.",
     "The Image editor has a brush: paint a part of a photo and Change only that part (\"make "
     "the car green\"), or press Select all to change the whole photo.",
     "Erase: paint over something, or someone, and it's gone. With AI pictures you get two "

@@ -46,3 +46,33 @@
 #ifndef SpeakersSha256
   #define SpeakersSha256 "bca610b8308e8d99f32e6fe4197e7ec01679264efed0cac9140fe9c29f1fbf7d"
 #endif
+
+; The Image editor's models (Remove background and Erase), only fetched when the
+; "AI photo tools" box is ticked. The same rule: these must be WEIGHTS in
+; src/vidgen/cutout.py and src/vidgen/eraser.py.
+
+#ifndef CutoutFile
+  #define CutoutFile "birefnet-lite-int8w.onnx"
+#endif
+#ifndef CutoutUrl
+  #define CutoutUrl "https://github.com/bodrumundenizi-beep/free-ai-video-generator/releases/download/v5.2.0/birefnet-lite-int8w.onnx"
+#endif
+#ifndef CutoutSize
+  #define CutoutSize "90708050"
+#endif
+#ifndef CutoutSha256
+  #define CutoutSha256 "7c46c4de0ae37256f8b4cf25d708c1f163a5f2551a21e1babba839f2867b48af"
+#endif
+
+#ifndef EraserFile
+  #define EraserFile "lama-fp16w.onnx"
+#endif
+#ifndef EraserUrl
+  #define EraserUrl "https://github.com/bodrumundenizi-beep/free-ai-video-generator/releases/download/v5.2.0/lama-fp16w.onnx"
+#endif
+#ifndef EraserSize
+  #define EraserSize "106291857"
+#endif
+#ifndef EraserSha256
+  #define EraserSha256 "cf36c035f814cc3f224e02fcafdacc97672b564594af387e0e53c6dce4edbdda"
+#endif

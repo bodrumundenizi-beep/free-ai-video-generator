@@ -84,6 +84,11 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; \
   GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
+; Unticked: the Image editor downloads them itself the first time Erase or
+; Remove background is used, as before.
+Name: "phototools"; \
+  Description: "Download the AI photo tools now (Erase, Remove background, about 190 MB)"; \
+  GroupDescription: "AI photo tools:"
 
 [Files]
 Source: "{#SourceDir}\*"; DestDir: "{app}"; \
@@ -129,7 +134,7 @@ end;
 // and the app fetches what is missing the first time it is needed.
 var
   ModelPage: TDownloadWizardPage;
-  Fetched: array[0..2] of Boolean;
+  Fetched: array[0..4] of Boolean;
 
 function ModelDir(): String;
 begin
@@ -141,8 +146,10 @@ begin
   case Index of
     0: Result := '{#ModelFile}';
     1: Result := '{#VoiceFile}';
+    2: Result := '{#SpeakersFile}';
+    3: Result := '{#CutoutFile}';
   else
-    Result := '{#SpeakersFile}';
+    Result := '{#EraserFile}';
   end;
 end;
 
@@ -155,8 +162,10 @@ begin
   case Index of
     0: Wanted := StrToInt64('{#ModelSize}');
     1: Wanted := StrToInt64('{#VoiceSize}');
+    2: Wanted := StrToInt64('{#SpeakersSize}');
+    3: Wanted := StrToInt64('{#CutoutSize}');
   else
-    Wanted := StrToInt64('{#SpeakersSize}');
+    Wanted := StrToInt64('{#EraserSize}');
   end;
   Result := FileSize64(ModelDir() + '\' + ModelName(Index), Size) and (Size = Wanted);
 end;
@@ -165,24 +174,34 @@ procedure InitializeWizard();
 begin
   ModelPage := CreateDownloadPage(
     'Downloading the AI models',
-    'The open-source AI that writes scripts (2.5 GB) and the voice that reads them '
-    + '(0.4 GB) run on your PC and are downloaded once. '
+    'The open-source AI that writes scripts (2.5 GB), the voice that reads them '
+    + '(0.4 GB) and, if you chose them, the AI photo tools (0.2 GB) run on your PC '
+    + 'and are downloaded once. '
     + 'You can cancel: the app will download them later.', nil);
 end;
 
 function NextButtonClick(CurPageID: Integer): Boolean;
 var
   Index: Integer;
-  Wanted: array[0..2] of Boolean;
+  Wanted: array[0..4] of Boolean;
+  Any: Boolean;
 begin
   Result := True;
   if CurPageID <> wpReady then
     exit;
   ModelPage.Clear;
-  for Index := 0 to 2 do
+  for Index := 0 to 4 do
   begin
     Fetched[Index] := False;
     Wanted[Index] := not ModelPresent(Index);
+  end;
+  // The photo tools only when their box is ticked; someone who already has them
+  // (downloaded by 5.2.0's editor) is skipped by ModelPresent above.
+  // Never in a silent update from inside the app: 190 MB nobody asked for right then.
+  if WizardSilent or not WizardIsTaskSelected('phototools') then
+  begin
+    Wanted[3] := False;
+    Wanted[4] := False;
   end;
   // The voice first: it is small, and every video needs it.
   if Wanted[1] then
@@ -191,7 +210,14 @@ begin
     ModelPage.Add('{#SpeakersUrl}', '{#SpeakersFile}', '{#SpeakersSha256}');
   if Wanted[0] then
     ModelPage.Add('{#ModelUrl}', '{#ModelFile}', '{#ModelSha256}');
-  if not (Wanted[0] or Wanted[1] or Wanted[2]) then
+  if Wanted[3] then
+    ModelPage.Add('{#CutoutUrl}', '{#CutoutFile}', '{#CutoutSha256}');
+  if Wanted[4] then
+    ModelPage.Add('{#EraserUrl}', '{#EraserFile}', '{#EraserSha256}');
+  Any := False;
+  for Index := 0 to 4 do
+    Any := Any or Wanted[Index];
+  if not Any then
     exit;
   ModelPage.Show;
   try
@@ -209,7 +235,7 @@ begin
         mbInformation, MB_OK, IDOK);
     end;
     // A file that arrived whole is kept even if a later one failed.
-    for Index := 0 to 2 do
+    for Index := 0 to 4 do
       Fetched[Index] := Wanted[Index]
         and FileExists(ExpandConstant('{tmp}\') + ModelName(Index));
   finally
@@ -224,7 +250,7 @@ var
 begin
   if CurStep <> ssPostInstall then
     exit;
-  for Index := 0 to 2 do
+  for Index := 0 to 4 do
     if Fetched[Index] then
     begin
       Source := ExpandConstant('{tmp}\') + ModelName(Index);

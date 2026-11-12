@@ -22,12 +22,13 @@ def fetch_llama():
 
 
 def test_the_installer_downloads_exactly_the_model_the_app_accepts():
-    from vidgen import localvoice
+    from vidgen import cutout, eraser, localvoice
 
     defines = dict(re.findall(r'#define (\w+) "([^"]*)"', read("packaging", "model.iss")))
     expected = {}
     for prefix, model in (("Model", writer.MODEL), ("Voice", localvoice.MODEL),
-                          ("Speakers", localvoice.SPEAKERS)):
+                          ("Speakers", localvoice.SPEAKERS), ("Cutout", cutout.WEIGHTS),
+                          ("Eraser", eraser.WEIGHTS)):
         expected |= {prefix + "File": model.file, prefix + "Url": model.url,
                      prefix + "Size": str(model.size), prefix + "Sha256": model.sha256}
     assert defines == expected
