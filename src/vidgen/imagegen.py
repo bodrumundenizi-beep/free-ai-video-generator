@@ -170,8 +170,9 @@ def _unpack() -> None:
 
 
 def needed_files() -> tuple[Model, ...]:
-    """What download() will fetch: the three files, and the Smart writer's if it is missing."""
-    return FILES + (() if writer.installed() else (writer.MODEL,))
+    """What download() will fetch: the three files, and Qwen3 4B (their text part) if it is
+    missing. The new Smart writer (Qwen3-VL) can't stand in for it: its pictures came out glitchy."""
+    return FILES + (() if writer.installed(writer.MODEL) else (writer.MODEL,))
 
 
 def download(progress=None, should_stop=None, session=None) -> None:
@@ -205,7 +206,7 @@ def ready(memory=writer.free_memory) -> tuple[bool, str]:
     """(whether a picture can be made now, and if not, why - in words for the user)."""
     if not installed():
         return False, "AI pictures are not downloaded yet. Open Settings > AI pictures to get them."
-    if not writer.installed():
+    if not writer.installed(writer.MODEL):
         return False, ("AI pictures need the Smart writer's file, which is missing. "
                        "Download it in Settings.")
     free = memory()
@@ -285,7 +286,7 @@ def command(exe: str, prompt: str, size, out_path: str, seed: int, backend: str 
     black and white picture at ``size``, white where the photo may change."""
     width, height = size
     return [exe, "--diffusion-model", writer.model_path(MODEL),
-            "--vae", writer.model_path(DECODER), "--llm", writer.model_path(),
+            "--vae", writer.model_path(DECODER), "--llm", writer.model_path(writer.MODEL),
             "-p", prompt, "--cfg-scale", "1.0", "--steps", str(steps),
             "-W", str(width), "-H", str(height), "-s", str(seed),
             # Leaves the weights in their files and reads each model in when its turn comes:

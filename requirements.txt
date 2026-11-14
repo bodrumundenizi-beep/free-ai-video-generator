@@ -3,6 +3,8 @@
 # silently change ffmpeg resolution or the Fluent layout, and you would not find
 # out until a user reports it. Reproducibility beats freshness here.
 customtkinter==6.0.0
+# Promo videos' fallback renderer (WebView2 in a helper window, vidgen/promo/webhost.py)
+pywebview==6.2.1
 requests==2.34.2
 moviepy==2.1.2
 edge-tts==7.2.8

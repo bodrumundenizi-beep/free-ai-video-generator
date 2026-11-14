@@ -1,0 +1,399 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<!-- AI Video Studio promo video: every frame is a pure function of time (seek(t)).
+     Only local files. The storyboard is put in place of PROMO_DATA by vidgen.promo.page. -->
+<style>
+@font-face{font-family:'Bricolage';src:url('fonts/bricolage.woff2') format('woff2');font-weight:200 800}
+@font-face{font-family:'Atkinson';src:url('fonts/atkinson-400.woff2') format('woff2');font-weight:400}
+@font-face{font-family:'Atkinson';src:url('fonts/atkinson-700.woff2') format('woff2');font-weight:700}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{overflow:hidden}
+body{width:var(--w);height:var(--h);background:var(--bg);color:var(--text);position:relative;
+  font-family:var(--body);-webkit-font-smoothing:antialiased}
+.glow{position:absolute;left:50%;top:42%;width:calc(var(--u)*150);height:calc(var(--u)*150);
+  margin:calc(var(--u)*-75) 0 0 calc(var(--u)*-75);border-radius:50%;
+  background:radial-gradient(circle,var(--glow) 0%,transparent 62%);pointer-events:none}
+.scene{position:absolute;inset:0;opacity:0;will-change:opacity,transform}
+/* F2: a blurred, darkened, drifting screenshot behind each scene, and soft colour blobs */
+.backdrop{position:absolute;inset:0;overflow:hidden;opacity:0}
+.backdrop img{position:absolute;left:-8%;top:-8%;width:116%;height:116%;object-fit:cover;
+  filter:blur(calc(var(--u)*2.2)) saturate(1.15)}
+.veil{position:absolute;inset:0;background:var(--bg)}
+.blob{position:absolute;border-radius:50%;background:var(--accent);opacity:.22;
+  filter:blur(calc(var(--u)*7));pointer-events:none}
+.card .thumb{width:100%;height:calc(var(--u)*13);border-radius:calc(var(--u)*1.2);overflow:hidden;
+  background:#000;flex:0 0 auto;box-shadow:0 0 0 1px var(--edge)}
+.card .thumb img{width:100%;height:100%;object-fit:cover;object-position:top left;display:block}
+.card .words{display:flex;flex-direction:column;gap:calc(var(--u)*1.4);min-width:0}
+.center{position:absolute;left:var(--pad);right:var(--pad);top:0;bottom:0;display:flex;
+  flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:calc(var(--u)*3)}
+.head{font-family:var(--display);font-weight:var(--weight);letter-spacing:var(--spacing);
+  text-transform:var(--case);line-height:1.04;color:var(--text);max-width:100%;overflow:hidden;
+  overflow-wrap:normal;word-break:normal;hyphens:none}   /* never inside a word: fit() shrinks instead */
+.small{font-size:calc(var(--u)*3.4);color:var(--muted);line-height:1.3;max-width:100%;overflow:hidden}
+.accent{color:var(--accent)}
+.device{position:absolute;border-radius:calc(var(--u)*1.6);background:#06070A;
+  padding:calc(var(--u)*0.9);box-shadow:0 calc(var(--u)*3) calc(var(--u)*8) rgba(0,0,0,.55),
+  0 0 0 1px rgba(255,255,255,.08);overflow:hidden}
+.device.phone{border-radius:calc(var(--u)*5);padding:calc(var(--u)*1.4)}
+.screen{width:100%;height:100%;border-radius:calc(var(--u)*0.8);overflow:hidden;position:relative;background:#111}
+.device.phone .screen{border-radius:calc(var(--u)*3.6)}
+.screen img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:top center;
+  transform-origin:50% 30%}
+.caption{position:absolute;left:var(--pad);right:var(--pad);text-align:center;
+  font-family:var(--display);font-weight:600;font-size:calc(var(--u)*4.6);line-height:1.15;overflow:hidden}
+.cards{position:absolute;left:var(--pad);right:var(--pad);top:0;bottom:0;display:flex;gap:calc(var(--u)*2.4);
+  align-items:center;justify-content:center}
+.card{flex:1 1 0;min-width:0;min-height:calc(var(--u)*30);background:var(--card);border:1px solid var(--edge);border-radius:calc(var(--u)*2.6);
+  padding:calc(var(--u)*4.4);justify-content:center;display:flex;flex-direction:column;gap:calc(var(--u)*1.4);
+  box-shadow:0 calc(var(--u)*2) calc(var(--u)*6) rgba(0,0,0,.35);overflow:hidden}
+.card .bar{width:calc(var(--u)*8);height:calc(var(--u)*1);border-radius:9px;background:var(--accent)}
+.card .head{font-size:calc(var(--u)*7)}
+.card .small{font-size:calc(var(--u)*3.8)}
+.cursor{position:absolute;width:calc(var(--u)*4.4);height:calc(var(--u)*4.4);z-index:5;
+  filter:drop-shadow(0 2px 4px rgba(0,0,0,.6))}
+.ripple{position:absolute;width:calc(var(--u)*10);height:calc(var(--u)*10);margin:calc(var(--u)*-5) 0 0 calc(var(--u)*-5);
+  border-radius:50%;border:calc(var(--u)*0.6) solid var(--accent);opacity:0;z-index:4}
+.badge{position:absolute;left:50%;padding:calc(var(--u)*1.6) calc(var(--u)*3.2);border-radius:999px;
+  background:var(--accent);color:var(--onaccent);font-family:var(--display);font-weight:700;
+  font-size:calc(var(--u)*3.6);white-space:nowrap;max-width:calc(100% - var(--pad)*2);overflow:hidden;z-index:6}
+.logo{width:calc(var(--u)*16);height:calc(var(--u)*16);border-radius:calc(var(--u)*4);background:var(--accent);
+  color:var(--onaccent);display:grid;place-items:center;font-family:var(--display);font-weight:800;
+  font-size:calc(var(--u)*9)}
+.logo img{width:100%;height:100%;object-fit:contain;border-radius:inherit}
+.link{padding:calc(var(--u)*1.3) calc(var(--u)*3);border-radius:999px;border:1px solid var(--edge);
+  font-size:calc(var(--u)*3);color:var(--text);max-width:100%;overflow:hidden;white-space:nowrap}
+.underline{height:calc(var(--u)*0.9);background:var(--accent);border-radius:9px;width:0}
+.flash{position:absolute;inset:0;background:#fff;opacity:0;z-index:20;pointer-events:none}
+.vignette{position:absolute;inset:0;pointer-events:none;
+  background:radial-gradient(ellipse at center,transparent 55%,rgba(0,0,0,.45) 100%)}
+</style></head>
+<body>
+<div class="glow" id="glow"></div>
+<div id="backs"></div>
+<div id="blobs"></div>
+<div id="stage"></div>
+<div class="vignette" id="vignette"></div>
+<div class="flash" id="flash"></div>
+<script>
+const P = PROMO_DATA;
+const W = P.size[0], H = P.size[1], U = Math.min(W, H) / 100, PORTRAIT = H > W * 1.2;
+const T = P.tone, C = P.palette;
+const root = document.documentElement.style;
+const set = (k, v) => root.setProperty(k, v);
+set('--w', W + 'px'); set('--h', H + 'px'); set('--u', U + 'px');
+set('--pad', (PORTRAIT ? 7 : 8) * U + 'px');
+set('--bg', C.background); set('--text', C.text); set('--muted', C.muted); set('--accent', C.accent);
+set('--onaccent', C.onaccent); set('--glow', C.glow); set('--card', C.card); set('--edge', C.edge);
+set('--display', T.display); set('--body', T.body); set('--weight', T.weight);
+set('--spacing', T.spacing); set('--case', T.case === 'upper' ? 'uppercase' : 'none');
+if (T.name === 'deadpan' || T.name === 'polished') document.getElementById('vignette').style.display = 'none';
+
+const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
+const easeOut = x => 1 - Math.pow(1 - clamp(x), 3);
+const easeInOut = x => { x = clamp(x); return x < .5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2; };
+const back = x => { x = clamp(x); const c = 1.7; return 1 + (c + 1) * Math.pow(x - 1, 3) + c * Math.pow(x - 1, 2); };
+const el = (tag, cls, parent, text) => { const e = document.createElement(tag); if (cls) e.className = cls;
+  if (text !== undefined) e.textContent = text; if (parent) parent.appendChild(e); return e; };
+const stage = document.getElementById('stage');
+const TR = T.transition_seconds;
+
+// How a line arrives, from 0 (not yet) to 1 (settled), by the tone's entrance.
+function enter(node, p, opts = {}) {
+  const k = T.entrance === 'slam' ? back(p) : easeOut(p);
+  let tf = '';
+  if (T.entrance === 'slam') tf = `scale(${1.35 - 0.35 * k})`;
+  else if (T.entrance === 'rise') tf = `translateY(${(1 - k) * U * 5}px)`;
+  else if (T.entrance === 'fade') tf = `translateY(${(1 - k) * U * 1.2}px)`;
+  if (opts.tilt) tf += ` rotate(${opts.tilt}deg)`;
+  node.style.transform = tf;
+  node.style.opacity = T.entrance === 'slam' ? clamp(p * 4) : clamp(k);
+}
+
+// Fit text into its box: shrink the font until nothing spills (never below 45%).
+function fit(node, maxHeight) {
+  const start = parseFloat(getComputedStyle(node).fontSize);
+  let size = start;
+  const spills = () => node.scrollWidth > node.clientWidth + 1 || node.scrollHeight > maxHeight + 1;
+  while (spills() && size > start * 0.45) { size *= 0.94; node.style.fontSize = size + 'px'; }
+  return !spills();
+}
+
+const builders = {
+  hook(s, box) {
+    const c = el('div', 'center', box);
+    const h = el('div', 'head', c, s.data.text);
+    h.style.fontSize = (PORTRAIT ? 12 : 11) * U + 'px';
+    s.parts = { h }; s.fits = [[h, H * 0.6]];
+    s.full = s.data.text;
+  },
+  claim(s, box) {
+    const c = el('div', 'center', box);
+    const h = el('div', 'head', c, s.data.text);
+    h.style.fontSize = 8 * U + 'px';
+    const u = el('div', 'underline', c);
+    s.parts = { h, u }; s.fits = [[h, H * 0.55]];
+  },
+  feature(s, box) {
+    const c = el('div', 'center', box);
+    const h = el('div', 'head', c, s.data.text);
+    h.style.fontSize = (T.name === 'chaotic' ? 12 : 8) * U + 'px';
+    const sm = el('div', 'small', c, s.data.small || '');
+    s.parts = { h, sm }; s.fits = [[h, H * 0.5], [sm, H * 0.2]];
+    s.tilt = T.tilt ? [-4, 3, -2][s.index % 3] : 0;
+  },
+  shot(s, box) {
+    const d = device(box, s.data.image, PORTRAIT ? 0.62 : 0.66);
+    const cap = el('div', 'caption', box, s.data.caption || '');
+    cap.style.top = (d.bottom + U * 3) + 'px';
+    cap.style.maxHeight = (H - d.bottom - U * 6) + 'px';
+    s.parts = { d, cap }; s.fits = [[cap, H - d.bottom - U * 6]];
+  },
+  cards(s, box) {
+    const row = el('div', 'cards', box);
+    if (PORTRAIT) { row.style.flexDirection = 'column'; row.style.alignItems = 'stretch'; }
+    s.parts = { cards: [] }; s.fits = [];
+    s.data.items.forEach((item, i) => {
+      const card = el('div', 'card', row);
+      // A crop of a screenshot on each card: the ones after the first (shown already), in order.
+      const pic = SHOTS.length ? SHOTS[(i + 1) % SHOTS.length] : '';
+      if (pic) {
+        const thumb = el('div', 'thumb', card), img = el('img', '', thumb);
+        img.src = pic;
+        if (PORTRAIT) { card.style.flexDirection = 'row'; card.style.alignItems = 'center';
+          thumb.style.width = '36%'; thumb.style.height = 15 * U + 'px'; }
+      }
+      const words = el('div', 'words', card);
+      if (PORTRAIT && pic) words.style.flex = '1 1 0';
+      el('div', 'bar', words);
+      const h = el('div', 'head', words, item.title);
+      if (T.case === 'upper') h.style.fontSize = 5.2 * U + 'px';   // wide capitals: smaller, or 3 lines
+      const sm = el('div', 'small', words, item.detail || '');
+      if (!item.detail) sm.style.display = 'none';
+      if (PORTRAIT) { card.style.flex = '0 0 auto'; card.style.minHeight = 'auto'; }
+      s.parts.cards.push(card);
+      s.fits.push([h, (PORTRAIT ? H * 0.12 : H * (pic ? 0.18 : 0.3))],
+                  [sm, (PORTRAIT ? H * 0.1 : H * (pic ? 0.14 : 0.25))]);
+    });
+  },
+  flow(s, box) {
+    const d = device(box, s.data.image, PORTRAIT ? 0.6 : 0.7);
+    let after = null;
+    if (s.data.after) { after = el('img', '', d.screen); after.src = s.data.after; after.style.opacity = 0; }
+    const cursor = el('div', 'cursor', box);
+    cursor.innerHTML = '<svg viewBox="0 0 24 24"><path d="M3 2l7.5 19 2.6-7.4L21 11z" fill="#fff" stroke="#000" stroke-width="1.3" stroke-linejoin="round"/></svg>';
+    const ripple = el('div', 'ripple', box);
+    const badge = el('div', 'badge', box, s.data.result ? '✓  ' + s.data.result : '✓  Done');
+    badge.style.top = (d.bottom - U * 4) + 'px';
+    // Where the click lands: a little below the middle of the screen (where buttons tend to be).
+    const tx = d.left + d.width * 0.5, ty = d.top + d.height * 0.55;
+    s.parts = { d, after, cursor, ripple, badge, tx, ty }; s.fits = [];
+  },
+  outro(s, box) {
+    const c = el('div', 'center', box);
+    const logo = el('div', 'logo', c);
+    if (P.logo) { const i = el('img', '', logo); i.src = P.logo; } else logo.textContent = (s.data.name || '?')[0];
+    const h = el('div', 'head', c, s.data.name);
+    h.style.fontSize = (PORTRAIT ? 11 : 9) * U + 'px';
+    const tag = el('div', 'small', c, s.data.tagline || '');
+    tag.style.fontSize = 3.8 * U + 'px';
+    const link = el('div', 'link', c, s.data.link || '');
+    if (!s.data.link) link.style.display = 'none';
+    s.parts = { logo, h, tag, link }; s.fits = [[h, H * 0.25], [tag, H * 0.16], [link, U * 8]];
+  },
+};
+
+// A screenshot in a device frame, as big as fits the share of the height asked for.
+function device(box, src, share) {
+  const d = el('div', 'device', box), screen = el('div', 'screen', d), img = el('img', '', screen);
+  img.src = src;
+  const known = SIZES[src] || [16, 10];
+  const ratio = known[0] / known[1];
+  const phone = ratio < 0.8;
+  if (phone) d.classList.add('phone');
+  let h = H * share, w = h * ratio + U * 1.8;
+  const maxW = W - U * (PORTRAIT ? 10 : 16);
+  if (w > maxW) { w = maxW; h = (w - U * 1.8) / ratio + U * 1.8; }
+  const left = (W - w) / 2, top = (PORTRAIT ? H * 0.2 : H * 0.1);
+  Object.assign(d.style, { width: w + 'px', height: h + 'px', left: left + 'px', top: top + 'px' });
+  return { node: d, screen, img, left, top, width: w, height: h, bottom: top + h };
+}
+
+const updaters = {
+  hook(s, t) {
+    const p = (t - TR * 0.5) / (T.entrance === 'slam' ? 0.3 : 0.55);
+    if (T.entrance === 'type') {
+      const n = Math.round(clamp((t - TR * 0.5) / Math.min(1.6, 0.045 * s.full.length)) * s.full.length);
+      s.parts.h.textContent = s.full.slice(0, n) + (n < s.full.length && Math.floor(t * 3) % 2 ? '|' : '');
+      s.parts.h.style.opacity = 1;
+    } else enter(s.parts.h, p, { tilt: T.tilt ? -2 : 0 });
+  },
+  claim(s, t) {
+    enter(s.parts.h, (t - TR * 0.5) / 0.55);
+    s.parts.u.style.width = easeInOut((t - TR - 0.3) / 0.8) * Math.min(W * 0.4, U * 50) + 'px';
+  },
+  feature(s, t) {
+    enter(s.parts.h, (t - TR * 0.5) / (T.entrance === 'slam' ? 0.3 : 0.55), { tilt: s.tilt });
+    enter(s.parts.sm, (t - TR * 0.5 - 0.35) / 0.5);
+  },
+  shot(s, t, dur) {
+    const d = s.parts.d;
+    const k = easeOut((t - TR * 0.4) / 0.7);
+    d.node.style.opacity = k;
+    d.node.style.transform = `translateY(${(1 - k) * U * 6}px) scale(${0.96 + 0.04 * k})`;
+    // The slow zoom and pan across the screenshot.
+    const z = easeInOut(t / dur);
+    d.img.style.transform = `scale(${1 + 0.07 * z}) translateY(${-z * 2.5}%)`;
+    enter(s.parts.cap, (t - TR * 0.5 - 0.45) / 0.55);
+  },
+  cards(s, t) {
+    s.parts.cards.forEach((card, i) => enter(card, (t - s.data.times[i]) / 0.45));
+  },
+  flow(s, t, dur) {
+    const q = s.parts, d = q.d;
+    const k = easeOut((t - TR * 0.4) / 0.6);
+    d.node.style.opacity = k;
+    d.node.style.transform = `scale(${0.97 + 0.03 * k})`;
+    // The cursor glides in, clicks, and the result arrives.
+    const start = TR + 0.9, glide = 0.9, click = start + glide;
+    const m = easeInOut((t - start) / glide);
+    const fx = W * 0.92, fy = H * 0.95;
+    q.cursor.style.left = (fx + (q.tx - fx) * m) + 'px';
+    q.cursor.style.top = (fy + (q.ty - fy) * m) + 'px';
+    q.cursor.style.opacity = clamp((t - start + 0.2) / 0.2);
+    const press = clamp(1 - Math.abs(t - click) / 0.12);
+    q.cursor.style.transform = `scale(${1 - 0.18 * press})`;
+    const r = clamp((t - click) / 0.6);
+    q.ripple.style.left = q.tx + 'px'; q.ripple.style.top = q.ty + 'px';
+    q.ripple.style.opacity = r > 0 && r < 1 ? 1 - r : 0;
+    q.ripple.style.transform = `scale(${0.3 + r * 1.4})`;
+    if (q.after) q.after.style.opacity = easeOut((t - click - 0.1) / 0.35);
+    const b = (t - click - 0.25) / 0.45;
+    q.badge.style.opacity = clamp(b * 2);
+    q.badge.style.transform = `translateX(-50%) scale(${0.6 + 0.4 * back(b)})`;
+  },
+  outro(s, t) {
+    const q = s.parts;
+    const k = back((t - TR * 0.5) / 0.6);
+    q.logo.style.transform = `scale(${0.4 + 0.6 * k})`; q.logo.style.opacity = clamp(k * 2);
+    enter(q.h, (t - TR * 0.5 - 0.25) / 0.55);
+    enter(q.tag, (t - TR * 0.5 - 0.6) / 0.5);
+    enter(q.link, (t - TR * 0.5 - 0.9) / 0.5);
+  },
+};
+
+let scenes = [];
+const SIZES = {};
+const SHOTS = P.shots || [], VEILS = P.veils || [];
+let blobs = [];
+function build() {
+  const backs = document.getElementById('backs');
+  let textScene = 0;
+  scenes = P.scenes.map((s, index) => {
+    const box = el('div', 'scene', stage);
+    const scene = Object.assign({}, s, { index, box });
+    builders[s.kind](scene, box);
+    // The backdrop: the scene's own screenshot, or a different one for each text scene.
+    let src = s.data.image || '', veil = 0.82;
+    if (!src && SHOTS.length) {
+      const k = textScene++ % SHOTS.length;
+      src = SHOTS[k]; veil = VEILS[k] || 0.6;
+    }
+    if (src) {
+      const back = el('div', 'backdrop', backs), img = el('img', '', back);
+      img.src = src;
+      el('div', 'veil', back).style.opacity = veil;
+      scene.back = { back, img };
+    }
+    return scene;
+  });
+  // Three soft accent blobs drifting slowly, a pure function of time like everything else.
+  const holder = document.getElementById('blobs');
+  blobs = [0, 1, 2].map(i => { const b = el('div', 'blob', holder);
+    const size = (46 + i * 14) * U; b.style.width = b.style.height = size + 'px'; return b; });
+  if (SHOTS.length) document.getElementById('glow').style.display = 'none';
+}
+
+// The scene's way in and out, by the tone's transition. Scenes never overlap: the old one
+// leaves before the new one arrives (or the dip is through the background).
+function frame(s, lt) {
+  const box = s.box, d = s.duration;
+  const inP = TR > 0 ? clamp(lt / TR) : 1, outP = TR > 0 ? clamp((d - lt) / TR) : 1;
+  const last = s.index === scenes.length - 1;
+  const v = Math.min(inP, last ? 1 : outP);
+  let tf = '', op = v;
+  switch (T.transition) {
+    case 'slide': tf = `translateX(${(1 - easeOut(inP)) * U * 8 - (1 - (last ? 1 : easeOut(outP))) * U * 8}px)`; break;
+    case 'zoom': tf = `scale(${0.95 + 0.05 * easeOut(inP)})`; break;
+    case 'cut': op = lt >= 0 && lt < d ? 1 : 0; break;
+    case 'flash': op = lt >= 0 && lt < d ? 1 : 0; tf = `scale(${1.12 - 0.12 * easeOut(clamp(lt / 0.25))})`; break;
+    default: break;   // fade
+  }
+  box.style.opacity = op; box.style.transform = tf;
+  box.style.visibility = op > 0.001 ? 'visible' : 'hidden';
+  return op;
+}
+
+window.seek = function (t) {
+  for (const s of scenes) {
+    const lt = t - s.start;
+    if (lt < 0 || lt > s.duration + 0.001) {
+      s.box.style.opacity = 0; s.box.style.visibility = 'hidden';
+      if (s.back) s.back.back.style.opacity = 0;
+      continue;
+    }
+    const op = frame(s, lt);
+    updaters[s.kind](s, lt, s.duration);
+    if (s.back) {   // fades with its scene, never slides: and drifts slowly the whole time
+      s.back.back.style.opacity = op;
+      s.back.img.style.transform = `scale(${1.04 + 0.04 * Math.sin(t * 0.21 + s.index)}) ` +
+        `translate(${2.2 * Math.sin(t * 0.13 + s.index * 1.7)}%, ${1.6 * Math.cos(t * 0.11 + s.index)}%)`;
+    }
+  }
+  blobs.forEach((b, i) => {
+    const x = W * (0.5 + 0.38 * Math.sin(t * (0.09 + i * 0.03) + i * 2.1)) - b.offsetWidth / 2;
+    const y = H * (0.5 + 0.36 * Math.cos(t * (0.07 + i * 0.025) + i * 1.3)) - b.offsetHeight / 2;
+    b.style.transform = `translate(${x}px, ${y}px)`;
+  });
+  // The glow breathes slowly; the flash marks a chaotic cut.
+  const g = document.getElementById('glow');
+  g.style.transform = `scale(${1 + 0.06 * Math.sin(t * 1.3)})`;
+  let flash = 0;
+  if (T.transition === 'flash') for (const s of scenes.slice(1)) flash = Math.max(flash, clamp(1 - Math.abs(t - s.start) / 0.08) * 0.85);
+  document.getElementById('flash').style.opacity = flash;
+};
+
+// The checks before any frame is drawn: text that doesn't fit its box even when shrunk,
+// or anything outside the frame.
+function audit() {
+  const issues = [];
+  for (const s of scenes) {
+    s.box.style.opacity = 1; s.box.style.visibility = 'visible'; s.box.style.transform = '';
+    for (const [node, maxH] of s.fits || []) {
+      if (!node.textContent || node.style.display === 'none') continue;
+      if (!fit(node, maxH)) issues.push(`Scene ${s.index + 1} (${s.kind}): "${node.textContent.slice(0, 40)}" doesn't fit`);
+      const r = node.getBoundingClientRect();
+      if (r.left < -1 || r.top < -1 || r.right > W + 1 || r.bottom > H + 1)
+        issues.push(`Scene ${s.index + 1} (${s.kind}): "${node.textContent.slice(0, 40)}" goes off the frame`);
+    }
+    s.box.style.opacity = 0;
+  }
+  return issues;
+}
+
+// Load the pictures first (their shapes size the devices), then the fonts, then build.
+const sources = [...new Set(P.scenes.flatMap(s => [s.data.image, s.data.after]).concat([P.logo], SHOTS).filter(Boolean))];
+// Load events, not decode(): decode() never settles in a hidden page (the WebView2 fallback).
+const loaded = i => i.complete ? Promise.resolve() : new Promise(res => { i.onload = i.onerror = res; });
+Promise.all(sources.map(src => { const i = new Image(); i.src = src;
+  return loaded(i).then(() => { if (i.naturalWidth) SIZES[src] = [i.naturalWidth, i.naturalHeight]; }); })
+).then(() => document.fonts.ready).then(() => {
+  build();
+  return Promise.all([...document.images].map(loaded));
+}).then(() => {
+  window.promoIssues = audit();
+  window.seek(0);
+  window.promoReady = true;
+});
+</script>
+</body></html>

@@ -29,11 +29,20 @@ Run
 # ---- moved from ai_video_studio.py, imports ----
 from __future__ import annotations
 
+import sys as _sys
+
+if "--promo-host" in _sys.argv:   # the promo videos' WebView2 helper: no main window, no Tk
+    from vidgen.promo import webhost as _webhost
+
+    _webhost.main(_sys.argv)
+    raise SystemExit(0)
+
 from gui.base import *  # noqa: F401,F403  (setup, constants, settings, widgets)
 from gui.tips import TipPicker, GuideBox, TipDialog, TipSession  # noqa: F401
 from gui.dialogs import WelcomeDialog, WhatsNewDialog, TourDialog, SlowPicturesDialog, ClipQuestion, BatchDialog, MyVoiceDialog, TranslateDialog, CopyDialog, ResultDialog, ReportDialog  # noqa: F401
 from gui.photo_windows import ImageEditor, PhotoList, change_photo_window, DraftDialog  # noqa: F401
 from gui.thumb_editor import ThumbEditor  # noqa: F401
+from gui.promo_window import PromoDialog  # noqa: F401
 from gui.base import BUILD, CLOSING_WAIT, FlipDialog, HOLD_WAIT, KEY_PROVIDERS, RECORDINGS_DIR, TOUR, WHATS_NEW, WRITER_MODES, centre_on, mci, report_tip_failure, short_path, show_whats_new, writer_size  # noqa: F401
 # ---- moved from ai_video_studio.py, unchanged below ----
 
@@ -258,6 +267,7 @@ class App(ctk.CTk):
         self.var_style.trace_add("write", lambda *_args: getattr(self, "board_cards", None)
                                  and self.refresh_board(force=True))   # cards show the style
         self.whats_new_seen, self.whats_new_off = s["whats_new_seen"], s["whats_new_off"]
+        self.old_writer_asked = s["old_writer_asked"]
         self.key_tip = s["key_tip"]
         self.ai_gpu, self.ai_fast_seconds = s["ai_gpu"], s["ai_fast_seconds"]
         self.gpu_looked = s["gpu_looked"]
@@ -324,6 +334,7 @@ class App(ctk.CTk):
             "quick_sync": bool(self.var_quick_sync.get()),
             "whats_new_seen": self.whats_new_seen,
             "whats_new_off": self.whats_new_off,
+            "old_writer_asked": self.old_writer_asked,
             "key_tip": self.key_tip,
             "ai_images_speed": self.var_ai_speed.get() if self.ai_speed_chosen else "",
             "ai_threads": self.var_ai_threads.get(),
@@ -641,6 +652,9 @@ class App(ctk.CTk):
         self._door(page, self.icon("scenes"), "Several at once", "Paste several texts and make a video of each, "
                    "one after another", lambda: BatchDialog(self), False).grid(
             row=2, column=1, sticky="nsew", padx=(PAD // 2, 0))
+        self._door(page, self.icon("play"), "Promo video", "A 15 to 25 second launch video for "
+                   "your own app or website, from its screenshots", lambda: PromoDialog(self),
+                   False).grid(row=3, column=0, sticky="nsew", padx=(0, PAD // 2), pady=(PAD, 0))
         return page
 
     def _door(self, parent, glyph, title, line, command, accent):
@@ -1101,6 +1115,8 @@ class App(ctk.CTk):
              "sent anywhere", "Open", lambda: self.open_settings("writer")),
             ("aspect", "Both shapes at once", "The same video as a Short and as a YouTube video, "
              "from the Storyboard", "Open My videos", lambda: self.select_page("projects")),
+            ("play", "Promo video", "A 15 to 25 second launch video for your own app or website, "
+             "from its screenshots", "Make a promo", lambda: PromoDialog(self)),
         ]
         return [f for f in found if f[1] != "My voice" or not myvoice.available()]
 
@@ -1617,7 +1633,7 @@ class App(ctk.CTk):
         self._caption(page, "Stock footage", next(rows), pady=(0, 6))
         self.api_entry = self._key_row(
             page, next(rows), "Pexels", "Pexels API key",
-            "One footage key is enough. Stored locally in settings.json",
+            "One footage key is enough. Kept in Windows Credential Manager, on this PC only",
             self.var_api, "Paste your Pexels API key",
         )
         self.pixabay_entry = self._key_row(
@@ -1800,7 +1816,7 @@ class App(ctk.CTk):
 
         writer_row = SettingRow(
             page, self, self.icon("script"), "Smart writer",
-            f"{writer.MODEL.name}, an open-source AI that writes scripts on this PC. "
+            "Open-source AI (Qwen) that writes scripts and looks at your photos on this PC. "
             "Nothing you paste is sent anywhere")
         writer_row.grid(row=next(rows), column=0, sticky="ew", pady=PAD // 2)
         self.writer_state = ctk.CTkLabel(writer_row.control, text="", font=self.font_body,
@@ -2141,6 +2157,8 @@ class App(ctk.CTk):
             self.after(300, lambda: WhatsNewDialog(self))
         elif not self._has_footage_key() and not self.welcome_seen:
             self.after(300, lambda: WelcomeDialog(self))
+        elif not self.old_writer_asked and self._old_writer():
+            self.after(300, self.ask_delete_old_writer)
         self.detect_graphics()
         self.look_for_graphics()
         if self.var_check_updates.get():
@@ -2603,10 +2621,13 @@ class App(ctk.CTk):
             self.start_render()
 
     # -- the Smart writer's one-time download --------------------------------
-    def start_writer_download(self):
-        """Fetch the model on a worker thread. Listeners hear how it goes."""
+    def start_writer_download(self, upgrade=False):
+        """Fetch the model on a worker thread. Listeners hear how it goes. ``upgrade``: the
+        new Smart writer, for someone who has 5.2's."""
         if self.writer_downloading:
             return
+        files = ([m for m in writer.NEW_FILES if not writer.installed(m)] if upgrade
+                 else writer.missing())
         self.writer_downloading = True
         self._writer_stop = stop = threading.Event()
         self.append_log(f"⬇️ Downloading the Smart writer ({writer_size()})...")
@@ -2622,7 +2643,7 @@ class App(ctk.CTk):
                     self._queue.put(("writer", {"event": "progress", "done": done, "total": total}))
 
             try:
-                writer.download_all(progress, stop.is_set)
+                writer.download_all(progress, stop.is_set, upgrade=upgrade)
                 self._queue.put(("writer", {"event": "done"}))
             except writer.Stopped:
                 self._queue.put(("writer", {"event": "stopped"}))
@@ -2636,7 +2657,7 @@ class App(ctk.CTk):
         threading.Thread(target=worker, daemon=True).start()
         # Tell the listeners at once, so their buttons read Cancel before the first byte.
         self._writer_event({"event": "progress", "done": 0,
-                            "total": sum(m.size for m in writer.missing()) or 1})
+                            "total": sum(m.size for m in files) or 1})
 
     def cancel_writer_download(self):
         self._writer_stop.set()
@@ -2644,9 +2665,10 @@ class App(ctk.CTk):
     def repair_writer(self):
         """Throw the model away and fetch it again."""
         if not self.writer_downloading:
-            for model in writer.FILES:
+            new = writer.upgraded()
+            for model in writer.files():
                 writer.remove(model)
-            self.start_writer_download()
+            self.start_writer_download(upgrade=new)
 
     def _writer_event(self, payload):
         """UI thread: pass the download's news to whoever is showing it."""
@@ -2655,6 +2677,8 @@ class App(ctk.CTk):
             self.writer_downloading = False
             if payload.get("trace"):
                 self.session_log.write(payload["trace"])
+            if event == "done" and self._old_writer():
+                self.after(300, self.ask_delete_old_writer)
             self.append_log({"done": "✅ The Smart writer is ready.",
                              "stopped": "⏸️ Smart writer download paused.",
                              "failed": f"⚠️ {payload.get('message', '')}"}[event])
@@ -2685,14 +2709,27 @@ class App(ctk.CTk):
             self.writer_state.configure(text=ellipsize(payload["message"], 60), text_color=ERR_COLOR)
         elif writer.runtime_path() is None:
             self.writer_state.configure(text="Not included in this copy", text_color=TEXT_MUTED)
+        elif writer.can_upgrade():
+            size = sum(m.size for m in writer.NEW_FILES if not writer.installed(m)) / 1e9
+            self.writer_state.configure(
+                text=f"New version: writes and sees pictures · {size:.1f} GB", text_color=ACCENT)
+            self.writer_button.configure(text="Get it",
+                                         command=lambda: self.start_writer_download(upgrade=True))
+            return
         elif writer.installed() and not writer.sees():
             self.writer_state.configure(text=f"Photo part not downloaded · {writer_size()}",
                                         text_color=TEXT_MUTED)
             self.writer_button.configure(text="Download", command=self.start_writer_download)
             return
+        elif self._old_writer():
+            old = sum(m.size for m in self._old_writer()) / 1e9
+            self.writer_state.configure(text=f"Installed · old model left: {old:.1f} GB",
+                                        text_color=OK_COLOR)
+            self.writer_button.configure(text="Delete old", command=self.ask_delete_old_writer)
+            return
         elif writer.installed():
             self.writer_state.configure(
-                text=f"Installed · {sum(m.size for m in writer.FILES) / 1e9:.1f} GB",
+                text=f"Installed · {sum(m.size for m in writer.files()) / 1e9:.1f} GB",
                 text_color=OK_COLOR)
         else:
             self.writer_state.configure(text=f"Not downloaded · {writer_size()}",
@@ -2702,13 +2739,41 @@ class App(ctk.CTk):
         else:
             self.writer_button.configure(text="Download", command=self.start_writer_download)
 
+    def _old_writer(self):
+        """5.2's model files the new Smart writer no longer needs. Qwen3 4B stays while AI
+        pictures are downloaded: they use it as their text part."""
+        return writer.old_files(keep_for_pictures=writer.installed(imagegen.MODEL))
+
+    def ask_delete_old_writer(self):
+        """Once the new Smart writer is there: offer to delete 5.2's model. Never on its own."""
+        self.old_writer_asked = True
+        save_settings(self._collect_settings())
+        old = self._old_writer()
+        if not old:
+            return
+        kept = (" AI pictures still use Qwen3 4B, so that one stays."
+                if writer.MODEL not in old and writer.installed(writer.MODEL) else "")
+        Dialog(self, "The new Smart writer is ready",
+               "It writes scripts and looks at your pictures in one model. Delete the old "
+               f"one to free {sum(m.size for m in old) / 1e9:.1f} GB?{kept}",
+               confirm=self.delete_old_writer, confirm_text="Delete old model",
+               cancel_text="Keep it")
+
+    def delete_old_writer(self):
+        old = self._old_writer()
+        for model in old:
+            writer.remove(model)
+        self.append_log(f"🧹 Deleted the old Smart writer "
+                        f"({sum(m.size for m in old) / 1e9:.1f} GB).")
+        self._writer_row_changed()
+
     def _confirm_repair(self):
         """Repair downloads all 3 GB again, so it takes a second press."""
         if not self._writer_confirm:
             self._writer_confirm = True
             self.writer_state.configure(
                 text=f"Press again to download "
-                     f"{sum(m.size for m in writer.FILES) / 1e9:.1f} GB again",
+                     f"{sum(m.size for m in writer.files()) / 1e9:.1f} GB again",
                 text_color=ERR_COLOR)
             return
         self.repair_writer()

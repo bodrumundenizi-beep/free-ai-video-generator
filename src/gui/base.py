@@ -126,7 +126,7 @@ from vidgen import voices  # noqa: E402
 from vidgen.render import TEMP_ROOT  # noqa: E402
 from vidgen import (  # noqa: E402
     cache, captions, diagnostics, draft, footage, pacing, paths, photos, preview, projects,
-    scenes, updates, writer,
+    keyvault, scenes, updates, writer,
 )
 from vidgen import board as boards  # noqa: E402
 from vidgen import (  # noqa: E402
@@ -137,7 +137,7 @@ from vidgen.voice import generate_voiceover  # noqa: E402
 
 
 APP_NAME = "AI Video Studio"
-APP_VERSION = "5.2.1"
+APP_VERSION = "5.3.0"
 # Must match AppUserModelID in packaging/installer.iss, or a pinned taskbar
 # shortcut will not group with the running window.
 APP_MODEL_ID = "AIVideoStudio.Desktop.3"
@@ -319,6 +319,7 @@ def default_settings() -> dict:
         "started": {},             # Home's Get started list (vidgen.started)
         "whats_new_seen": "",      # the last version whose What's new was shown
         "whats_new_off": False,    # "Don't show again" was ticked
+        "old_writer_asked": False,  # asked once whether to delete 5.2's Smart writer
         "check_updates": True,
         "versions": 1,
         "target_length": pacing.DEFAULT_TARGET,
@@ -373,9 +374,16 @@ def default_settings() -> dict:
     }
 
 
+# The API keys: kept in Windows Credential Manager, never written to settings.json.
+SECRET_SETTINGS = ("api_key", "pixabay_key")
+
+
 def load_settings() -> dict:
-    """Read settings.json, falling back to defaults for anything missing."""
+    """Read settings.json, falling back to defaults for anything missing. The API keys come
+    from Windows Credential Manager; a key still in settings.json (5.2 and before) is moved
+    there, and the file is written again without it."""
     data = default_settings()
+    moved = False
     try:
         with open(SETTINGS_FILE, "r", encoding="utf-8") as fh:
             stored = json.load(fh)
@@ -393,6 +401,13 @@ def load_settings() -> dict:
                 data["check_clips"] = bool(data["writer_gpu"])
     except (OSError, ValueError):
         pass
+    for name in SECRET_SETTINGS:
+        plain = str(data.get(name) or "").strip()
+        stored = keyvault.get(name)
+        if plain and keyvault.put(name, plain):
+            moved = True          # now in Credential Manager: settings.json loses it below
+        elif stored:
+            data[name] = stored
 
     # Never hardcode the key: allow an environment variable as a second source.
     if not str(data.get("api_key", "")).strip():
@@ -442,7 +457,7 @@ def load_settings() -> dict:
     if data["style"] not in drawn.STYLES:
         data["style"] = drawn.NORMAL
     for key in ("intro_on", "outro_on", "sound_effects", "smart_motion", "web_facts",
-                "whats_new_off", "quick_sync", "check_clips", "gpu_looked"):
+                "whats_new_off", "quick_sync", "check_clips", "gpu_looked", "old_writer_asked"):
         data[key] = bool(data[key])
     for key in ("intro_text", "outro_text"):
         data[key] = " ".join(str(data[key]).split())[:60]
@@ -482,10 +497,18 @@ def load_settings() -> dict:
     # when rendering (see vidgen.paths), not here on every launch.
     data["output_path"] = paths.repair_output_path(data.get("output_path"),
                                                    default_output_dir())
+    if moved:
+        save_settings(data)
     return data
 
 
 def save_settings(data: dict) -> None:
+    """Write settings.json. The API keys go to Windows Credential Manager instead; only if
+    it can't take one does that key stay in the file, so a key is never lost."""
+    data = dict(data)
+    for name in SECRET_SETTINGS:
+        if name in data and keyvault.put(name, str(data[name] or "").strip()):
+            data[name] = ""
     try:
         os.makedirs(SETTINGS_DIR, exist_ok=True)
         with open(SETTINGS_FILE, "w", encoding="utf-8") as fh:
@@ -1151,13 +1174,12 @@ TOUR = (
 # Shown once after updating to this version (WhatsNewDialog). Short: the release notes have
 # the whole story.
 WHATS_NEW = (
-    "The installer can now download the AI photo tools (Erase, Remove background) for you, so "
-    "they're ready the first time. Untick the box and the editor downloads them when needed.",
-    "The Image editor has a brush: paint a part of a photo and Change only that part (\"make "
-    "the car green\"), or press Select all to change the whole photo.",
-    "Erase: paint over something, or someone, and it's gone. With AI pictures you get two "
-    "results to pick from: the plain one, and one touched up to look like a real photo.",
-    "Remove background: one click, then brush to fix it. Saves a see-through PNG.",
+    "Promo videos: a 15 to 25 second launch video for your own app or website, from its "
+    "folder, README or GitHub link. Pick a tone and a shape; music and sounds land on the beat.",
+    "A new Smart writer, Qwen3-VL, that reads and looks at pictures in one model: better at "
+    "photos, and stricter about not adding facts your text doesn't say.",
+    "Your Pexels, Pixabay and other API keys are now kept in Windows Credential Manager "
+    "instead of the settings file.",
 )
 
 
@@ -1225,7 +1247,7 @@ WRITER_MODES = ("Smart writer", "Quick split")
 
 def writer_size() -> str:
     """What the Smart writer's download still has to fetch, for the buttons."""
-    size = sum(m.size for m in writer.missing()) or writer.MODEL.size
+    size = sum(m.size for m in writer.missing()) or writer.current().size
     return f"{size / 1e9:.1f} GB"
 
 

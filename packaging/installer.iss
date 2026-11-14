@@ -89,6 +89,11 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; \
 Name: "phototools"; \
   Description: "Download the AI photo tools now (Erase, Remove background, about 190 MB)"; \
   GroupDescription: "AI photo tools:"
+; Only on an update from 5.2 (its Smart writer is there): the new one writes and sees.
+; Unticked, 5.2's keeps working and the app offers the new one in Settings.
+Name: "newwriter"; \
+  Description: "Download the new Smart writer (now sees images, about 3 GB)"; \
+  GroupDescription: "Smart writer:"; Check: OldWriterPresent
 
 [Files]
 Source: "{#SourceDir}\*"; DestDir: "{app}"; \
@@ -134,7 +139,7 @@ end;
 // and the app fetches what is missing the first time it is needed.
 var
   ModelPage: TDownloadWizardPage;
-  Fetched: array[0..4] of Boolean;
+  Fetched: array[0..5] of Boolean;
 
 function ModelDir(): String;
 begin
@@ -148,9 +153,18 @@ begin
     1: Result := '{#VoiceFile}';
     2: Result := '{#SpeakersFile}';
     3: Result := '{#CutoutFile}';
+    4: Result := '{#EraserFile}';
   else
-    Result := '{#EraserFile}';
+    Result := '{#ProjFile}';
   end;
+end;
+
+function OldWriterPresent(): Boolean;
+var
+  Size: Int64;
+begin
+  Result := FileSize64(ModelDir() + '\{#OldModelFile}', Size)
+    and (Size = StrToInt64('{#OldModelSize}'));
 end;
 
 function ModelPresent(Index: Integer): Boolean;
@@ -164,8 +178,9 @@ begin
     1: Wanted := StrToInt64('{#VoiceSize}');
     2: Wanted := StrToInt64('{#SpeakersSize}');
     3: Wanted := StrToInt64('{#CutoutSize}');
+    4: Wanted := StrToInt64('{#EraserSize}');
   else
-    Wanted := StrToInt64('{#EraserSize}');
+    Wanted := StrToInt64('{#ProjSize}');
   end;
   Result := FileSize64(ModelDir() + '\' + ModelName(Index), Size) and (Size = Wanted);
 end;
@@ -174,7 +189,7 @@ procedure InitializeWizard();
 begin
   ModelPage := CreateDownloadPage(
     'Downloading the AI models',
-    'The open-source AI that writes scripts (2.5 GB), the voice that reads them '
+    'The open-source AI that writes scripts and looks at pictures (3 GB), the voice that reads them '
     + '(0.4 GB) and, if you chose them, the AI photo tools (0.2 GB) run on your PC '
     + 'and are downloaded once. '
     + 'You can cancel: the app will download them later.', nil);
@@ -183,20 +198,26 @@ end;
 function NextButtonClick(CurPageID: Integer): Boolean;
 var
   Index: Integer;
-  Wanted: array[0..4] of Boolean;
+  Wanted: array[0..5] of Boolean;
   Any: Boolean;
 begin
   Result := True;
   if CurPageID <> wpReady then
     exit;
   ModelPage.Clear;
-  for Index := 0 to 4 do
+  for Index := 0 to 5 do
   begin
     Fetched[Index] := False;
     Wanted[Index] := not ModelPresent(Index);
   end;
   // The photo tools only when their box is ticked; someone who already has them
   // (downloaded by 5.2.0's editor) is skipped by ModelPresent above.
+  // An update from 5.2: the new Smart writer only when its box is ticked, never silently.
+  if OldWriterPresent() and (WizardSilent or not WizardIsTaskSelected('newwriter')) then
+  begin
+    Wanted[0] := False;
+    Wanted[5] := False;
+  end;
   // Never in a silent update from inside the app: 190 MB nobody asked for right then.
   if WizardSilent or not WizardIsTaskSelected('phototools') then
   begin
@@ -210,12 +231,14 @@ begin
     ModelPage.Add('{#SpeakersUrl}', '{#SpeakersFile}', '{#SpeakersSha256}');
   if Wanted[0] then
     ModelPage.Add('{#ModelUrl}', '{#ModelFile}', '{#ModelSha256}');
+  if Wanted[5] then
+    ModelPage.Add('{#ProjUrl}', '{#ProjFile}', '{#ProjSha256}');
   if Wanted[3] then
     ModelPage.Add('{#CutoutUrl}', '{#CutoutFile}', '{#CutoutSha256}');
   if Wanted[4] then
     ModelPage.Add('{#EraserUrl}', '{#EraserFile}', '{#EraserSha256}');
   Any := False;
-  for Index := 0 to 4 do
+  for Index := 0 to 5 do
     Any := Any or Wanted[Index];
   if not Any then
     exit;
@@ -235,7 +258,7 @@ begin
         mbInformation, MB_OK, IDOK);
     end;
     // A file that arrived whole is kept even if a later one failed.
-    for Index := 0 to 4 do
+    for Index := 0 to 5 do
       Fetched[Index] := Wanted[Index]
         and FileExists(ExpandConstant('{tmp}\') + ModelName(Index));
   finally
@@ -250,7 +273,7 @@ var
 begin
   if CurStep <> ssPostInstall then
     exit;
-  for Index := 0 to 4 do
+  for Index := 0 to 5 do
     if Fetched[Index] then
     begin
       Source := ExpandConstant('{tmp}\') + ModelName(Index);
@@ -267,6 +290,7 @@ end;
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
   SettingsDir: String;
+  ResultCode: Integer;
 begin
   // Do not silently delete the settings: they hold the user's Pexels API key
   // and their script. Ask, default to No, and let a silent uninstall keep them.
@@ -276,8 +300,15 @@ begin
     if DirExists(SettingsDir) then
       if SuppressibleMsgBox(
            'Also remove your AI Video Studio settings?' #13#10 #13#10
-           + 'This deletes your saved Pexels API key and your script.',
+           + 'This deletes your saved API keys (Pexels, Pixabay) and your script.',
            mbConfirmation, MB_YESNO, IDNO) = IDYES then
+      begin
         DelTree(SettingsDir, True, True, True);
+        // The API keys live in Windows Credential Manager (vidgen/keyvault.py), not the folder.
+        Exec(ExpandConstant('{sys}\cmdkey.exe'), '/delete:AIVideoStudio/api_key', '',
+             SW_HIDE, ewWaitUntilTerminated, ResultCode);
+        Exec(ExpandConstant('{sys}\cmdkey.exe'), '/delete:AIVideoStudio/pixabay_key', '',
+             SW_HIDE, ewWaitUntilTerminated, ResultCode);
+      end;
   end;
 end;

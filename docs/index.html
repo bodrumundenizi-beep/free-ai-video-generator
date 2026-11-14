@@ -17,7 +17,7 @@
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta name="twitter:card" content="summary_large_image">
-<link rel="preload" href="tip-still.png" as="image">
+<link rel="preload" href="promo-tall-still.png" as="image">
 <!-- the backgrounds are found late (inside the CSS), so ask for them at once; phones get smaller copies -->
 <link rel="preload" href="beam-small.jpg" as="image" media="(max-width: 820px)">
 <link rel="preload" href="metal-small.jpg" as="image" media="(max-width: 820px)">
@@ -276,6 +276,10 @@
   .clip { position: relative; justify-self: center; width: min(22.5rem, 100%); }
   .clip video { width: 100%; }   /* fills its frame at every size, so Pause stays on the video */
   .clip .pause { right: 12px; bottom: 12px; }
+  .clip.wide { width: 100%; margin: 0; }
+  .clip.wide video { display: block; height: auto; }
+  .clip.tall { margin: 0; }
+  .clip.tall video { display: block; height: auto; max-height: 60vh; width: auto; max-width: 100%; }
   .pause:hover { border-color: var(--coral); }
   .note { color: var(--coral); font-size: 0.95rem; margin: 12px 0 0; max-width: 46ch; }
   /* the app's highlight ring, drawn once round the finished video */
@@ -359,7 +363,7 @@
      one spot on the right. Each .feature dissolves into the grid, so the HTML stays a list. */
   @media (min-width: 821px) {
     .tour { display: grid; grid-template-columns: minmax(0, 0.65fr) minmax(0, 1.35fr);
-      grid-template-rows: repeat(6, auto); column-gap: 56px; }
+      grid-template-rows: repeat(8, auto); column-gap: 56px; }
     .tour .feature { display: contents; }
     .tour .feature > div { grid-column: 1; min-height: 75vh; display: flex; flex-direction: column;
       justify-content: center; opacity: 0.3; transition: opacity 0.5s; }
@@ -423,14 +427,14 @@
     <figure class="showcase">
       <div class="phone" id="phone">
         <button class="pause" type="button">Pause</button>
-        <video width="360" height="640" muted loop playsinline autoplay preload="metadata" poster="tip-still.png"
-               aria-label="A tech-tip Short made by the app: it opens Settings, searches for Startup apps and points at the switches">
-          <source src="tip.webm" type="video/webm">
-          <source src="tip.mp4" type="video/mp4">
+        <video width="360" height="640" muted loop playsinline autoplay preload="metadata" poster="promo-tall-still.png"
+               aria-label="A promo video of AI Video Studio made by its own Promo video feature: screenshots, feature cards and the logo">
+          <source src="promo-tall.webm" type="video/webm">
+          <source src="promo-tall.mp4" type="video/mp4">
         </video>
         <svg viewBox="0 0 388 696" preserveAspectRatio="none" aria-hidden="true"><defs><linearGradient id="frame" x1="1" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2A3A1A"/><stop offset="0.35" stop-color="#14181F"/><stop offset="1" stop-color="#0E1117"/></linearGradient></defs><rect x="3" y="3" width="382" height="690" rx="46"/></svg>
       </div>
-      <figcaption>Recorded by the app itself with Show it on my PC (beta): it found the setting, recorded the steps and put everything back.</figcaption>
+      <figcaption>Made by the app, about itself, with the new Promo video feature.</figcaption>
     </figure>
   </div>
 
@@ -485,6 +489,35 @@
         <p>When a line says “press Windows and V”, the keys appear over the footage. Big numbers and short lists get a card too.</p>
       </div>
       <picture><source srcset="card.webp" type="image/webp"><img class="shot grow tall" src="card.png" decoding="async" width="405" height="720" alt="A video frame with Win plus V drawn as two keys"></picture>
+    </div>
+    <div class="feature">
+      <div>
+        <h3>A promo video for your own app</h3>
+        <p>Give it your project’s folder or GitHub link. It finds the screenshots and logo, writes the lines from your README and makes a 15 to 25 second launch video, with music and sounds on the beat. This one was made by the app, about itself.</p>
+      </div>
+      <figure class="shot clip wide">
+        <button class="pause" type="button">Pause</button>
+        <video width="960" height="540" muted loop playsinline autoplay preload="none" poster="promo-still.png"
+               aria-label="A promo video of AI Video Studio made by its own Promo video feature: screenshots, feature cards and the logo">
+          <source src="promo.webm" type="video/webm">
+          <source src="promo.mp4" type="video/mp4">
+        </video>
+      </figure>
+    </div>
+
+    <div class="feature">
+      <div>
+        <h3>Show it on my PC (beta)</h3>
+        <p>For a Windows tip, the app does it on your screen: it finds the setting, records the steps and puts everything back. This Short was recorded that way.</p>
+      </div>
+      <figure class="shot clip tall">
+        <button class="pause" type="button">Pause</button>
+        <video width="360" height="640" muted loop playsinline autoplay preload="none" poster="tip-still.png"
+               aria-label="A tech-tip Short made by Show it on my PC: the app opens Settings, searches for Startup apps and points at the switches">
+          <source src="tip.webm" type="video/webm">
+          <source src="tip.mp4" type="video/mp4">
+        </video>
+      </figure>
     </div>
     </div>
   </section>

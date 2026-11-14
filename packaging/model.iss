@@ -1,21 +1,44 @@
 ; The Smart writer's model, for the installer's download page.
 ;
-; These four values must be the same as MODEL in src/vidgen/writer.py - the app
+; These four values must be the same as NEW in src/vidgen/writer.py - the app
 ; only accepts a model file with exactly that size and SHA-256.
 ; tests/test_packaging.py fails if the two ever differ.
 ; (#ifndef so a test build can point the installer at a small local file.)
 
 #ifndef ModelFile
-  #define ModelFile "Qwen3-4B-Q4_K_M.gguf"
+  #define ModelFile "Qwen3VL-4B-Instruct-Q4_K_M.gguf"
 #endif
 #ifndef ModelUrl
-  #define ModelUrl "https://huggingface.co/Qwen/Qwen3-4B-GGUF/resolve/main/Qwen3-4B-Q4_K_M.gguf"
+  #define ModelUrl "https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct-GGUF/resolve/main/Qwen3VL-4B-Instruct-Q4_K_M.gguf"
 #endif
 #ifndef ModelSize
-  #define ModelSize "2497280256"
+  #define ModelSize "2497281664"
 #endif
 #ifndef ModelSha256
-  #define ModelSha256 "7485fe6f11af29433bc51cab58009521f205840f5b4ae3a32fa7f92e8534fdf5"
+  #define ModelSha256 "66358cb18bb6b3b1b6675aa412c7a88ef01d228f481184d13668e5201c730a0a"
+#endif
+
+; Its image reader (5.3: the Smart writer also looks at pictures). NEW_PROJ in writer.py.
+#ifndef ProjFile
+  #define ProjFile "mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf"
+#endif
+#ifndef ProjUrl
+  #define ProjUrl "https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct-GGUF/resolve/main/mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf"
+#endif
+#ifndef ProjSize
+  #define ProjSize "453974304"
+#endif
+#ifndef ProjSha256
+  #define ProjSha256 "30ba2c7dd3127a4561b6cba9d13d0f711c91bdb38742e2f56d73c8cb596bd06d"
+#endif
+
+; 5.2's Smart writer (MODEL in writer.py). Only looked for: when it is there, this is an
+; update, and the new one is a ticked box instead of a given.
+#ifndef OldModelFile
+  #define OldModelFile "Qwen3-4B-Q4_K_M.gguf"
+#endif
+#ifndef OldModelSize
+  #define OldModelSize "2497280256"
 #endif
 
 ; The offline voice: its model and its speakers. The same rule: these must be

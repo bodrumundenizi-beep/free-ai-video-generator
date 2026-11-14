@@ -59,6 +59,10 @@ The Smart writer runs a language model on the user's PC. Two things are involved
   Cloud), the model. It is **not** part of this download: the installer or the
   app fetches the unmodified file `Qwen3-4B-Q4_K_M.gguf` from the publisher's
   Hugging Face page, and checks its SHA-256, pinned in `src/vidgen/writer.py`.
+- **[Qwen3-VL 4B Instruct](https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct-GGUF)** (Apache 2.0,
+  Alibaba Cloud), the Smart writer from 5.3 on: it writes and looks at pictures. Fetched the
+  same way (`Qwen3VL-4B-Instruct-Q4_K_M.gguf` and `mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf`).
+  Qwen3 4B stays for AI pictures, which use it as their text part.
 
 ## The offline voice: Kokoro (Apache 2.0) and espeak-ng (GPL-3.0)
 
@@ -169,3 +173,34 @@ Nothing of it is bundled in the installer; everything is pinned and checked by S
 
 Voices made with it are made from the user's own recording, on their PC; the recording and the
 voice stay there.
+
+## Promo videos: ideas from /brag (MIT), fonts (SIL Open Font License 1.1)
+
+The promo video's rules (hook first, reading time, seven tones, one-by-one reveals) follow the
+`/brag` skill by Shunit Haviv Hakimi (https://github.com/latent-spaces/brag), MIT License,
+Copyright (c) 2026 Shunit Haviv Hakimi. No code or music from it is included; its music is
+under a different licence (CC BY 4.0) and is not used.
+
+| Font | Author | Licence |
+|---|---|---|
+| Bricolage Grotesque | Mathieu Triay | SIL Open Font License 1.1 |
+| Atkinson Hyperlegible | Braille Institute of America | SIL Open Font License 1.1 |
+
+The frames are drawn by a Chromium browser already on the user's PC (Microsoft Edge, Google
+Chrome or Brave); none is included.
+
+## Promo video sound effects (CC0, public domain)
+
+Ten short sounds in `assets/sfx`, chosen with /brag's sound analysis: four from the Kenney
+sound packs by Kenney (https://kenney.nl, CC0 1.0) and six key presses from "Keyboard Soundpack
+#1" by unicae_games (https://opengameart.org, CC0). See `assets/sfx/README.md`.
+
+## Promo videos without a browser: pywebview (BSD-3-Clause) and pythonnet (MIT)
+
+On a PC with no Edge, Chrome or Brave, promo videos are drawn by Windows' own WebView2 runtime
+(part of Windows; not included) inside a small helper window. That window is opened with
+[pywebview](https://github.com/r0x0r/pywebview) (BSD-3-Clause, Copyright (c) 2014-2017 Roman
+Sirokov), which reaches WebView2 through [pythonnet](https://github.com/pythonnet/pythonnet)
+(MIT) and clr_loader (MIT), with proxy_tools (MIT) and bottle (MIT). Microsoft's
+WebView2 SDK libraries that pywebview ships (`Microsoft.Web.WebView2.Core.dll`,
+`Microsoft.Web.WebView2.WinForms.dll`) are under Microsoft's WebView2 SDK licence (BSD-style).

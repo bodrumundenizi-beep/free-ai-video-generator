@@ -8,8 +8,8 @@ narration, and it fetches matching stock footage from Pexels, generates a neural
 voiceover, and renders a 1080p or 720p MP4 in portrait or landscape.
 
 <p align="center">
-  <img src="docs/demo.gif" width="300" alt="A Short made by AI Video Studio: stock footage with word-by-word captions"><br>
-  <em>Made from a six-scene script: footage, voice and captions are automatic.</em>
+  <img src="docs/promo.gif" width="560" alt="A promo video of AI Video Studio, made by its own Promo video feature"><br>
+  <em>A promo of AI Video Studio, made by the app's own Promo video feature (new in 5.3).</em>
 </p>
 
 ## Features
@@ -38,6 +38,7 @@ voiceover, and renders a 1080p or 720p MP4 in portrait or landscape.
 - **Thumbnail editor:** Change the thumbnail with text, arrows, circles, stickers and Pexels or Pixabay photos.
 - **Your photos in the video:** Add up to 10 photos to Make new video. The app sees what is in each one, writes the script around them and puts each photo in the scene about it.
 - **Image editor:** Paint a part of a photo and **Change** it with words ("make the car green"), **Erase** it, or **Remove the background**, all on your PC.
+- **Promo videos:** A 15 to 25 second launch video for your own app or website, from its folder, README or GitHub link. See [Promo videos](#promo-videos).
 - **Other languages:** Make the same video in Spanish, French, Italian, Portuguese or Hindi.
 - **Sound effects:** A soft pop when a card appears, made by the app itself.
 - **Portrait or landscape:** 9:16 for Shorts and TikTok, 16:9 for YouTube, at 1080p or 720p.
@@ -61,7 +62,7 @@ folder is somewhere Windows won't let it write, such as Program Files). Your set
 API keys, projects and the Smart writer are kept.
 (Running from source still needs all three; see below.)
 
-**The AI models are a separate 2.9 GB download:** the voice (0.4 GB) and the Smart writer (2.5 GB). The installer fetches both during setup (and, if you leave its box ticked, the 0.2 GB AI photo tools for the Image editor); the portable version fetches the voice the first time you make a video and the Smart writer the first time you use **New from text**. They are downloaded once and kept when you update the app. See [New from text](#new-from-text) below.
+**The AI models are a separate 3.4 GB download:** the voice (0.4 GB) and the Smart writer (3 GB). The installer fetches both during setup (and, if you leave its box ticked, the 0.2 GB AI photo tools for the Image editor); the portable version fetches the voice the first time you make a video and the Smart writer the first time you use **New from text**. They are downloaded once and kept when you update the app. See [New from text](#new-from-text) below.
 
 ### System requirements
 
@@ -75,16 +76,16 @@ API keys, projects and the Smart writer are kept.
 ### Windows will warn you the first time
 
 These builds are not code-signed, because a signing certificate costs several
-hundred dollars a year. The project has applied to the
-[SignPath Foundation](https://signpath.org/) for free open-source code signing
-and is waiting for a reply. Until then, SmartScreen will show **"Windows protected your PC"**,
+hundred dollars a year. Free open-source signing (the
+[SignPath Foundation](https://signpath.org/)) asks for a more widely known project
+first, so the plan is to apply again later. Until then, SmartScreen will show **"Windows protected your PC"**,
 where the only obvious button is *Don't run*. Click **More info** → **Run anyway**.
 
 You can confirm you have the real file by checking its hash against
 `SHA256SUMS.txt` on the release page:
 
 ```powershell
-Get-FileHash .\AIVideoStudio-5.2.1-setup.exe -Algorithm SHA256
+Get-FileHash .\AIVideoStudio-5.3.0-setup.exe -Algorithm SHA256
 ```
 
 ## The quick way
@@ -193,7 +194,8 @@ good graphics card), the app draws a picture for every scene and never asks for 
 the video is done it mentions once that a free key would add real video clips; tick **Don't
 show again** and it won't.
 
-Keys are stored in plain text in `%APPDATA%\AIVideoStudio\settings.json`.
+Keys are kept in **Windows Credential Manager** (under `AIVideoStudio/...`), not in the settings
+file. Updating from 5.2 or older moves them there by itself; uninstalling the app removes them.
 
 ![Settings](docs/settings.png)
 
@@ -234,11 +236,10 @@ wheat"). Fix the sentence if it's wrong, or type your own.
 - When the video is saved, the photos are copied into its project, so it still
   works if you move or delete the originals.
 
-Looking at photos is done on your PC by
-[SmolVLM 500M](https://huggingface.co/ggml-org/SmolVLM-500M-Instruct-GGUF)
-(Apache 2.0 licence), part of the Smart writer's download (0.5 GB more). If you
-downloaded the Smart writer before 5.0, **Settings → Smart writer** offers just
-the photo part. It takes about a second a photo with a graphics card.
+Looking at photos is done on your PC by the Smart writer itself
+([Qwen3-VL 4B](https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct-GGUF), see
+[About the Smart writer](#about-the-smart-writer)). It takes about a second a
+photo with a graphics card.
 
 ![Photos in New from text](docs/photos.png)
 
@@ -260,12 +261,19 @@ to change only a little between audiences.
 
 ### About the Smart writer
 
-The Smart writer is [Qwen3 4B](https://huggingface.co/Qwen/Qwen3-4B-GGUF), an
-open-source language model (Apache 2.0 licence), run on your PC by
-[llama.cpp](https://github.com/ggml-org/llama.cpp) (MIT licence).
+From 5.3 the Smart writer is [Qwen3-VL 4B](https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct-GGUF),
+an open-source model (Apache 2.0 licence) that both writes and looks at pictures, run on
+your PC by [llama.cpp](https://github.com/ggml-org/llama.cpp) (MIT licence). It replaces
+Qwen3 4B plus SmolVLM 500M: it describes photos far better and reads the exact words on
+app screenshots.
+
+- **Updating from 5.2 or older:** the installer has a box to download it (about 3 GB).
+  Once it is in, the app asks once whether to delete the old writer. If you use
+  [AI pictures](#ai-pictures-optional), keep it: the picture model uses Qwen3 4B to
+  read your prompt (with Qwen3-VL in its place the pictures came out glitchy).
 
 - **Private:** your text never leaves your computer. No account and no key.
-- **One download:** 3 GB (the writer, and SmolVLM 500M for photos), saved in `%LOCALAPPDATA%\AIVideoStudio\models`. A
+- **One download:** 3 GB (the writer and its picture reader), saved in `%LOCALAPPDATA%\AIVideoStudio\models`. A
   cancelled download carries on from where it stopped. **Settings → Smart
   writer** shows its state and can download or repair it.
 - **Memory:** it uses about 5 GB while it writes and gives it back straight
@@ -737,6 +745,30 @@ description.
 
 ![Script](docs/create.png)
 
+## Promo videos
+
+On Home, press **Make a promo** (or **New → Promo video**). It makes a 15 to 25 second
+launch video for your own app or website.
+
+1. **Your app:** pick the project's folder or its README, or paste a GitHub link
+   (`github.com/you/your-app`). Its README pictures, screenshots and logo are found for
+   you; add your own screenshots too. The app never reads `.env` files, keys or `.git`,
+   and leaves out lines that look like a password or key.
+2. **The lines:** press **Fill in with the Smart writer** and it writes the first line and
+   three features from the README, each one checked against the README's own words. Change
+   any line you like.
+3. **Tone, shape and length:** seven tones (from calm to loud), 16:9, 9:16 or 1:1, and
+   music picked to fit the tone, with cuts and sound effects on its beat. Sliders set the
+   video and effects volume.
+4. Press **Make promo video**. You get the MP4, a poster picture and a short text to post
+   with it (**Copy text**). Nothing is posted for you.
+
+The frames are drawn by a browser the app starts in the background: Microsoft Edge, Google
+Chrome, Brave, Chromium or Vivaldi, whichever is on the PC. With none of them, it uses
+Windows' own WebView2 in a small off-screen window. It all runs offline; only a GitHub link
+needs the internet, to read that project's README and pictures (kept for a while, so a
+second try doesn't ask GitHub again).
+
 ## Options
 
 Shape (aspect ratio), voice, length, captions and the AI picture look are set per video
@@ -763,6 +795,8 @@ Output size follows both settings: 9:16 at 1080p is 1080×1920, 16:9 at 720p is
 | | |
 |---|---|
 | Settings | `%APPDATA%\AIVideoStudio\settings.json` |
+| API keys | Windows Credential Manager, under `AIVideoStudio/...` |
+| Promo videos | Wherever you choose in the Save window, with a `.jpg` poster next to it |
 | My videos | `%APPDATA%\AIVideoStudio\projects`: script, settings, thumbnail and AI pictures of each video (about 1 MB a picture). The videos themselves stay where you saved them |
 | Free thumbnails | `%APPDATA%\AIVideoStudio\thumbnails`: one folder each, with the pictures used in it |
 | Rendered video | Wherever you choose in the Save window; it opens in your Videos folder the first time. An existing video is only replaced if you confirm it |
@@ -870,7 +904,7 @@ python packaging/fetch_espeak.py
 python packaging/fetch_birefnet.py
 python packaging/fetch_lama.py
 pyinstaller --noconfirm --clean packaging/ai_video_studio.spec
-"%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe" /DMyAppVersion=5.2.1 packaging\installer.iss
+"%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe" /DMyAppVersion=5.3.0 packaging\installer.iss
 ```
 
 That is where Inno Setup goes when installed for one user; installed for everyone, it is
@@ -889,7 +923,7 @@ The Windows builds are **not code-signed**, so Windows shows a SmartScreen
 warning the first time you run them (see [Download](#download) for how to get
 past it and how to check the file's SHA-256 hash). The project has applied to
 the [SignPath Foundation](https://signpath.org/) for free open-source code
-signing; signed builds will follow if it is accepted.
+signing, which wants a more widely known project first; it will apply again later.
 
 - **Builds:** every release is built from this repository by GitHub Actions
   ([release workflow](.github/workflows/release.yml)); nothing is built or

@@ -42,11 +42,13 @@ def is_photo(path: str) -> bool:
 
 
 def _launch(exe: str, _model_file: str, port: int, gpu: bool = False):
-    """writer._launch, with the photo model and its image reader."""
+    """writer._launch, with the photo model and its image reader: the new Smart writer when
+    it is there, else 5.2's SmolVLM."""
+    model, reader = ((writer.NEW, writer.NEW_PROJ) if writer.upgraded()
+                     else (writer.VISION, writer.VISION_PROJ))
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     return subprocess.Popen(
-        [exe, "-m", writer.model_path(writer.VISION),
-         "--mmproj", writer.model_path(writer.VISION_PROJ),
+        [exe, "-m", writer.model_path(model), "--mmproj", writer.model_path(reader),
          "--host", "127.0.0.1", "--port", str(port), "-c", "4096", "-np", "1", "--no-webui",
          "-ngl", writer.GPU_LAYERS if gpu else "0"],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,

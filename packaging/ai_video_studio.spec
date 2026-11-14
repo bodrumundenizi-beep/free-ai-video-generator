@@ -29,6 +29,19 @@ MUSIC = [
     if name.lower().endswith(MUSIC_EXTS)
 ]
 
+# Promo videos (5.3): the page every frame is drawn from, and its fonts (OFL), read at
+# runtime from _internal/vidgen/promo by vidgen.promo.here().
+PROMO_SRC = os.path.join(ROOT, "src", "vidgen", "promo")
+PROMO = [(os.path.join(PROMO_SRC, "scene.html"), os.path.join("vidgen", "promo"))] + [
+    (os.path.join(PROMO_SRC, "fonts", name), os.path.join("vidgen", "promo", "fonts"))
+    for name in os.listdir(os.path.join(PROMO_SRC, "fonts")) if name.endswith((".woff2", ".md"))
+]
+
+# The promo videos' sound effects (CC0, assets/sfx), looked up by asset_path().
+SFX_SRC = os.path.join(ROOT, "assets", "sfx")
+SFX = [(os.path.join(SFX_SRC, name), os.path.join("assets", "sfx"))
+       for name in os.listdir(SFX_SRC) if name.lower().endswith((".ogg", ".wav", ".md"))]
+
 # llama.cpp runs the Smart writer's model as a separate program. Its server and
 # the libraries it loads are copied as plain data into _internal/llama, where
 # vidgen.writer.runtime_path() looks: as data, not binaries, so PyInstaller
@@ -72,11 +85,13 @@ a = Analysis(
     # imageio reads its own version from package metadata when imported (the
     # only bundled library that does); without it the frozen app fails every
     # render with "No package metadata was found for imageio".
-    datas=[(ICON, "assets")] + MUSIC + LLAMA + ESPEAK + BIREFNET + LAMA + copy_metadata("imageio"),
+    datas=[(ICON, "assets")] + MUSIC + PROMO + SFX + LLAMA + ESPEAK + BIREFNET + LAMA + copy_metadata("imageio"),
     hiddenimports=[
         # Imported inside a try/except in apply_window_effects(); PyInstaller's
         # scan does find it, but being explicit costs nothing.
         "pywinstyles",
+        # The promo videos' WebView2 helper (vidgen/promo/webhost.py): imported only when run.
+        "webview", "webview.platforms.edgechromium", "webview.platforms.winforms", "clr",
         # edge_tts and moviepy are imported lazily inside functions.
         "edge_tts",
         # The engine's heavy half is imported lazily by vidgen.render.

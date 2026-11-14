@@ -1135,7 +1135,7 @@ class DraftDialog(ctk.CTkToplevel):
         """Say what the chosen writer does, and what the button will do."""
         if self._restore != self.show_ask or self.busy:
             return
-        model, size = writer.MODEL, writer_size()
+        model, size = writer.current(), writer_size()
         if self.needs_download() and writer.installed():
             hint = (f"To look at your photos the Smart writer needs its photo part, a one-time "
                     f"download of {size} ({writer.VISION.name}, {writer.VISION.licence} "

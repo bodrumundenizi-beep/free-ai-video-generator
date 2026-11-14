@@ -26,7 +26,9 @@ def test_the_installer_downloads_exactly_the_model_the_app_accepts():
 
     defines = dict(re.findall(r'#define (\w+) "([^"]*)"', read("packaging", "model.iss")))
     expected = {}
-    for prefix, model in (("Model", writer.MODEL), ("Voice", localvoice.MODEL),
+    expected |= {"OldModelFile": writer.MODEL.file, "OldModelSize": str(writer.MODEL.size)}
+    for prefix, model in (("Model", writer.NEW), ("Proj", writer.NEW_PROJ),
+                          ("Voice", localvoice.MODEL),
                           ("Speakers", localvoice.SPEAKERS), ("Cutout", cutout.WEIGHTS),
                           ("Eraser", eraser.WEIGHTS)):
         expected |= {prefix + "File": model.file, prefix + "Url": model.url,

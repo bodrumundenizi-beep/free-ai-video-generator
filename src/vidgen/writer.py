@@ -88,7 +88,29 @@ VISION_PROJ = Model(   # the part that turns a picture into something the model 
     sha256="d1eb8b6b23979205fdf63703ed10f788131a3f812c7b1f72e0119d5d81295150",
     licence="Apache 2.0",
 )
-FILES = (MODEL, VISION, VISION_PROJ)
+FILES = (MODEL, VISION, VISION_PROJ)   # 5.2's Smart writer: writes with Qwen3 4B, sees with SmolVLM
+
+# 5.3: one model that writes and sees (chosen 2026-11-13: it read app screenshots' exact labels
+# and described every test photo right, where SmolVLM saw snow on a beach). Qwen3 4B stays on
+# disk for AI pictures, which use it as their text part (Qwen3-VL there gave glitchy pictures).
+_QWEN_VL = "https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct-GGUF/resolve/main/"
+NEW = Model(
+    name="Qwen3-VL 4B",
+    file="Qwen3VL-4B-Instruct-Q4_K_M.gguf",
+    url=_QWEN_VL + "Qwen3VL-4B-Instruct-Q4_K_M.gguf",
+    size=2_497_281_664,
+    sha256="66358cb18bb6b3b1b6675aa412c7a88ef01d228f481184d13668e5201c730a0a",
+    licence="Apache 2.0",
+)
+NEW_PROJ = Model(
+    name="Qwen3-VL 4B image reader",
+    file="mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf",
+    url=_QWEN_VL + "mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf",
+    size=453_974_304,
+    sha256="30ba2c7dd3127a4561b6cba9d13d0f711c91bdb38742e2f56d73c8cb596bd06d",
+    licence="Apache 2.0",
+)
+NEW_FILES = (NEW, NEW_PROJ)
 
 SERVER_EXE = "llama-server.exe"
 GPU_LAYERS = "99"  # more layers than the model has: all of it on the graphics card
@@ -121,23 +143,58 @@ def _part_path(model: Model | None = None) -> str:
 
 
 def installed(model: Model | None = None) -> bool:
-    """Whether the whole model file is there. Its contents were checked when it arrived."""
-    model = model or MODEL
+    """Whether the whole file is there (its contents were checked when it arrived). With no
+    ``model``: whether a Smart writer is there, the new one or 5.2's."""
+    if model is None:
+        return upgraded() or installed(MODEL)
     try:
         return os.path.getsize(model_path(model)) == model.size
     except OSError:
         return False
 
 
+def upgraded() -> bool:
+    """Whether the new Smart writer (Qwen3-VL, writes and sees) is all there."""
+    return all(installed(m) for m in NEW_FILES)
+
+
+def current() -> Model:
+    """The model that writes: the new one, unless only 5.2's is there."""
+    return MODEL if installed(MODEL) and not upgraded() else NEW
+
+
 def sees() -> bool:
-    """Whether the photo model is there too (photos.py)."""
-    return installed(VISION) and installed(VISION_PROJ)
+    """Whether the Smart writer can look at photos (photos.py)."""
+    return upgraded() or (installed(VISION) and installed(VISION_PROJ))
+
+
+def can_upgrade() -> bool:
+    """5.2's Smart writer is there and the new one isn't: offer it."""
+    return installed(MODEL) and not upgraded()
 
 
 def missing() -> list[Model]:
-    """The Smart writer's files still to download: all three, or only the photo model for a
-    copy downloaded before 5.0."""
-    return [m for m in FILES if not installed(m)]
+    """The Smart writer's files still to download: the new model for a new user; for 5.2's
+    writer, only its photo model if that was never fetched (the new one is offered apart)."""
+    if upgraded():
+        return []
+    if installed(MODEL):
+        return [m for m in (VISION, VISION_PROJ) if not installed(m)]
+    return [m for m in NEW_FILES if not installed(m)]
+
+
+def files() -> tuple[Model, ...]:
+    """The files the Smart writer uses now (for the sizes Settings shows, and Repair)."""
+    return NEW_FILES if upgraded() else FILES
+
+
+def old_files(keep_for_pictures: bool) -> list[Model]:
+    """5.2's files the new Smart writer no longer needs, once it is all there. Qwen3 4B stays
+    while ``keep_for_pictures``: AI pictures use it as their text part."""
+    if not upgraded():
+        return []
+    old = [VISION, VISION_PROJ] + ([] if keep_for_pictures else [MODEL])
+    return [m for m in old if os.path.exists(model_path(m)) or os.path.exists(_part_path(m))]
 
 
 def remove(model: Model | None = None) -> None:
@@ -274,9 +331,10 @@ def download(progress=None, should_stop=None, session=None, model: Model | None 
     return model_path(model)
 
 
-def download_all(progress=None, should_stop=None, session=None) -> None:
-    """Every file in ``missing()``, with one ``progress(done, total)`` across them."""
-    files = missing()
+def download_all(progress=None, should_stop=None, session=None, upgrade: bool = False) -> None:
+    """Every file in ``missing()`` (or, with ``upgrade``, the new Smart writer's), with one
+    ``progress(done, total)`` across them."""
+    files = [m for m in NEW_FILES if not installed(m)] if upgrade else missing()
     total, before = sum(m.size for m in files), 0
     for model in files:
         def report(done, _total, base=before):
@@ -406,7 +464,12 @@ def build_prompt(audience: draft.Audience, words: int, pictures: bool = False,
            "as written there. Leave out anything they don't say. No greetings, hashtags or "
            "emojis.\n" if facts else
            "- No greetings, hashtags or emojis.\n" if idea else
-           "- Use only facts from the text. No greetings, hashtags or emojis.\n")
+           # Tested 2026-11-13: without the "even a true one" part, Qwen3-VL added true but
+           # unasked facts ("copper blood") and boasts ("massive library") to fill the scenes.
+           "- Use only facts from the text. Never add a fact, number, name, feature or claim "
+           "the text does not say, even a true one, and no boasting words like massive or in "
+           "minutes. If the text runs out of points, say an earlier point again in other "
+           "words. No greetings, hashtags or emojis.\n")
         + "Answer with JSON only."
     )
 
@@ -922,7 +985,7 @@ class Session:
         port = _free_port()
         self._url = f"http://127.0.0.1:{port}"
         try:
-            self._proc = self._launch(runtime_path(), model_path(), port, self.gpu)
+            self._proc = self._launch(runtime_path(), model_path(current()), port, self.gpu)
         except OSError as exc:
             raise WriterError(f"The Smart writer could not be started: {exc}") from exc
         with _LIVE_LOCK:
