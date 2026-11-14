@@ -37,6 +37,9 @@ PROMO = [(os.path.join(PROMO_SRC, "scene.html"), os.path.join("vidgen", "promo")
     for name in os.listdir(os.path.join(PROMO_SRC, "fonts")) if name.endswith((".woff2", ".md"))
 ]
 
+# Tutorial videos (5.4): their page, read from _internal/vidgen/tutorial by vidgen.tutorial.here().
+TUTORIAL = [(os.path.join(ROOT, "src", "vidgen", "tutorial", "scene.html"), os.path.join("vidgen", "tutorial"))]
+
 # The promo videos' sound effects (CC0, assets/sfx), looked up by asset_path().
 SFX_SRC = os.path.join(ROOT, "assets", "sfx")
 SFX = [(os.path.join(SFX_SRC, name), os.path.join("assets", "sfx"))
@@ -85,7 +88,7 @@ a = Analysis(
     # imageio reads its own version from package metadata when imported (the
     # only bundled library that does); without it the frozen app fails every
     # render with "No package metadata was found for imageio".
-    datas=[(ICON, "assets")] + MUSIC + PROMO + SFX + LLAMA + ESPEAK + BIREFNET + LAMA + copy_metadata("imageio"),
+    datas=[(ICON, "assets")] + MUSIC + PROMO + TUTORIAL + SFX + LLAMA + ESPEAK + BIREFNET + LAMA + copy_metadata("imageio"),
     hiddenimports=[
         # Imported inside a try/except in apply_window_effects(); PyInstaller's
         # scan does find it, but being explicit costs nothing.

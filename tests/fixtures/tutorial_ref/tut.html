@@ -1,0 +1,154 @@
+<!doctype html><html><head><meta charset="utf-8"><style>
+:root{--accent:#E8763A}
+html,body{margin:0;width:1920px;height:1080px;overflow:hidden;background:#0a0a0a;font-family:'Segoe UI'}
+.back{position:absolute;inset:-80px;background:url(s1.png) center/cover;filter:blur(44px) brightness(.42) saturate(1.1)}
+.blob{position:absolute;border-radius:50%;background:var(--accent);opacity:.16;filter:blur(130px)}
+#cam{position:absolute;left:0;top:0;width:1586px;height:926px;transform-origin:0 0;border-radius:10px;overflow:hidden;
+  box-shadow:0 40px 100px rgba(0,0,0,.65),0 0 0 1px rgba(255,255,255,.08)}
+#cam img{position:absolute;inset:0;width:100%;height:100%;opacity:0}
+#draw{position:absolute;z-index:3;border:2px solid #1a4a66;background:#17607f;opacity:0}
+#spot{position:absolute;inset:0;pointer-events:none}
+.ring{position:absolute;border:4px solid var(--accent);border-radius:50%;opacity:0;box-shadow:0 0 24px var(--accent)}
+#cursor{position:absolute;width:40px;height:52px;filter:drop-shadow(0 4px 8px rgba(0,0,0,.55))}
+#callout{position:absolute;background:rgba(32,32,32,.96);border:1px solid rgba(255,255,255,.14);border-radius:8px;
+  padding:14px 22px;color:#fff;font:600 30px 'Segoe UI';box-shadow:0 18px 40px rgba(0,0,0,.45);opacity:0;white-space:nowrap}
+#callout:after{content:"";position:absolute;left:50%;top:-9px;margin-left:-9px;border:9px solid transparent;border-top:0;border-bottom-color:rgba(32,32,32,.96)}
+.step{position:absolute;left:64px;top:52px;display:flex;gap:16px;align-items:center;opacity:0}
+.pill{background:var(--accent);color:#1a0d05;font:600 26px 'Segoe UI';padding:9px 18px;border-radius:6px}
+.stitle{color:#fff;font:600 30px 'Segoe UI';background:rgba(20,20,20,.88);padding:7px 16px;border-radius:6px}
+.dots{position:absolute;right:64px;top:62px;display:flex;gap:10px;opacity:0;background:rgba(20,20,20,.88);padding:12px 14px;border-radius:6px}
+.dots b{width:44px;height:6px;border-radius:2px;background:rgba(255,255,255,.2)}
+.dots b.on{background:var(--accent)}
+#cap{position:absolute;left:50%;bottom:64px;background:rgba(24,24,24,.9);border-radius:8px;padding:18px 34px;color:#f0f0f0;
+  font:600 44px 'Segoe UI';white-space:nowrap;opacity:0}
+#cap em{font-style:normal;color:#1a0d05;background:var(--accent);border-radius:4px;padding:0 10px}
+.bar{position:absolute;left:0;bottom:0;height:7px;width:100%;background:rgba(255,255,255,.07)}
+.bar i{display:block;height:100%;width:0;background:var(--accent)}
+#title{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;opacity:0;
+  background:rgba(8,8,8,.55)}
+#title h1{margin:0;color:#fff;font:700 76px 'Segoe UI';letter-spacing:-1px}
+#title p{margin:0;color:#c9c9c9;font:400 34px 'Segoe UI'}
+#title .tag{background:var(--accent);color:#1a0d05;font:600 26px 'Segoe UI';padding:8px 18px;border-radius:6px}
+#recap{position:absolute;right:110px;top:50%;transform:translateY(-50%);background:rgba(28,28,28,.95);border-radius:10px;
+  padding:36px 44px;color:#fff;opacity:0;box-shadow:0 30px 70px rgba(0,0,0,.6);border:1px solid rgba(255,255,255,.1)}
+#recap h2{margin:0 0 22px;font:700 44px 'Segoe UI'}
+#recap div{font:400 30px 'Segoe UI';margin:14px 0;display:flex;gap:16px;align-items:center;opacity:0}
+#recap div b{width:38px;height:38px;border-radius:6px;background:var(--accent);color:#1a0d05;display:flex;align-items:center;
+  justify-content:center;font:700 26px 'Segoe UI'}
+</style></head><body>
+<div class="back"></div>
+<div class="blob" style="left:1350px;top:-250px;width:760px;height:760px"></div>
+<div class="blob" style="left:-260px;top:720px;width:640px;height:640px"></div>
+<div id="cam">
+  <img id="s1" src="s1.png"><img id="s1b" src="s1b.png"><img id="s2" src="s2.png"><img id="s3" src="s3.png">
+  <img id="s4" src="s4.png"><img id="s5" src="s5.png"><img id="s6" src="s6.png">
+  <div id="draw"></div>
+</div>
+<canvas id="spot" width="1920" height="1080"></canvas>
+<div class="ring" id="r1"></div><div class="ring" id="r2"></div>
+<svg id="cursor" viewBox="0 0 22 28"><path d="M1 1v22l6-5 4 9 4-2-4-8h8z" fill="#fff" stroke="#111" stroke-width="1.5" stroke-linejoin="round"/></svg>
+<div id="callout"></div>
+<div class="step" id="step"><span class="pill" id="pill">Step 1 of 4</span><span class="stitle">Add a coloured rectangle</span></div>
+<div class="dots" id="dots"><b></b><b></b><b></b><b></b></div>
+<div id="cap"></div>
+<div class="bar"><i id="prog"></i></div>
+<div id="title"><span class="tag">PowerPoint tutorial</span><h1>Add a coloured rectangle</h1><p>4 steps · 15 seconds</p></div>
+<div id="recap"><h2>Done!</h2>
+  <div><b>1</b>Insert → Shapes → Rectangle</div><div><b>2</b>Drag on the slide</div>
+  <div><b>3</b>Shape Format → Shape Fill</div><div><b>4</b>Pick a colour</div></div>
+<script>
+const T = 17;
+const ease = x => x < .5 ? 4*x*x*x : 1 - Math.pow(-2*x + 2, 3) / 2;
+const out = x => 1 - Math.pow(1 - x, 3);
+const clamp = x => Math.max(0, Math.min(1, x));
+function track(keys, t) {           // keys: [t, ...values]; eased between neighbours
+  if (t <= keys[0][0]) return keys[0].slice(1);
+  for (let i = 1; i < keys.length; i++) if (t <= keys[i][0]) {
+    const a = keys[i-1], b = keys[i], k = ease((t - a[0]) / (b[0] - a[0]));
+    return a.slice(1).map((v, j) => v + (b[j+1] - v) * k);
+  }
+  return keys[keys.length-1].slice(1);
+}
+// camera: [t, centre x, centre y, zoom] in screenshot pixels
+const CAM = [[0,793,463,1],[1.3,793,463,1],[2.0,330,170,1.9],[3.2,330,170,1.9],[3.8,470,260,1.9],[4.6,470,260,1.9],
+  [5.5,900,520,1.2],[7.6,900,520,1.2],[8.4,760,140,1.9],[10.6,620,220,1.9],[11.3,640,330,1.75],[12.9,640,330,1.75],[13.9,1080,463,0.9]];
+const CUR = [[0,860,640],[1.3,860,640],[2.15,211,68],[2.35,211,68],[3.0,394,112],[3.2,394,112],[4.0,459,204],[4.3,459,204],
+  [5.8,694,447],[6.0,694,447],[7.3,1128,688],[8.3,1128,688],[9.15,982,68],[9.35,982,68],[10.05,580,98],[10.3,580,98],
+  [12.3,603,400],[12.6,603,400],[14.0,1000,820]];
+const CLICKS = [[2.3,211,64],[3.1,394,112],[4.2,459,201],[6.0,694,447],[9.3,982,64],[10.15,580,95],[12.5,603,398]];
+const SHOTS = [[0,'s1'],[2.35,'s1b'],[3.15,'s2'],[4.6,'s1b'],[7.35,'s3'],[9.35,'s4'],[10.2,'s5'],[12.75,'s6']];
+const CALLOUTS = [[2.3,3.0,211,64,'Insert'],[3.1,3.9,394,112,'Shapes'],[4.2,4.75,459,201,'Rectangle'],
+  [9.3,10.0,982,64,'Shape Format'],[10.15,11.2,580,95,'Shape Fill'],[12.5,12.95,603,398,'Gold']];
+const STEPS = [[1.3,1,'Open <em>Insert</em>, then <em>Shapes</em>'],[5.2,2,'<em>Drag</em> on the slide to draw it'],
+  [8.3,3,'<em>Shape Format</em>, then <em>Shape Fill</em>'],[11.3,4,'Pick a <em>colour</em>']];
+const $ = id => document.getElementById(id);
+const cam = $('cam'), spot = $('spot').getContext('2d');
+let view = [0,0,1];
+function toScreen(x, y) { return [960 + (x - view[0]) * view[2], 520 + (y - view[1]) * view[2]]; }
+window.seek = function (t) {
+  view = track(CAM, t);
+  cam.style.transform = `translate(${960 - view[0]*view[2]}px,${520 - view[1]*view[2]}px) scale(${view[2]})`;
+  // screenshots crossfade
+  let cur = SHOTS[0][1], prev = null, since = 99;
+  for (const [s, id] of SHOTS) if (t >= s) { prev = cur; cur = id; since = t - s; }
+  for (const [, id] of SHOTS) { $(id).style.opacity = 0; $(id).style.zIndex = 0; }
+  const f = clamp(since / 0.18), fading = prev && prev !== cur && f < 1;
+  if (fading) { $(prev).style.opacity = 1; $(prev).style.zIndex = 1; }
+  $(cur).style.opacity = fading ? f : 1; $(cur).style.zIndex = 2;
+  // the rectangle being dragged out
+  const d = $('draw');
+  if (t >= 6.0 && t < 7.4) {
+    const p = track(CUR, t); d.style.opacity = 1;
+    d.style.left = 694 + 'px'; d.style.top = 447 + 'px';
+    d.style.width = Math.max(0, p[0] - 694) + 'px'; d.style.height = Math.max(0, p[1] - 447) + 'px';
+  } else d.style.opacity = 0;
+  // cursor
+  const c = track(CUR, t), cs = toScreen(c[0], c[1]);
+  const press = CLICKS.some(k => t >= k[0] && t < k[0] + 0.12) || (t >= 6.0 && t < 7.3);
+  $('cursor').style.left = cs[0] - 3 + 'px'; $('cursor').style.top = cs[1] - 2 + 'px';
+  $('cursor').style.transform = press ? 'scale(.86)' : 'none';
+  // click rings
+  const rings = [$('r1'), $('r2')]; rings.forEach(r => r.style.opacity = 0);
+  for (const [k, x, y] of CLICKS) {
+    const a = (t - k) / 0.6; if (a < 0 || a > 1) continue;
+    const [sx, sy] = toScreen(x, y);
+    rings.forEach((r, i) => { const e = clamp(a * (i ? 1.3 : 1)); const size = 30 + 110 * out(e);
+      r.style.width = r.style.height = size + 'px'; r.style.left = sx - size/2 + 'px'; r.style.top = sy - size/2 + 'px';
+      r.style.opacity = (1 - e) * (i ? .5 : .9); });
+  }
+  // callout + spotlight
+  spot.clearRect(0, 0, 1920, 1080);
+  const co = $('callout'); co.style.opacity = 0;
+  for (const [a, b, x, y, text] of CALLOUTS) {
+    if (t < a || t > b) continue;
+    const v = Math.min(clamp((t - a) / .2), clamp((b - t) / .2));
+    const [sx, sy] = toScreen(x, y);
+    co.textContent = text; co.style.opacity = v;
+    co.style.left = sx - co.offsetWidth / 2 + 'px'; co.style.top = sy + 46 + (1 - out(v)) * 14 + 'px';
+    const g = spot.createRadialGradient(sx, sy, 60, sx, sy, 520);
+    g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(1, `rgba(0,0,0,${.26 * v})`);
+    spot.fillStyle = g; spot.fillRect(0, 0, 1920, 1080);
+  }
+  // step, caption, progress
+  let st = null; for (const s of STEPS) if (t >= s[0]) st = s;
+  const inMain = t >= 1.3 && t < 14.2;
+  $('step').style.opacity = $('dots').style.opacity = inMain ? clamp((t - 1.3) / .3) : 0;
+  const cap = $('cap');
+  if (st && inMain) {
+    $('pill').textContent = `Step ${st[1]} of 4`;
+    [...$('dots').children].forEach((b, i) => b.className = i < st[1] ? 'on' : '');
+    cap.innerHTML = st[2];
+    const v = clamp((t - st[0]) / .3);
+    cap.style.opacity = v; cap.style.transform = `translateX(-50%) translateY(${(1 - out(v)) * 20}px)`;
+  } else cap.style.opacity = 0;
+  $('prog').style.width = (t / T * 100) + '%';
+  // title and recap
+  const ti = $('title'); ti.style.opacity = t < 1.4 ? Math.min(clamp(t / .3), clamp((1.4 - t) / .3)) : 0;
+  const rc = $('recap'); const rv = clamp((t - 14.2) / .4);
+  rc.style.opacity = rv; rc.style.transform = `translateY(-50%) translateX(${(1 - out(rv)) * 40}px)`;
+  [...rc.querySelectorAll('div')].forEach((row, i) => row.style.opacity = clamp((t - 14.5 - i * .3) / .3));
+};
+window.promoReady = false;
+Promise.all([document.fonts.ready, ...[...document.images].map(i => i.complete ? 1 : new Promise(r => i.onload = r))])
+  .then(() => { seek(0); window.promoReady = true; });
+</script></body></html>

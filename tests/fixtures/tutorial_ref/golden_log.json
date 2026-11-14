@@ -1,0 +1,21 @@
+{
+  "comment": "The reference's clicks as a recording log (window pixels; the screenshots are the window), for the golden test. Names and kinds as the recorder found them live on 2026-11-14.",
+  "title": "Presentation1 - PowerPoint",
+  "window": [0, 0, 1586, 926],
+  "size": [1586, 926],
+  "length": 17.0,
+  "clicks": [
+    {"t": 2.3, "x": 211, "y": 64, "button": "left", "name": "Insert", "kind": "TabItem", "up": 2.38, "up_x": 211, "up_y": 64, "drag": false},
+    {"t": 3.1, "x": 394, "y": 112, "button": "left", "name": "Shapes", "kind": "MenuItem", "up": 3.18, "up_x": 394, "up_y": 112, "drag": false},
+    {"t": 4.2, "x": 459, "y": 201, "button": "left", "name": "rectangle", "named_by": "picture", "up": 4.28, "up_x": 459, "up_y": 201, "drag": false},
+    {"t": 6.0, "x": 694, "y": 447, "button": "left", "on_canvas": true, "up": 7.3, "up_x": 1128, "up_y": 688, "drag": true},
+    {"t": 9.3, "x": 982, "y": 64, "button": "left", "name": "Shape Format", "kind": "TabItem", "up": 9.38, "up_x": 982, "up_y": 64, "drag": false},
+    {"t": 10.15, "x": 580, "y": 95, "button": "left", "name": "Shape Fill", "kind": "MenuItem", "up": 10.23, "up_x": 580, "up_y": 95, "drag": false},
+    {"t": 12.5, "x": 603, "y": 398, "button": "left", "name": "Gold", "named_by": "colour", "up": 12.58, "up_x": 603, "up_y": 398, "drag": false}
+  ],
+  "popups": [[0, []], [3.15, [[374, 159, 309, 407]]], [4.25, []], [10.2, [[532, 107, 284, 495]]], [12.55, []]],
+  "moves": [],
+  "keys": [],
+  "typing": [],
+  "private": []
+}

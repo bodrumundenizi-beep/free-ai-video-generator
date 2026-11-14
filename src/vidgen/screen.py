@@ -127,22 +127,24 @@ def fit_to_screen(rect, screens=None):
     return (left, top, width - width % 2, height - height % 2), index
 
 
-def grab_args(rect, fps=FPS, method="gdi", screens=None):
+def grab_args(rect, fps=FPS, method="gdi", screens=None, mouse=True):
     """ffmpeg input arguments recording ``rect``: "gdi" (gdigrab, the older way) or "dda"
-    (Windows' Desktop Duplication, which also works where the older one is refused)."""
+    (Windows' Desktop Duplication, which also works where the older one is refused).
+    ``mouse=False`` leaves the cursor out (tutorials draw their own)."""
     left, top, width, height = rect
+    draw = int(bool(mouse))
     if method == "dda":
         (left, top, width, height), index = fit_to_screen(rect, screens)
         screens = monitors() if screens is None else screens
         m = screens[index] if screens else (0, 0, 0, 0)
         # Its offsets count from the monitor's own corner. ponytail: assumes Windows lists the
         # monitors in Desktop Duplication's order (true for one screen; check on two).
-        source = (f"ddagrab=output_idx={index}:framerate={fps}:draw_mouse=1:"
+        source = (f"ddagrab=output_idx={index}:framerate={fps}:draw_mouse={draw}:"
                   f"offset_x={left - m[0]}:offset_y={top - m[1]}:video_size={width}x{height},"
                   "hwdownload,format=bgra")
         return ["-f", "lavfi", "-i", source]
     return ["-f", "gdigrab", "-framerate", str(fps), "-offset_x", str(left), "-offset_y", str(top),
-            "-video_size", f"{width}x{height}", "-draw_mouse", "1", "-i", "desktop"]
+            "-video_size", f"{width}x{height}", "-draw_mouse", str(draw), "-i", "desktop"]
 
 
 METHOD = "gdi"        # the way of recording that worked here (can_record sets it)
@@ -173,10 +175,11 @@ def can_record(rect, run=None) -> str:
 class Recorder:
     """ffmpeg recording ``rect`` into ``path`` until stop(); marks() are seconds into it."""
 
-    def __init__(self, rect, path, popen=subprocess.Popen, clock=time.monotonic):
+    def __init__(self, rect, path, popen=subprocess.Popen, clock=time.monotonic, mouse=True):
         self.rect, self.path, self.clock = rect, path, clock
         self.process = popen(
-            [mastering.ffmpeg_exe(), "-hide_banner", "-y", *grab_args(rect, method=METHOD),
+            [mastering.ffmpeg_exe(), "-hide_banner", "-y",
+             *grab_args(rect, method=METHOD, mouse=mouse),
              "-c:v", "libx264",
              "-preset", "ultrafast", "-crf", "18", "-pix_fmt", "yuv420p", path],
             stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,

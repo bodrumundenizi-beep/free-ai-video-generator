@@ -39,6 +39,7 @@ voiceover, and renders a 1080p or 720p MP4 in portrait or landscape.
 - **Your photos in the video:** Add up to 10 photos to Make new video. The app sees what is in each one, writes the script around them and puts each photo in the scene about it.
 - **Image editor:** Paint a part of a photo and **Change** it with words ("make the car green"), **Erase** it, or **Remove the background**, all on your PC.
 - **Promo videos:** A 15 to 25 second launch video for your own app or website, from its folder, README or GitHub link. See [Promo videos](#promo-videos).
+- **Tutorials:** Show how you do something in any app; it becomes a tutorial with zooms, a smooth cursor, labels, steps, a voice and music. Or let the app do the clicks. See [Tutorials](#tutorials).
 - **Other languages:** Make the same video in Spanish, French, Italian, Portuguese or Hindi.
 - **Sound effects:** A soft pop when a card appears, made by the app itself.
 - **Portrait or landscape:** 9:16 for Shorts and TikTok, 16:9 for YouTube, at 1080p or 720p.
@@ -85,7 +86,7 @@ You can confirm you have the real file by checking its hash against
 `SHA256SUMS.txt` on the release page:
 
 ```powershell
-Get-FileHash .\AIVideoStudio-5.3.0-setup.exe -Algorithm SHA256
+Get-FileHash .\AIVideoStudio-5.4.0-setup.exe -Algorithm SHA256
 ```
 
 ## The quick way
@@ -745,6 +746,45 @@ description.
 
 ![Script](docs/create.png)
 
+## Tutorials
+
+**New → Tutorial** (or **Make a tutorial** on Home). Show how you do something in any app,
+and the app turns it into a tutorial: the camera zooms onto each click, a smooth cursor glides
+between them, a label names each button, a line under the video says each step, and a voice
+reads it, with quiet music and click sounds. 16:9 for YouTube or 9:16 for Shorts.
+
+1. **Pick the app's window and press Analyze.** Before anything is recorded, the app checks
+   that this PC can record it, that it's on screen, how many of its buttons Windows can name,
+   what private details it will hide (your account's name and picture), and whether the app runs
+   as administrator (Windows then doesn't let other apps read it). Problems are said here, not
+   after you did your steps.
+2. **Record:** after a 3-2-1, do your steps at your own pace, then press **Stop** in the small
+   box at the top (left out of the video) or **Ctrl + Shift + F9**. Pauses and wandering are cut;
+   each click and what it does play at real speed. Your steps, written in the box or suggested by
+   the Smart writer (**Suggest the steps**: check them, it can be wrong), show as a checklist
+   that ticks off as you click.
+3. **Or Do it for me:** write the steps ("Insert → Shapes → Rectangle, drag on the slide, Shape
+   Format → Shape Fill → Orange"; arrows join a menu and the pick in it, commas part the steps).
+   The app moves the cursor onto each button and asks first (**Yes / I'll do it / Stop**, or
+   **Ctrl + Shift + Y / N**, which keep the app's menus open). It clicks **only when it is sure**:
+   the exact name Windows gives the button, and only one such button. A similar name, several
+   matches, a button found only in the picture, or a click that didn't do what it should (a menu
+   didn't open, a pick left its menu open) is handed to you, with the reason. It never types, and
+   never works in windows run as administrator or in security and sign-in windows.
+4. **Check the steps** (each line can be changed or the step deleted; names read from a picture
+   are marked "check the name"), pick the shape, the cursor (Glide, or your Real path smoothed),
+   voice and music, and press **Make tutorial**. About 40 seconds for a 15 second tutorial here.
+
+What stays private: only the recorded app and its own menus are shown (the rest of the screen
+is left out); your account's name and picture are hidden; another program's window popping up
+over the app (a notification) is left out, the video showing the moment before; the typed
+letters are never kept, only that you typed; the raw recording is deleted when the window
+closes. The colours follow the recorded app (PowerPoint's orange, a light app's light labels).
+
+Button names come from Windows (UI Automation, and MSAA for classic apps such as Notepad++),
+and from the Smart writer's picture reading where an app names nothing (some apps built with
+Flutter or game engines): expect to check more names there, and more steps handed to you.
+
 ## Promo videos
 
 On Home, press **Make a promo** (or **New → Promo video**). It makes a 15 to 25 second
@@ -904,7 +944,7 @@ python packaging/fetch_espeak.py
 python packaging/fetch_birefnet.py
 python packaging/fetch_lama.py
 pyinstaller --noconfirm --clean packaging/ai_video_studio.spec
-"%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe" /DMyAppVersion=5.3.0 packaging\installer.iss
+"%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe" /DMyAppVersion=5.4.0 packaging\installer.iss
 ```
 
 That is where Inno Setup goes when installed for one user; installed for everyone, it is

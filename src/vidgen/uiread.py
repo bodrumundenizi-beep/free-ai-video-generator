@@ -55,6 +55,66 @@ foreach ($e in $all) {
                              x = [int]$r.X; y = [int]$r.Y; w = [int]$r.Width; h = [int]$r.Height })
     } catch { }
 }
+# Classic Windows apps (Notepad++, 2026-11-14) show the .NET reader above only empty panes: their
+# menus and toolbars speak MSAA, the older accessibility that screen readers have always used.
+# When the first read finds almost nothing, this small C# walker (compiled by PowerShell, nothing
+# to download) reads them through MSAA instead, in real pixels.
+$MSAA = @"
+using System; using System.Collections.Generic; using System.Runtime.InteropServices; using Accessibility;
+public static class AivsMsaa {
+  [DllImport("oleacc.dll")] static extern int AccessibleObjectFromWindow(IntPtr h, uint id, ref Guid iid, [MarshalAs(UnmanagedType.Interface)] out IAccessible acc);
+  [DllImport("oleacc.dll")] static extern int AccessibleChildren(IAccessible acc, int start, int count, [Out] object[] kids, out int got);
+  [DllImport("user32.dll")] static extern IntPtr SetThreadDpiAwarenessContext(IntPtr ctx);
+  static readonly Dictionary<int, string> Kinds = new Dictionary<int, string> {
+    {43, "Button"}, {12, "MenuItem"}, {37, "TabItem"}, {44, "CheckBox"}, {45, "RadioButton"},
+    {46, "ComboBox"}, {34, "ListItem"}, {36, "TreeItem"}, {30, "Hyperlink"}, {62, "SplitButton"},
+    {56, "SplitButton"}, {57, "MenuItem"}, {42, "Edit"}, {41, "Text"}, {40, "Image"}, {51, "Slider"} };
+  public static List<string> Read(long handle) {
+    SetThreadDpiAwarenessContext(new IntPtr(-4));   // per-monitor: real pixels
+    var outp = new List<string>(); IAccessible root; Guid iid = new Guid("618736E0-3C3D-11CF-810C-00AA00389B71");
+    if (AccessibleObjectFromWindow(new IntPtr(handle), 0, ref iid, out root) != 0 || root == null) return outp;
+    int seen = 0; Walk(root, 0, outp, ref seen); return outp;
+  }
+  static void Emit(IAccessible acc, object child, List<string> outp) {
+    try {
+      int role = Convert.ToInt32(acc.get_accRole(child)); string kind;
+      if (!Kinds.TryGetValue(role, out kind)) return;
+      int st = Convert.ToInt32(acc.get_accState(child));
+      if ((st & 0x8000) != 0 || (st & 0x10000) != 0) return;   // invisible, offscreen
+      string name = acc.get_accName(child); if (string.IsNullOrWhiteSpace(name)) return;
+      int x, y, w, h; acc.accLocation(out x, out y, out w, out h, child);
+      if (w < 4 || h < 4) return;
+      string state = kind == "CheckBox" ? (((st & 0x10) != 0) ? "On" : "Off") : "";
+      outp.Add(kind + "\t" + name.Replace("\t", " ").Replace("\n", " ") + "\t" + state + "\t" + x + "\t" + y + "\t" + w + "\t" + h);
+    } catch { }
+  }
+  static void Walk(IAccessible acc, int depth, List<string> outp, ref int seen) {
+    if (depth > 14 || seen > 4000) return;
+    int count = 0; try { count = acc.accChildCount; } catch { return; }
+    if (count <= 0) return;
+    var kids = new object[count]; int got;
+    if (AccessibleChildren(acc, 0, count, kids, out got) != 0) return;
+    for (int i = 0; i < got; i++) {
+      seen++;
+      var sub = kids[i] as IAccessible;
+      if (sub != null) { Emit(sub, 0, outp); Walk(sub, depth + 1, outp, ref seen); }
+      else if (kids[i] != null) Emit(acc, kids[i], outp);
+    }
+  }
+}
+"@
+$named = @($out | Where-Object { $_.name -and $_.kind -ne 'Group' -and $_.kind -ne 'Text' }).Count
+if ($named -lt 5) {
+    try {
+        Add-Type -ReferencedAssemblies Accessibility -TypeDefinition $MSAA -Language CSharp
+        foreach ($line in [AivsMsaa]::Read($Handle)) {
+            $f = $line.Split("`t")
+            $st = $null; if ($f[2]) { $st = $f[2] }
+            $out.Add([ordered]@{ name = $f[1]; kind = $f[0]; state = $st
+                                 x = [int]$f[3]; y = [int]$f[4]; w = [int]$f[5]; h = [int]$f[6] })
+        }
+    } catch { }
+}
 ConvertTo-Json -InputObject $out.ToArray() -Compress -Depth 3
 """
 
@@ -95,6 +155,15 @@ def read(hwnd: int, run=subprocess.run) -> list[Control]:
     return parse(result.stdout)
 
 
+_SHORTCUT = re.compile(r"(\s+|	)(ctrl|alt|shift|win)\s*\+\s*\S+(\s*\+\s*\S+)*$", re.I)
+
+
+def clean_name(name: str) -> str:
+    """A control's name without the keyboard shortcut some apps add ("Media Alt+M", VLC;
+    "Open...	Ctrl+O", classic menus): "Media", "Open..."."""
+    return _SHORTCUT.sub("", str(name or "")).strip()
+
+
 def parse(text: str) -> list[Control]:
     try:
         data = json.loads(text)
@@ -105,7 +174,7 @@ def parse(text: str) -> list[Control]:
     found = []
     for item in data if isinstance(data, list) else []:
         try:
-            found.append(Control(str(item.get("name") or "").strip(), str(item["kind"]),
+            found.append(Control(clean_name(item.get("name")), str(item["kind"]),
                                  item.get("state"), int(item["x"]), int(item["y"]),
                                  int(item["w"]), int(item["h"])))
         except (KeyError, TypeError, ValueError):

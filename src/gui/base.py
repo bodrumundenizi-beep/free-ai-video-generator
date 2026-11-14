@@ -137,7 +137,7 @@ from vidgen.voice import generate_voiceover  # noqa: E402
 
 
 APP_NAME = "AI Video Studio"
-APP_VERSION = "5.3.0"
+APP_VERSION = "5.4.0"
 # Must match AppUserModelID in packaging/installer.iss, or a pinned taskbar
 # shortcut will not group with the running window.
 APP_MODEL_ID = "AIVideoStudio.Desktop.3"
@@ -1174,12 +1174,11 @@ TOUR = (
 # Shown once after updating to this version (WhatsNewDialog). Short: the release notes have
 # the whole story.
 WHATS_NEW = (
-    "Promo videos: a 15 to 25 second launch video for your own app or website, from its "
-    "folder, README or GitHub link. Pick a tone and a shape; music and sounds land on the beat.",
-    "A new Smart writer, Qwen3-VL, that reads and looks at pictures in one model: better at "
-    "photos, and stricter about not adding facts your text doesn't say.",
-    "Your Pexels, Pixabay and other API keys are now kept in Windows Credential Manager "
-    "instead of the settings file.",
+    "Tutorials: show how you do something in any app, and it becomes a sleek tutorial with "
+    "zooms, a smooth cursor, labels, steps, a voice and music. New > Tutorial.",
+    "Do it for me: write the steps (or let the Smart writer suggest them) and the app clicks "
+    "them itself, asking first. It only clicks what it is sure of; the rest is yours.",
+    "Your steps guide you while you record, ticking off as you click. 16:9 or 9:16 for Shorts.",
 )
 
 

@@ -363,7 +363,7 @@
      one spot on the right. Each .feature dissolves into the grid, so the HTML stays a list. */
   @media (min-width: 821px) {
     .tour { display: grid; grid-template-columns: minmax(0, 0.65fr) minmax(0, 1.35fr);
-      grid-template-rows: repeat(8, auto); column-gap: 56px; }
+      grid-template-rows: repeat(9, auto); column-gap: 56px; }
     .tour .feature { display: contents; }
     .tour .feature > div { grid-column: 1; min-height: 75vh; display: flex; flex-direction: column;
       justify-content: center; opacity: 0.3; transition: opacity 0.5s; }
@@ -445,6 +445,36 @@
 
     <div class="feature">
       <div>
+        <h3>A promo video for your own app</h3>
+        <p>Give it your project’s folder or GitHub link. It finds the screenshots and logo, writes the lines from your README and makes a 15 to 25 second launch video, with music and sounds on the beat. This one was made by the app, about itself.</p>
+      </div>
+      <figure class="shot clip wide">
+        <button class="pause" type="button">Pause</button>
+        <video width="960" height="540" muted loop playsinline autoplay preload="none" poster="promo-still.png"
+               aria-label="A promo video of AI Video Studio made by its own Promo video feature: screenshots, feature cards and the logo">
+          <source src="promo.webm" type="video/webm">
+          <source src="promo.mp4" type="video/mp4">
+        </video>
+      </figure>
+    </div>
+
+    <div class="feature">
+      <div>
+        <h3>Tutorials for any app</h3>
+        <p>Show how you do something, in PowerPoint, Notepad++ or a web page. The app zooms onto each click, names every button, writes the steps and reads them out. Or write the steps and let it do the clicks, asking first. This one was recorded by hand in PowerPoint.</p>
+      </div>
+      <figure class="shot clip wide">
+        <button class="pause" type="button">Pause</button>
+        <video width="960" height="540" muted loop playsinline autoplay preload="none" poster="tutorial-still.png"
+               aria-label="A tutorial made by AI Video Studio: PowerPoint's Insert, Shapes and Rectangle, a rectangle drawn and filled orange, with the steps under the video">
+          <source src="tutorial.webm" type="video/webm">
+          <source src="tutorial.mp4" type="video/mp4">
+        </video>
+      </figure>
+    </div>
+
+    <div class="feature">
+      <div>
         <h3>See it before it’s made</h3>
         <p>The Storyboard shows a card for each scene. Change a line, swap a clip, reorder scenes or hear a line read out, then make the video.</p>
       </div>
@@ -490,21 +520,6 @@
       </div>
       <picture><source srcset="card.webp" type="image/webp"><img class="shot grow tall" src="card.png" decoding="async" width="405" height="720" alt="A video frame with Win plus V drawn as two keys"></picture>
     </div>
-    <div class="feature">
-      <div>
-        <h3>A promo video for your own app</h3>
-        <p>Give it your project’s folder or GitHub link. It finds the screenshots and logo, writes the lines from your README and makes a 15 to 25 second launch video, with music and sounds on the beat. This one was made by the app, about itself.</p>
-      </div>
-      <figure class="shot clip wide">
-        <button class="pause" type="button">Pause</button>
-        <video width="960" height="540" muted loop playsinline autoplay preload="none" poster="promo-still.png"
-               aria-label="A promo video of AI Video Studio made by its own Promo video feature: screenshots, feature cards and the logo">
-          <source src="promo.webm" type="video/webm">
-          <source src="promo.mp4" type="video/mp4">
-        </video>
-      </figure>
-    </div>
-
     <div class="feature">
       <div>
         <h3>Show it on my PC (beta)</h3>

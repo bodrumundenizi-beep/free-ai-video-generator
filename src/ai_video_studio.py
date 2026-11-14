@@ -43,6 +43,7 @@ from gui.dialogs import WelcomeDialog, WhatsNewDialog, TourDialog, SlowPicturesD
 from gui.photo_windows import ImageEditor, PhotoList, change_photo_window, DraftDialog  # noqa: F401
 from gui.thumb_editor import ThumbEditor  # noqa: F401
 from gui.promo_window import PromoDialog  # noqa: F401
+from gui.tutorial_window import TutorialDialog  # noqa: F401
 from gui.base import BUILD, CLOSING_WAIT, FlipDialog, HOLD_WAIT, KEY_PROVIDERS, RECORDINGS_DIR, TOUR, WHATS_NEW, WRITER_MODES, centre_on, mci, report_tip_failure, short_path, show_whats_new, writer_size  # noqa: F401
 # ---- moved from ai_video_studio.py, unchanged below ----
 
@@ -655,6 +656,9 @@ class App(ctk.CTk):
         self._door(page, self.icon("play"), "Promo video", "A 15 to 25 second launch video for "
                    "your own app or website, from its screenshots", lambda: PromoDialog(self),
                    False).grid(row=3, column=0, sticky="nsew", padx=(0, PAD // 2), pady=(PAD, 0))
+        self._door(page, self.icon("eye"), "Tutorial", "Show how you do something in any app; "
+                   "it becomes a tutorial with zooms, labels and steps", lambda: TutorialDialog(self),
+                   False).grid(row=3, column=1, sticky="nsew", padx=(PAD // 2, 0), pady=(PAD, 0))
         return page
 
     def _door(self, parent, glyph, title, line, command, accent):
@@ -1117,6 +1121,8 @@ class App(ctk.CTk):
              "from the Storyboard", "Open My videos", lambda: self.select_page("projects")),
             ("play", "Promo video", "A 15 to 25 second launch video for your own app or website, "
              "from its screenshots", "Make a promo", lambda: PromoDialog(self)),
+            ("eye", "Tutorial", "Show how you do something in any app; it becomes a tutorial "
+             "with zooms, labels and steps", "Make a tutorial", lambda: TutorialDialog(self)),
         ]
         return [f for f in found if f[1] != "My voice" or not myvoice.available()]
 

@@ -63,13 +63,14 @@ def ready() -> tuple[bool, str]:
     return True, ""
 
 
-def data_url(path: str) -> str:
-    """The photo, made small, as a data: URL the model's server reads."""
+def data_url(path: str, side: int = SIDE) -> str:
+    """The photo, made small (``side`` pixels at most), as a data: URL the model's server reads.
+    A whole app window needs more than a photo: its buttons are small (tutorials, 5.4)."""
     from PIL import Image, ImageOps
 
     with Image.open(path) as image:
         image = ImageOps.exif_transpose(image).convert("RGB")
-        image.thumbnail((SIDE, SIDE))
+        image.thumbnail((side, side))
         buffer = io.BytesIO()
         image.save(buffer, "JPEG", quality=88)
     return "data:image/jpeg;base64," + base64.b64encode(buffer.getvalue()).decode("ascii")
