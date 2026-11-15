@@ -28,7 +28,7 @@ voiceover, and renders a 1080p or 720p MP4 in portrait or landscape.
 - **Two versions in one go:** Optionally render the same script twice with different clips, and keep the better one.
 - **Pick a length:** Fit the video to 15, 30 or 60 seconds, or make a long video of 3, 5 or 10 minutes in chapters, with a live estimate as you type.
 - **Neural AI Voices, on your PC:** 20 natural-sounding male and female voices from an open-source speech model that runs offline. No account, no key, no service that can be switched off.
-- **AI pictures (optional):** With a good graphics card, an open-source image model on your PC draws a picture for the scenes stock footage has nothing for.
+- **AI pictures (optional):** With a good graphics card, an open-source image model on your PC draws a picture for the scenes stock footage has nothing for. It also works on an Intel iGPU.
 - **Animated cards:** Key combos like `Win + V`, big numbers and short lists are drawn over the footage, because no stock clip can show them.
 - **Smart Script Parser:** Automatically reads your script line-by-line using `Visual:` and `Voice:` tags.
 - **Windows 11 Fluent interface:** Settings-app style segmented controls, smooth page transitions, dark and light themes with Mica, and live render progress.
