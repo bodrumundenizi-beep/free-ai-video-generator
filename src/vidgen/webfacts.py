@@ -29,7 +29,9 @@ _FACTUAL = re.compile(
     r"compared?|vs\.?|versus|(19|20)\d\d)\b", re.I)
 _STORY = re.compile(r"\b(story|stories|tale|horror|thriller|scary|creepy|poem)\b", re.I)
 _FILLER = re.compile(r"\b(please|write|make|create|give|tell|me|a|an|the|video|short|script|"
-                     r"about|on|top|best|\d+|list|some|facts?|explain|what|are)\b", re.I)
+                     # 1-2 digits only: "top 5" goes, a year like 1453 stays (without it the
+                     # conquest of Istanbul found "Mehmed II" and "Turhan Sultan", 2026-11-16)
+                     r"about|on|top|best|\d{1,2}|list|some|facts?|explain|what|are)\b", re.I)
 
 
 def wants_facts(idea: str) -> bool:
@@ -40,6 +42,18 @@ def wants_facts(idea: str) -> bool:
 def search_words(idea: str) -> str:
     """'top 5 AMD GPUs' -> 'AMD GPUs': the topic, without what the video should do with it."""
     return " ".join(_FILLER.sub(" ", idea).split()) or idea
+
+
+_CLAUSE = re.compile(r",|;|\b(?:when|who|which|that|where|while)\b", re.I)
+
+
+def queries(idea: str) -> list[str]:
+    """The idea's first part, then all of it: "conquest of Istanbul in 1453, when Sultan
+    Mehmed II took Constantinople" finds Fall of Constantinople by its first part, while the
+    whole leans to Mehmed II."""
+    words = search_words(idea)
+    head = _CLAUSE.split(words)[0].strip()
+    return [head, words] if head and head != words and len(head.split()) >= 2 else [words]
 
 
 _RECENT = re.compile(r"\b(top|best|latest|newest|new|current|fastest|most powerful)\b", re.I)
@@ -96,22 +110,57 @@ def choose(parts: list[str], room: int, recent: bool) -> str:
     return "\n".join(piece for _i, piece in sorted(picked))
 
 
+# The page as plain sentences, for everything but lists: the HTML's infobox gave the writer
+# "Born | 30 March 1432Edirne, Ottoman Sultanate" and used up its room (2026-11-16).
+_HEADING = re.compile(r"\n+=+ *([^=\n]+?) *=+\n+")
+_SKIP = {"see also", "references", "notes", "further reading", "external links", "sources",
+         "bibliography", "citations", "footnotes"}
+
+
+def _extract(http, title: str) -> str:
+    found = http.get(API, params={"action": "query", "prop": "extracts", "explaintext": 1,
+                                  "titles": title, "redirects": 1, "format": "json"},
+                     headers=HEADERS, timeout=TIMEOUT).json()
+    return next(iter(found["query"]["pages"].values())).get("extract", "")
+
+
+def plain_sections(extract: str) -> list[str]:
+    """A plain-text extract cut at its headings, the introduction first; reference lists out."""
+    pieces = _HEADING.split("\n" + extract)
+    parts = [pieces[0].strip()]
+    for heading, body in zip(pieces[1::2], pieces[2::2]):
+        if heading.strip().lower() not in _SKIP and body.strip():
+            parts.append(f"{heading.strip()}: {body.strip()}")
+    return [p for p in parts if p]
+
+
 def facts(idea: str, http=None) -> tuple[str, list[str]]:
     """(the facts, as text, and the page titles they came from); ("", []) if none."""
     http = http or requests
     try:
-        found = http.get(API, params={"action": "query", "list": "search", "format": "json",
-                                      "srsearch": ("list of " if wants_recent(idea) else "")
-                                      + search_words(idea), "srlimit": PAGES},
-                         headers=HEADERS, timeout=TIMEOUT).json()
-        titles = [hit["title"] for hit in found["query"]["search"]][:PAGES]
+        hits = []
+        for query in queries(idea):
+            found = http.get(API, params={"action": "query", "list": "search", "format": "json",
+                                          "srsearch": ("list of " if wants_recent(idea) else "")
+                                          + query, "srlimit": PAGES},
+                             headers=HEADERS, timeout=TIMEOUT).json()
+            hits.append([hit["title"] for hit in found["query"]["search"]])
+        # the top page of each search first, then the rest
+        titles = []
+        for title in [h[0] for h in hits if h] + [t for h in hits for t in h[1:]]:
+            if title not in titles:
+                titles.append(title)
+        titles = titles[:PAGES]
         parts, room = [], BUDGET
         for title in titles:
-            page = http.get(API, params={"action": "parse", "page": title, "prop": "text",
-                                         "format": "json", "redirects": 1},
-                            headers=HEADERS, timeout=TIMEOUT).json()
-            text = choose(sections(page["parse"]["text"]["*"]),
-                          room // max(len(titles) - len(parts), 1), wants_recent(idea))
+            share = room // max(len(titles) - len(parts), 1)
+            if wants_recent(idea) or title.lower().startswith("list of"):   # needs the tables
+                page = http.get(API, params={"action": "parse", "page": title, "prop": "text",
+                                             "format": "json", "redirects": 1},
+                                headers=HEADERS, timeout=TIMEOUT).json()
+                text = choose(sections(page["parse"]["text"]["*"]), share, wants_recent(idea))
+            else:
+                text = choose(plain_sections(_extract(http, title)), share, False)
             parts.append(f"From Wikipedia, \"{title}\":\n{text}")
             room -= len(text)
         return "\n\n".join(parts), titles

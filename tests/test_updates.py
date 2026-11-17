@@ -314,3 +314,27 @@ def test_a_moved_update_leaves_a_desktop_shortcut():
     moved = updates.portable_script(r"C:\T\new", r"C:\A\AI Video Studio", 7, shortcut=True)
     assert "CreateShortcut" in moved and r"C:\A\AI Video Studio\AIVideoStudio.exe" in moved
     assert "CreateShortcut" not in updates.portable_script(r"C:\T\new", r"C:\A", 7)
+
+
+def test_a_count_downloads_this_version_s_counter_file_and_never_raises():
+    import requests
+    from vidgen import updates
+
+    asked = []
+
+    class Http:
+        def get(self, url, headers=None, timeout=None):
+            asked.append(url)
+            assert timeout and "AIVideoStudio/5.5.0" in headers["User-Agent"]
+            return type("R", (), {"ok": True})()
+
+    assert updates.count("install", "5.5.0", Http()) is True
+    assert updates.count("update", "5.5.0", Http()) is True
+    assert asked == [updates.DOWNLOAD_PREFIX + "v5.5.0/app-data-1.bin",
+                     updates.DOWNLOAD_PREFIX + "v5.5.0/app-data-2.bin"]
+
+    class Offline:
+        def get(self, *a, **k):
+            raise requests.ConnectionError()
+
+    assert updates.count("install", "5.5.0", Offline()) is False

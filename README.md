@@ -13,6 +13,7 @@ voiceover, and renders a 1080p or 720p MP4 in portrait or landscape.
 </p>
 
 ## Features
+- **Picture stories:** Type an idea ("a car follows a woman home at midnight") and get a narrated story video: every scene drawn in one look with the same main character, one big word on screen at a time. Say what must happen and how it ends, if you like.
 - **Paste text, get a video:** On Home, press **Make new video**, paste an article, a tip or your notes and press **Make video**.
 - **Storyboard:** See the video as a card per scene before it is made. Change a line, swap a clip, make another AI picture, reorder scenes, and hear any line read out.
 - **Dashboard:** How many videos you made and how long they run, a chart of the last 8 weeks, the voice and shape you use most, recent videos, storage, and what's set up.
@@ -86,7 +87,7 @@ You can confirm you have the real file by checking its hash against
 `SHA256SUMS.txt` on the release page:
 
 ```powershell
-Get-FileHash .\AIVideoStudio-5.4.0-setup.exe -Algorithm SHA256
+Get-FileHash .\AIVideoStudio-5.5.0-setup.exe -Algorithm SHA256
 ```
 
 ## The quick way
@@ -746,6 +747,29 @@ description.
 
 ![Script](docs/create.png)
 
+## Picture stories
+
+**Make new video → Template: Picture story.** Type an idea, and the app writes a story, draws
+every scene in one look with the same main character, reads it out and makes a 9:16 video with
+one big word on screen at a time. Made on your PC with the Smart writer and AI pictures.
+
+- **4 story looks:** Anime film, Dark comic, Painted history and TV cartoon. The story's kind
+  picks one; change it in the Storyboard's look picker.
+- **The same main character** in every scene: say who the story is about, or let the writer
+  describe them. **New pictures** draws them again.
+- **60 s or 2 minutes.** A 2-minute story is planned as 20 events first, so something happens
+  all the way through. Real-life only (on by default) keeps it to what could really happen.
+  True stories with a Wikipedia page are kept to 60 s, so the facts stay right.
+- **My own story:** tick it and say what **must happen** ("a police car chases the strange car
+  through the city") and how it **ends** ("the driver was her brother, who came to warn her").
+  A short line gets options and three small boxes (who, to whom, how), because the writer
+  may guess wrong. Short, clear endings work best.
+- **Picture quality** (Storyboard): Best (slow), Balanced (normal, the default with a graphics
+  card) or Fast (fast but low res). A 2-minute story took about 5.5 minutes at Balanced on an
+  RTX 4060.
+- The story is read in the Storyboard before it is made: change any line, the look or the
+  quality there.
+
 ## Tutorials
 
 **New → Tutorial** (or **Make a tutorial** on Home). Show how you do something in any app,
@@ -944,7 +968,7 @@ python packaging/fetch_espeak.py
 python packaging/fetch_birefnet.py
 python packaging/fetch_lama.py
 pyinstaller --noconfirm --clean packaging/ai_video_studio.spec
-"%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe" /DMyAppVersion=5.4.0 packaging\installer.iss
+"%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe" /DMyAppVersion=5.5.0 packaging\installer.iss
 ```
 
 That is where Inno Setup goes when installed for one user; installed for everyone, it is
@@ -980,7 +1004,10 @@ PC; only if you turn on **Use Microsoft's online voices** is your script text se
 to Microsoft Edge's online text-to-speech. On startup it
 also asks GitHub for this project's latest version number, to tell you about
 updates; that request contains nothing about you, and you can turn it off under
-**Settings → Updates**. An update is only downloaded when you press **Update
+**Settings → Updates**. With that same switch on, the first start of a new install or
+update downloads one tiny file from this version's GitHub release (`app-data-1.bin` for
+an install, `app-data-2.bin` for an update), once. GitHub counts downloads, so this counts
+installs; nothing else is sent. An update is only downloaded when you press **Update
 now**; it comes from this project's GitHub releases and is checked against the
 SHA-256 published with the release before it is run. Settings and API keys stay
 on your computer.

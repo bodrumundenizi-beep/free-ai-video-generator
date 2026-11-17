@@ -112,7 +112,11 @@ def test_insert_pauses_lengthens_by_the_silence():
     samples = np.ones(2000, dtype=np.float32)
     out = insert_pauses(samples, rate, [(0.5, 0.25), (1.5, 0.1)])
     assert len(out) == 2000 + 250 + 100
-    assert (out[500:750] == 0).all() and out[499] == 1 and out[750] == 1
+    # spliced exactly where asked (settle_pauses picks the quiet moment first); the fade
+    # out ends on a zero, one sample before the silence
+    zeros = np.flatnonzero(out == 0)
+    assert zeros[0] == 499 and (out[zeros[0]:zeros[0] + 250] == 0).all()
+    assert out[0] == 1 and out[-1] == 1
 
 
 # --- mastering chain -----------------------------------------------------------

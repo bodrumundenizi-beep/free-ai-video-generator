@@ -42,6 +42,21 @@ MIN_SCENE = 0.5
 # silent file with only its shots open, then joined; the sound is mixed once for the whole.
 LONG_RENDER = 90.0   # seconds: longer videos are made in chunks
 CHUNK_SCENES = 20
+# Parts built side by side (5.5): the frames are made in Python, mostly on one core, so a
+# 2-minute story's encode went from 155 s to 61 s with 4 at once, frames identical, memory
+# 0.6 -> 1.4 GB (2026-11-17, style-test/parallel_test.py).
+MAX_AT_ONCE = 4
+PART_MEMORY = 0.5 * 1024 ** 3   # bytes of free memory each part may need, with room to spare
+
+
+def parts_at_once(free: int | None = None, cores: int | None = None) -> int:
+    """How many parts this PC builds at once: by its cores and free memory, at most 4."""
+    from . import writer
+
+    free = writer.free_memory() if free is None else free
+    cores = (os.cpu_count() or 2) if cores is None else cores
+    by_memory = int(free // PART_MEMORY) if free else 1
+    return max(1, min(MAX_AT_ONCE, cores // 2, by_memory))
 FPS = 30
 DEFAULT_PADDING = 0.25
 SPARE_CANDIDATES = 2  # extra search results to fall back on if a download fails
@@ -702,13 +717,21 @@ def _make_version(cfg, ui, work_dir, job, plans, search, choices, version, save_
                     else [base.get_frame(0)])
             except Exception:  # noqa: BLE001 - the middle, as before
                 focus = None
-        clip = motion.framed_shot(base, shot.length, (target_w, target_h), zoom, focus)
+        pan = (1 if index % 2 == 0 else -1) if plan.scene.zoom == "pan" else 0
+        clip = motion.framed_shot(base, shot.length, (target_w, target_h), zoom,
+                                  None if pan else focus, pan)
         if shot.fade_in > 0:
             clip = clip.with_effects([vfx.CrossFadeIn(shot.fade_in)])
         return clip.with_start(shot.start - offset)
 
     # Long videos are made in chunks (chunk_ranges): their shots are opened per chunk.
-    every = int(cfg.get("chunk_scenes") or 0) or (CHUNK_SCENES if total > LONG_RENDER else 0)
+    every = int(cfg.get("chunk_scenes") or 0)
+    at_once = int(cfg.get("parts_at_once") or 0) or parts_at_once()
+    scenes = len(starts) - 1
+    if not every and at_once > 1 and scenes >= 2 * at_once:
+        every = min(CHUNK_SCENES, -(-scenes // at_once))   # as many parts as at once
+    elif not every and total > LONG_RENDER:
+        every = CHUNK_SCENES
     chunks = chunk_ranges(starts, every) if every else []
     layers = []
     if not chunks:
@@ -761,13 +784,14 @@ def _make_version(cfg, ui, work_dir, job, plans, search, choices, version, save_
     try:
         codec = encoder(cfg)
         if codec != X264:
-            ui.log("⚡ Encoding on the Intel graphics chip (Quick Sync)")
+            ui.log(f"⚡ Encoding on the graphics card ({codec})")
         with spent.time("encode"):
             if chunks:
                 last = version >= (2 if str(cfg.get("versions", 1)) == "2" else 1)
                 _encode_chunks(chunks, shots, shot_layer, overlays, soundtrack,
                                (target_w, target_h), encoded, bitrate, work_dir, version,
-                               encoding, stop, codec, ui, job.close_audio if last else None)
+                               encoding, stop, codec, ui, job.close_audio if last else None,
+                               at_once)
             else:
                 video = job.keep(compose.layered(layers + overlays, (target_w, target_h),
                                                  total))
@@ -990,34 +1014,43 @@ def _encode_logger(on_progress, stop):
 
 
 X264 = "libx264"
-QSV = "h264_qsv"
+NVENC, QSV, AMF = "h264_nvenc", "h264_qsv", "h264_amf"
+# The graphics card's own video encoder, first that works: NVIDIA, Intel, AMD. NVENC took a
+# 2-minute story's encode from 201 s to 155 s on an RTX 4060 (2026-11-17); the rest of the
+# encode is the frames being made in Python, which no encoder changes.
+GPU_ENCODERS = (NVENC, QSV, AMF)
 
 
-@functools.lru_cache(maxsize=1)
-def quick_sync_works() -> bool:
-    """Whether this PC's ffmpeg can encode on an Intel graphics chip (checked once).
+@functools.lru_cache(maxsize=None)
+def hardware_works(codec: str) -> bool:
+    """Whether this PC's ffmpeg can encode with ``codec`` (checked once).
 
-    The bundled ffmpeg always lists h264_qsv; only a real test frame shows whether the
-    chip and its driver are there.
+    The bundled ffmpeg always lists all three; only a real test frame shows whether the
+    chip and its driver are there. 1080x1920: some chips refuse sizes they can't do.
     """
     from . import mastering
 
     try:
-        mastering.run_ffmpeg(["-f", "lavfi", "-i", "color=c=black:s=256x256:d=0.2",
-                              "-frames:v", "2", "-c:v", QSV, "-f", "null", "-"])
+        mastering.run_ffmpeg(["-f", "lavfi", "-i", "color=c=black:s=1080x1920:d=0.2",
+                              "-frames:v", "2", "-c:v", codec, "-f", "null", "-"])
         return True
     except Exception:  # noqa: BLE001 - no chip, no driver, or a locked-down PC
         return False
 
 
 def encoder(cfg) -> str:
-    """The video encoder for this render: Quick Sync if asked for and it works, else x264."""
-    return QSV if cfg.get("quick_sync") and quick_sync_works() else X264
+    """The video encoder for this render: the graphics card's if allowed and it works, else
+    x264 on the processor."""
+    if cfg.get("gpu_encode", True):
+        for codec in GPU_ENCODERS:
+            if hardware_works(codec):
+                return codec
+    return X264
 
 
 def _encode(video, path, with_audio, bitrate, work_dir, on_progress=lambda f: None,
             stop=lambda: False, codec=X264, log=lambda m: None):
-    """Write the video; a Quick Sync encode that fails part-way is made again with x264."""
+    """Write the video; a graphics card encode that fails part-way is made again with x264."""
     try:
         _write(video, path, with_audio, bitrate, work_dir, on_progress, stop, codec)
     except RenderCancelled:
@@ -1025,7 +1058,7 @@ def _encode(video, path, with_audio, bitrate, work_dir, on_progress=lambda f: No
     except Exception as exc:  # noqa: BLE001
         if codec == X264:
             raise
-        log(f"⚠️ The Intel graphics chip couldn't encode ({_one_line(exc, 120)}); "
+        log(f"⚠️ The graphics card couldn't encode ({_one_line(exc, 120)}); "
             "using the normal encoder.")
         _write(video, path, with_audio, bitrate, work_dir, on_progress, stop, X264)
 
@@ -1069,10 +1102,15 @@ def _clock(seconds: float) -> str:
 
 
 def _encode_chunks(chunks, shots, shot_layer, overlays, soundtrack, size, encoded, bitrate,
-                   work_dir, version, encoding, stop, codec, ui, done_with_sound=None):
-    """A long video: the sound written once, then each chunk encoded on its own with every
-    shot opened only while it shows (compose.Lazy), then ffmpeg joins them without encoding
-    the picture again. ``done_with_sound`` closes the voices once the sound is written."""
+                   work_dir, version, encoding, stop, codec, ui, done_with_sound=None,
+                   at_once: int = 1):
+    """A video in parts: the sound written once, then each chunk encoded on its own with every
+    shot opened only while it shows (compose.Lazy), ``at_once`` parts side by side, then
+    ffmpeg joins them without encoding the picture again. ``done_with_sound`` closes the
+    voices once the sound is written."""
+    import concurrent.futures
+    import threading
+
     from . import compose, mastering
 
     total = chunks[-1][1]
@@ -1085,10 +1123,18 @@ def _encode_chunks(chunks, shots, shot_layer, overlays, soundtrack, size, encode
                 "-shortest"]
         if done_with_sound:
             done_with_sound()
-    parts = []
-    for at, (start, end) in enumerate(chunks):
+    at_once = max(1, min(at_once, len(chunks)))
+    done = [0.0] * len(chunks)   # each part's share of the picture made so far
+    lock = threading.Lock()
+
+    def progress(at, fraction):
+        with lock:
+            done[at] = (chunks[at][1] - chunks[at][0]) * fraction
+            encoding(sum(done) / total, f" {at_once} parts at once" if at_once > 1 else "")
+
+    def part(at):
+        start, end = chunks[at]
         _check(stop)
-        label = f" part {at + 1} of {len(chunks)}"
         ui.log(f"🧩 Part {at + 1} of {len(chunks)}: {_clock(start)} to {_clock(end)}")
         lazy = [compose.Lazy(lambda keep, i=i, shot=shot: shot_layer(i, shot, keep, start),
                              shot.start - start, shot.end - start)
@@ -1099,12 +1145,20 @@ def _encode_chunks(chunks, shots, shot_layer, overlays, soundtrack, size, encode
             video = compose.layered(layers, size, end - start)
             path = os.path.join(work_dir, f"part_{version}_{at:03d}.mp4")
             _encode(video, path, False, bitrate, work_dir,
-                    lambda f, a=start, b=end: encoding((a + (b - a) * f) / total, label),
-                    stop, codec, ui.log)
-            parts.append(path)
+                    lambda f, a=at: progress(a, f), stop, codec, ui.log)
+            return path
         finally:
             for layer in lazy:   # a shot that runs on into the next chunk is opened again there
                 layer.release()
+
+    with concurrent.futures.ThreadPoolExecutor(at_once) as pool:
+        running = [pool.submit(part, at) for at in range(len(chunks))]
+        try:
+            parts = [job.result() for job in running]   # in order; the first error is raised
+        except BaseException:
+            for job in running:
+                job.cancel()   # parts not started yet never start
+            raise
     _check(stop)
     ui.status("Step 4 of 4: Joining the parts...")
     listing = os.path.join(work_dir, f"parts_{version}.txt")
@@ -1375,7 +1429,8 @@ def _ai_picture(plan, index, cfg, ratio, work_dir, ui, version, search, stop) ->
                              cfg.get("ai_images_look") or imagegen.DEFAULT_LOOK,
                              should_stop=stop, backend=cfg.get("ai_images_backend") or "",
                              log=ui.log, speed=speed,
-                             threads=tuple(cfg.get("ai_threads") or (0, 0)))
+                             threads=tuple(cfg.get("ai_threads") or (0, 0)),
+                             seed=cfg.get("ai_seed") or None, hero=cfg.get("ai_hero") or "")
     except imagegen.Stopped as exc:
         raise RenderCancelled() from exc
     except imagegen.ImageError as exc:
@@ -1390,7 +1445,8 @@ def _ai_picture(plan, index, cfg, ratio, work_dir, ui, version, search, stop) ->
         from . import projects
 
         look = cfg.get("ai_images_look") or imagegen.DEFAULT_LOOK
-        keep = projects.picture_file(cfg["project_dir"], f"{plan.scene.ai_prompt}|{look}|{ratio}")
+        keep = projects.picture_file(cfg["project_dir"], imagegen.picture_key(
+            plan.scene.ai_prompt, look, ratio, cfg.get("ai_hero"), cfg.get("ai_seed")))
         try:
             os.makedirs(os.path.dirname(keep), exist_ok=True)
             shutil.copyfile(path, keep)

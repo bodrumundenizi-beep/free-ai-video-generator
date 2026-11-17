@@ -30,6 +30,10 @@ PAUSE_COMMA = 0.12  # , ; :
 PAUSE_DASH = 0.15  # - (as a dash), en/em dash, ellipsis
 PAUSE_STOP = 0.26  # . ! ?  - a breath
 SYNTH_RATE = 24000  # edge-tts delivers 24 kHz mono
+SEARCH = 0.12  # seconds before a pause's planned point to look for the quietest moment
+FADE = 0.005  # seconds faded out and in at each pause, so it never clicks
+GAP = 0.02  # seconds of quiet a pause needs: a shorter dip can be inside a word (the k in okay)
+QUIET = 0.08  # a cut this loud (share of the line's speech level) is inside a sound: no pause
 SYNTH_ATTEMPTS = 3
 
 # Kept for anything still importing the old name.
@@ -75,13 +79,56 @@ def insert_pauses(samples, rate: int, pauses):
     if not pauses:
         return samples
     pieces, last = [], 0
+    fade = max(1, int(FADE * rate))
     for time, seconds in sorted(pauses):
         cut = min(max(int(time * rate), last), len(samples))
-        pieces.append(samples[last:cut])
+        piece = samples[last:cut].astype(np.float32)
+        if len(piece) > fade:   # a cut never clicks
+            piece[-fade:] *= np.linspace(1.0, 0.0, fade)
+        if last and len(piece) > fade:
+            piece[:fade] *= np.linspace(0.0, 1.0, fade)
+        pieces.append(piece.astype(samples.dtype))
         pieces.append(np.zeros(int(seconds * rate), dtype=samples.dtype))
         last = cut
-    pieces.append(samples[last:])
+    piece = samples[last:].astype(np.float32)
+    if last and len(piece) > fade:
+        piece[:fade] *= np.linspace(0.0, 1.0, fade)
+    pieces.append(piece.astype(samples.dtype))
     return np.concatenate(pieces)
+
+
+def settle_pauses(samples, rate: int, pauses):
+    """``pauses`` moved to the quietest moment before each; one with no quiet moment is dropped.
+    The voice sometimes runs straight on after a comma ("It's okay, I'm"): a pause spliced
+    there splits a sound, and that was the stutter left in 2026-11-16's 2-minute story."""
+    import numpy as np
+
+    level = np.abs(np.asarray(samples, dtype=np.float32))
+    speech = float(np.percentile(level, 90)) if len(level) else 0.0
+    half = max(1, int(GAP * rate) // 2)   # the window quietest() chose
+    settled, last = [], 0
+    for time, seconds in sorted(pauses):
+        cut = quietest(samples, rate, min(max(int(time * rate), last), len(samples)), last)
+        if level[max(0, cut - half):cut + half].mean() > QUIET * speech:
+            continue
+        settled.append((cut / rate, seconds))
+        last = cut
+    return settled
+
+
+def quietest(samples, rate: int, cut: int, floor: int = 0) -> int:
+    """The quietest point up to SEARCH before ``cut``. Words that start softly (h, s) begin
+    before their timing says: cutting at the timing put a pause inside them ("h- hoping",
+    2026-11-15). The search only looks back, never into the next word."""
+    import numpy as np
+
+    start = max(floor, cut - int(SEARCH * rate))
+    step, size = max(1, int(0.005 * rate)), max(1, int(GAP * rate))   # GAP windows, 5 ms apart
+    if cut - start < size:
+        return cut
+    level = np.abs(np.asarray(samples[start:cut], dtype=np.float32))
+    windows = [level[i:i + size].mean() for i in range(0, len(level) - size + 1, step)]
+    return start + int(np.argmin(windows)) * step + size // 2
 
 
 def shift_words(words, pauses):
@@ -200,7 +247,7 @@ def _local(text, persona, base, log_func):
     if not persona.enhanced:
         return mastering.write_wav(wav_path, samples, SYNTH_RATE), words
     paced = base + ".paced.wav"
-    pauses = plan_pauses(words, text, persona.pause_scale)
+    pauses = settle_pauses(samples, SYNTH_RATE, plan_pauses(words, text, persona.pause_scale))
     words = shift_words(words, pauses)
     mastering.write_wav(paced, insert_pauses(samples, SYNTH_RATE, pauses), SYNTH_RATE)
     try:
@@ -249,7 +296,8 @@ def generate_voiceover_timed(text, filename, log_func, voice_choice, online=Fals
     wav_path = base + ".wav"
     try:
         samples = mastering.decode(mp3_path, SYNTH_RATE)
-        pauses = plan_pauses(words, text, persona.pause_scale)
+        pauses = settle_pauses(samples, SYNTH_RATE,
+                               plan_pauses(words, text, persona.pause_scale))
         mastering.write_wav(paced, insert_pauses(samples, SYNTH_RATE, pauses), SYNTH_RATE)
         mastering.master(paced, wav_path)
         return wav_path, shift_words(words, pauses)

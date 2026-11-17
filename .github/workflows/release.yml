@@ -134,6 +134,9 @@ jobs:
           # The Image editor's two models: the app downloads them from this release on first
           # use (vidgen.cutout.RELEASE, pinned by SHA-256 there).
           Copy-Item vendor/birefnet/birefnet-lite-int8w.onnx, vendor/lama/lama-fp16w.onnx dist/artifacts/
+          # The install and update counters (vidgen.updates.COUNTERS): 1-byte files whose
+          # GitHub download count is the count. Nothing else is sent.
+          Copy-Item packaging/counters/app-data-1.bin, packaging/counters/app-data-2.bin dist/artifacts/
 
       - name: Checksums
         shell: pwsh

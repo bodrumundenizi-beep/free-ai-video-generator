@@ -16,6 +16,7 @@ import numpy as np
 from PIL import Image, ImageFilter, ImageOps
 
 ZOOM_EXPLICIT = 1.10  # Zoom: in / Zoom: out
+PAN_ZOOM = 1.15  # Zoom: pan: the crop moves sideways across a picture this much bigger
 ZOOM_STILL = 1.08  # auto, on a photo or screenshot
 ZOOM_SLOW = 1.06  # auto, on footage that barely moves
 ZOOM_MOVING = 1.03  # auto, on footage that already moves
@@ -53,6 +54,8 @@ def zoom_range(mode: str, kind: str, motion: float | None, flip: bool):
         return (1.0, ZOOM_EXPLICIT)
     if mode == "out":
         return (ZOOM_EXPLICIT, 1.0)
+    if mode == "pan":   # held zoomed in, so there is room to move across (framed_shot's pan)
+        return (PAN_ZOOM, PAN_ZOOM)
     if kind == "image":
         peak = ZOOM_STILL
     elif motion is not None and motion < SLOW_MOTION:
@@ -141,11 +144,12 @@ def busiest_point(frames) -> tuple[float, float]:
             float((ys * weight).sum() / weight.sum() + 0.5) / weight.shape[0])
 
 
-def framed_shot(source, length: float, size, zoom=(1.0, 1.0), focus=None):
+def framed_shot(source, length: float, size, zoom=(1.0, 1.0), focus=None, pan=0):
     """``source`` looped or trimmed to ``length``, filling ``size``, zooming.
 
     The crop and the Ken Burns zoom are one PIL resample per frame. ``focus`` (fractions,
     from busiest_point) moves the crop toward the busy part; None keeps it in the middle.
+    ``pan`` (1 or -1) slides the crop from one side of the picture to the other instead.
     """
     from moviepy import VideoClip
 
@@ -172,9 +176,15 @@ def framed_shot(source, length: float, size, zoom=(1.0, 1.0), focus=None):
         frame = fitted.get_frame(t)
         if passthrough and frame.dtype == np.uint8:
             return frame
-        scale = z_start + (z_end - z_start) * smoothstep(t / length if length else 0.0)
+        eased = smoothstep(t / length if length else 0.0)
+        scale = z_start + (z_end - z_start) * eased
         half_w, half_h = box_w / scale / 2, box_h / scale / 2
-        x = min(max(centre_x, half_w), source_w - half_w)   # the crop stays on the picture
+        if pan:   # left edge to right edge (or back), within the picture
+            side = eased if pan > 0 else 1.0 - eased
+            x = half_w + (source_w - 2 * half_w) * side
+        else:
+            x = centre_x
+        x = min(max(x, half_w), source_w - half_w)   # the crop stays on the picture
         y = min(max(centre_y, half_h), source_h - half_h)
         crop = (x - half_w, y - half_h, x + half_w, y + half_h)
         return np.asarray(_to_image(frame).resize((target_w, target_h), _RESAMPLE, box=crop))

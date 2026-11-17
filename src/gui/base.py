@@ -137,7 +137,7 @@ from vidgen.voice import generate_voiceover  # noqa: E402
 
 
 APP_NAME = "AI Video Studio"
-APP_VERSION = "5.4.0"
+APP_VERSION = "5.5.0"
 # Must match AppUserModelID in packaging/installer.iss, or a pinned taskbar
 # shortcut will not group with the running window.
 APP_MODEL_ID = "AIVideoStudio.Desktop.3"
@@ -275,6 +275,14 @@ AI_LOOK_HINTS = {
                  "Best for tech tips, gadgets and robots.",
     "Illustration": "Looks like a flat drawing with bold colours. Best for explaining ideas, "
                     "money topics and videos for children.",
+    "Anime film": "Looks like a hand-drawn anime film. Best for everyday drama, gossip, "
+                  "kindness and love stories.",
+    "Dark comic": "Looks like a dark comic book with heavy ink lines. Best for scary stories, "
+                  "crime and mysteries.",
+    "Painted history": "Looks like a dramatic oil painting. Best for history, religion and "
+                       "legends.",
+    "TV cartoon": "Looks like a flat cartoon from an adult TV show. Best for funny stories "
+                  "and everyday life.",
 }
 AI_DEVICES = {"Auto": "", "Graphics card": imagegen.GPU, "Processor": imagegen.CPU}
 AI_DEVICE_HINTS = {
@@ -294,11 +302,14 @@ MOVING_HINTS = {
 AI_THREAD_OPTIONS = ("Auto", "2", "4", "6", "8", "10", "12", "14", "16", "20", "24", "32")
 SLOW_AI_SCENES = 2       # AI pictures New from text makes by default on a slow PC
 SLOW_FAST_SECONDS = 40   # a Fast picture slower than this makes a PC "slow" for AI pictures
+# Deniz's words for the Storyboard dropdown (2026-11-17); the hints below start the same way.
+AI_SPEED_LABELS = {imagegen.BEST: "Best: slow", imagegen.BALANCED: "Balanced: normal",
+                   imagegen.FAST: "Fast: fast but low res"}
 AI_SPEED_HINTS = {
-    imagegen.FAST: "Smallest pictures, enlarged to the video's size: a little softer, but the "
+    imagegen.FAST: "Fast but low res. Smallest pictures, enlarged to the video's size: a little softer, but the "
                    "quickest by far. Best for PCs without a graphics card.",
-    imagegen.BALANCED: "Middle size. Sharp enough for Shorts, about twice as fast as Best.",
-    imagegen.BEST: "The full picture size. The sharpest, and the slowest. On the processor the "
+    imagegen.BALANCED: "Normal. Middle size. Sharp enough for Shorts, about twice as fast as Best.",
+    imagegen.BEST: "Slow. The full picture size. The sharpest, and the slowest. On the processor the "
                    "app still uses Fast: Best would take many minutes a picture.",
 }
 AI_IMAGES_WARNING = (
@@ -330,8 +341,14 @@ def default_settings() -> dict:
         "writer_gpu": False,
         "voice_online": False,
         "auto_cards": True,
+        "story_real": True,        # picture stories: only what could happen in real life
+        "story_own": False,        # "My own story": the user says what happens and the ending
+        "story_must": "",
+        "story_ending": "",
         "ai_images_for": AI_IMAGES_FOR[0],
         "ai_images_look": imagegen.DEFAULT_LOOK,
+        "ai_hero": "",             # the story's main character, for {hero} in AI pictures
+        "ai_seed": 0,              # one seed for a video's AI pictures; 0 = a new one each
         "ai_images_backend": "",   # "cpu" once the graphics card has failed on this PC
         "ai_device": "Auto",       # where AI pictures are made: Auto, Graphics card, Processor
         "project": "",             # the project the script belongs to (vidgen.projects)
@@ -345,7 +362,7 @@ def default_settings() -> dict:
         "web_facts": True,         # fact ideas are looked up on Wikipedia first (webfacts)
         "check_clips": True,       # stock clips looked at before the video (vidgen.clipcheck)
         "style": "Normal",         # Normal footage, or drawn on screen (vidgen.drawn)
-        "quick_sync": False,       # encode on an Intel graphics chip when it works (render)
+        "gpu_encode": True,        # encode on the graphics card when it works (render)
         "ai_images_speed": "",     # Fast / Balanced / Best; "" = chosen for this PC
         "ai_threads": "Auto",      # processor threads for AI pictures, or a number
         "ai_threads_best": "",     # "threads:affinity" the Test speed button found fastest
@@ -442,8 +459,14 @@ def load_settings() -> dict:
     data["writer_gpu"] = bool(data["writer_gpu"])
     data["voice_online"] = bool(data["voice_online"])
     data["auto_cards"] = bool(data["auto_cards"])
+    data["story_real"] = bool(data["story_real"])
+    data["story_own"] = bool(data["story_own"])
+    for key in ("story_must", "story_ending"):
+        data[key] = " ".join(str(data[key] or "").split())[:400]
     if data["ai_images_for"] not in AI_IMAGES_FOR:
         data["ai_images_for"] = AI_IMAGES_FOR[0]
+    data["ai_hero"] = " ".join(str(data["ai_hero"] or "").split())[:200]
+    data["ai_seed"] = data["ai_seed"] if isinstance(data["ai_seed"], int) and         0 <= data["ai_seed"] < 2**31 else 0
     if data["ai_images_look"] not in imagegen.LOOKS:
         data["ai_images_look"] = imagegen.DEFAULT_LOOK
     if data["ai_images_backend"] != imagegen.CPU:
@@ -457,7 +480,7 @@ def load_settings() -> dict:
     if data["style"] not in drawn.STYLES:
         data["style"] = drawn.NORMAL
     for key in ("intro_on", "outro_on", "sound_effects", "smart_motion", "web_facts",
-                "whats_new_off", "quick_sync", "check_clips", "gpu_looked", "old_writer_asked"):
+                "whats_new_off", "gpu_encode", "check_clips", "gpu_looked", "old_writer_asked"):
         data[key] = bool(data[key])
     for key in ("intro_text", "outro_text"):
         data[key] = " ".join(str(data[key]).split())[:60]
@@ -833,6 +856,48 @@ class Card(ctk.CTkFrame):
         super().__init__(master, **kwargs)
 
 
+def look_picture_name(look: str) -> str:
+    """The example picture of an AI look in assets/looks: "Dark comic" -> dark-comic.jpg."""
+    return "looks/" + look.lower().replace(" ", "-") + ".jpg"
+
+
+class LookPicker(ctk.CTkFrame):
+    """A grid of AI looks, each with an example picture made by our own model, bound to a
+    StringVar. Seven looks no longer fit a segmented row."""
+
+    THUMB = (60, 107)   # 9:16
+
+    def __init__(self, master, app, values, variable, columns=4):
+        super().__init__(master, fg_color="transparent")
+        self.variable, self.tiles, self.images = variable, {}, []
+        for i, value in enumerate(values):
+            image = None
+            path = asset_path(look_picture_name(value))
+            if path:
+                from PIL import Image
+
+                with Image.open(path) as im:
+                    picture = im.convert("RGB").resize(self.THUMB)
+                image = ctk.CTkImage(light_image=picture, dark_image=picture, size=self.THUMB)
+                self.images.append(image)
+            tile = ctk.CTkButton(
+                self, text=value.replace(" ", "\n", 1), image=image, compound="top", width=self.THUMB[0] + 14,
+                height=self.THUMB[1] + 34, corner_radius=6, border_width=2,
+                fg_color=CARD_BG, hover_color=CARD_HOVER, text_color=TEXT,
+                font=app.font_tiny, command=lambda v=value: variable.set(v))
+            tile.grid(row=i // columns, column=i % columns, padx=(0, 4), pady=(0, 4), sticky="n")
+            self.tiles[value] = tile
+        self._trace = variable.trace_add("write", lambda *_a: self._mark())
+        self.bind("<Destroy>", lambda e: e.widget is self and variable.trace_remove(
+            "write", self._trace), add="+")
+        self._mark()
+
+    def _mark(self):
+        chosen = self.variable.get()
+        for value, tile in self.tiles.items():
+            tile.configure(border_color=ACCENT if value == chosen else CARD_BG)
+
+
 class FluentSegmented(ctk.CTkFrame):
     """Windows 11 segmented control bound to a StringVar.
 
@@ -1174,11 +1239,12 @@ TOUR = (
 # Shown once after updating to this version (WhatsNewDialog). Short: the release notes have
 # the whole story.
 WHATS_NEW = (
-    "Tutorials: show how you do something in any app, and it becomes a sleek tutorial with "
-    "zooms, a smooth cursor, labels, steps, a voice and music. New > Tutorial.",
-    "Do it for me: write the steps (or let the Smart writer suggest them) and the app clicks "
-    "them itself, asking first. It only clicks what it is sure of; the rest is yours.",
-    "Your steps guide you while you record, ticking off as you click. 16:9 or 9:16 for Shorts.",
+    "Picture stories: type an idea and get a story video, every scene drawn in one style with "
+    "the same main character, one big word on screen at a time. Template > Picture story.",
+    "4 story looks (Anime film, Dark comic, Painted history, TV cartoon), 60 s or 2 minutes. "
+    "My own story: say what must happen and how it ends.",
+    "Faster: videos are put together on the graphics card and in parts at once, about 2 "
+    "minutes less for a 2-minute video. Picture quality is in the Storyboard.",
 )
 
 

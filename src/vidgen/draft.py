@@ -24,7 +24,7 @@ from .footage import STOPWORDS
 from .script import parse_script
 
 KEEP_ALL = "Keep everything"
-LENGTHS = ["15 s", "30 s", "60 s", "3 min", "5 min", "10 min", KEEP_ALL]
+LENGTHS = ["15 s", "30 s", "60 s", "2 min", "3 min", "5 min", "10 min", KEEP_ALL]
 
 # How much faster than normal the voice may have to go before a sentence is
 # dropped instead. pacing allows 15%; a draft should not start at the limit.
@@ -87,16 +87,21 @@ DEFAULT_CONTENT, DEFAULT_AGE, DEFAULT_PLATFORM = "Tech and how-to", "Adults", "Y
 # Background music by what the video is about. Bundled tracks are named "<mood> - <title>".
 MOODS = {"Tech and how-to": "calm", "Story and facts": "dramatic", "Motivation": "upbeat",
          "Business and money": "calm", "Kids and family": "upbeat"}
+# A picture story's music follows its look: dark and history stories dramatic, the rest lighter.
+STORY_MOODS = {"Dark comic": "dramatic", "Painted history": "dramatic", "Anime film": "calm",
+               "TV cartoon": "upbeat"}
 
 
 def pick_track(paths, content: str, seed: str = "") -> str | None:
-    """A track whose mood fits ``content``; ``seed`` (the script) picks which, so
-    videos differ but one video always gets the same track. None if there are none."""
+    """A track whose mood fits ``content`` (an audience's content, or a mood itself);
+    ``seed`` (the script) picks which, so videos differ but one video always gets the same
+    track. None if there are none."""
     import os
     import zlib
 
     paths = sorted(paths)
-    mood = MOODS.get(content, "calm") + " - "
+    mood = MOODS.get(content) or (content if content in set(MOODS.values()) else "calm")
+    mood += " - "
     fitting = [p for p in paths if os.path.basename(p).lower().startswith(mood)] or paths
     return fitting[zlib.crc32(seed.encode("utf-8")) % len(fitting)] if fitting else None
 
@@ -154,6 +159,7 @@ class Template:
     cards: bool
     caption_style: str
     look: str = "Normal"   # vidgen.drawn style: Normal, Blackboard or Drawing
+    story: bool = False    # a picture story: one main character, AI pictures in a story look
 
 
 TEMPLATES = {
@@ -167,6 +173,8 @@ TEMPLATES = {
                       "60 s", True, "Highlight"),
     "Motivation": Template(Audience("Motivation", "Young adults", "TikTok"), "30 s", False,
                            "One word"),
+    "Picture story": Template(Audience("Story and facts", "Adults", "YouTube Shorts"), "60 s",
+                              False, "One word", story=True),
     "Explainer": Template(Audience("Story and facts", "Adults", "YouTube Shorts",
                                    "Explain it the way a good teacher would at a blackboard: "
                                    "one idea per scene, simple words, a clear example."),
@@ -456,6 +464,7 @@ class DraftScene:
     unfilmable: bool = False  # its search words named things no camera can film
     chapter: str = ""  # a long video's part that starts at this scene (writer._write_long)
     photo: str = ""  # the path of the user's reference photo shown in this scene
+    zoom: str = ""  # script Zoom: for this scene ("in", "pan"), "" = the app's default
 
 
 # Which scenes get an AI picture (imagegen.py) when the user has downloaded AI images.
@@ -621,6 +630,8 @@ def to_script(scenes, cards: bool = True, ai: str = AI_NONE) -> str:
                   for block, card in zip(blocks, found)]
     blocks = [block + (f"\nChapter: {_one_line(s.chapter)}" if getattr(s, "chapter", "") else "")
               for block, s in zip(blocks, spoken)]
+    blocks = [block + (f"\nZoom: {s.zoom}" if getattr(s, "zoom", "") else "")
+              for block, s in zip(blocks, spoken)]
     if not blocks:
         raise DraftError("There is no text to turn into a script.")
     script = "\n\n".join(blocks)
@@ -640,6 +651,8 @@ class Draft:
     kept: list[int] = field(default_factory=list)
     longer: str | None = None  # the shortest length that would keep every sentence
     source: str = "Quick split"
+    hero: str = ""   # a picture story's main character (imagegen {hero})
+    look: str = ""   # the AI picture look the story asks for
 
     @property
     def target(self) -> str:

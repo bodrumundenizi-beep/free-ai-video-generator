@@ -249,8 +249,13 @@ class App(ctk.CTk):
         self.var_writer_gpu = tk.BooleanVar(value=s["writer_gpu"])
         self.var_voice_online = tk.BooleanVar(value=s["voice_online"])
         self.var_auto_cards = tk.BooleanVar(value=s["auto_cards"])
+        self.var_story_real = tk.BooleanVar(value=s["story_real"])
+        self.var_story_own = tk.BooleanVar(value=s["story_own"])
+        self.story_must, self.story_ending = s["story_must"], s["story_ending"]
         self.var_ai_for = tk.StringVar(value=s["ai_images_for"])
         self.var_ai_look = tk.StringVar(value=s["ai_images_look"])
+        self.var_ai_hero = tk.StringVar(value=s["ai_hero"])
+        self.ai_seed = s["ai_seed"] or imagegen.new_seed()
         self.ai_backend = s["ai_images_backend"]
         self.var_ai_device = tk.StringVar(value=s["ai_device"])
         self.project = s["project"] or None   # vidgen.projects id of what the script is
@@ -264,7 +269,7 @@ class App(ctk.CTk):
         self.var_animate = tk.StringVar(value=s["animate"])
         self.var_web_facts = tk.BooleanVar(value=s["web_facts"])
         self.var_style = tk.StringVar(value=s["style"])
-        self.var_quick_sync = tk.BooleanVar(value=s["quick_sync"])
+        self.var_gpu_encode = tk.BooleanVar(value=s["gpu_encode"])
         self.var_style.trace_add("write", lambda *_args: getattr(self, "board_cards", None)
                                  and self.refresh_board(force=True))   # cards show the style
         self.whats_new_seen, self.whats_new_off = s["whats_new_seen"], s["whats_new_off"]
@@ -291,11 +296,11 @@ class App(ctk.CTk):
                     self.var_padding, self.var_music_enabled, self.var_captions,
                     self.var_ask_save, self.var_check_updates, self.var_versions,
                     self.var_writer_gpu, self.var_voice_online, self.var_auto_cards,
-                    self.var_ai_for, self.var_ai_look,
+                    self.var_story_own, self.var_ai_for, self.var_ai_look,
                     self.var_target, self.var_intro_on, self.var_intro_text,
                     self.var_outro_on, self.var_outro_text, self.var_sfx,
                     self.var_smart_motion, self.var_animate, self.var_web_facts,
-                    self.var_style, self.var_quick_sync, self.var_check_clips,
+                    self.var_style, self.var_gpu_encode, self.var_check_clips,
                     *self.caption_vars.values()):
             var.trace_add("write", self._on_setting_changed)
 
@@ -317,8 +322,14 @@ class App(ctk.CTk):
             "writer_gpu": bool(self.var_writer_gpu.get()),
             "voice_online": bool(self.var_voice_online.get()),
             "auto_cards": bool(self.var_auto_cards.get()),
+            "story_real": bool(self.var_story_real.get()),
+            "story_own": bool(self.var_story_own.get()),
+            "story_must": self.story_must,
+            "story_ending": self.story_ending,
             "ai_images_for": self.var_ai_for.get(),
             "ai_images_look": self.var_ai_look.get(),
+            "ai_hero": " ".join(self.var_ai_hero.get().split()),
+            "ai_seed": self.ai_seed,
             "ai_images_backend": self.ai_backend,
             "ai_device": self.var_ai_device.get(),
             "project": self.project or "",
@@ -332,7 +343,7 @@ class App(ctk.CTk):
             "animate": self.var_animate.get(),
             "web_facts": bool(self.var_web_facts.get()),
             "style": self.var_style.get(),
-            "quick_sync": bool(self.var_quick_sync.get()),
+            "gpu_encode": bool(self.var_gpu_encode.get()),
             "whats_new_seen": self.whats_new_seen,
             "whats_new_off": self.whats_new_off,
             "old_writer_asked": self.old_writer_asked,
@@ -615,8 +626,10 @@ class App(ctk.CTk):
         self.door_box = ctk.CTkTextbox(door, height=130, font=self.font_body, corner_radius=4,
                                        fg_color=FIELD_BG, text_color=TEXT, border_width=0,
                                        wrap="word")
-        template_bar = ctk.CTkFrame(door, fg_color="transparent")
-        template_bar.grid(row=2, column=0, columnspan=3, sticky="w", padx=16, pady=(10, 0))
+        bars = ctk.CTkFrame(door, fg_color="transparent")
+        bars.grid(row=2, column=0, columnspan=3, sticky="ew", padx=16, pady=(10, 0))
+        template_bar = ctk.CTkFrame(bars, fg_color="transparent")
+        template_bar.pack(side="top", anchor="w")
         ctk.CTkLabel(template_bar, text="Template", font=self.font_body, text_color=TEXT_MUTED,
                      ).pack(side="left", padx=(0, 10))
         self.var_template = tk.StringVar(value=NO_TEMPLATE)
@@ -630,6 +643,39 @@ class App(ctk.CTk):
             button_color=FIELD_BG, button_hover_color=CARD_HOVER, text_color=TEXT,
             dropdown_fg_color=CARD_BG, dropdown_text_color=TEXT, dropdown_hover_color=CARD_HOVER,
             dropdown_font=self.font_body, dynamic_resizing=False).pack(side="left")
+        # Picture stories: real life only (no one turns into a car), or anything goes.
+        ctk.CTkCheckBox(template_bar, text="Real life only", variable=self.var_story_real,
+                        font=self.font_body, text_color=TEXT_MUTED, checkbox_width=18,
+                        checkbox_height=18, border_width=1).pack(side="left", padx=(16, 0))
+        # "My own story": what happens and how it ends, typed in this card (no window).
+        ctk.CTkCheckBox(template_bar, text="My own story", variable=self.var_story_own,
+                        font=self.font_body, text_color=TEXT_MUTED, checkbox_width=18,
+                        checkbox_height=18, border_width=1,
+                        command=self._show_own_story).pack(side="left", padx=(16, 0))
+        self.own_story = ctk.CTkFrame(bars, fg_color="transparent")
+        self.own_story.grid_columnconfigure(1, weight=1)
+        self.own_entries, self.own_help, self._own_ok = {}, {}, set()
+        for row, (key, label) in enumerate((("story_must", "Must happen"),
+                                            ("story_ending", "Ending"))):
+            row *= 2
+            ctk.CTkLabel(self.own_story, text=label, font=self.font_body,
+                         text_color=TEXT_MUTED, anchor="w").grid(row=row, column=0, sticky="w",
+                                                                 padx=(0, 10), pady=(6, 0))
+            # No textvariable: customtkinter shows the grey hint only without one.
+            entry = ctk.CTkEntry(self.own_story, height=30, corner_radius=4, font=self.font_body,
+                                 fg_color=FIELD_BG, border_width=0, text_color=TEXT,
+                                 placeholder_text_color=TEXT_DIM,
+                                 placeholder_text="Write it in detail: who, what, why...")
+            entry.grid(row=row, column=1, sticky="ew", pady=(6, 0))
+            if getattr(self, key):
+                entry.insert(0, getattr(self, key))
+            entry.bind("<FocusOut>", lambda _e: self._keep_own_story())
+            self.own_entries[key] = entry
+            # "What did you mean?": options for a short line, shown here (no window)
+            self.own_help[key] = ctk.CTkFrame(self.own_story, fg_color="transparent")
+            self.own_help[key].grid(row=row + 1, column=1, sticky="ew")
+            self.own_help[key].grid_remove()
+        self._show_own_story()
         self.door_box.grid(row=3, column=0, columnspan=3, sticky="ew", padx=14, pady=(8, 8))
         self.door_photos = PhotoList(door, self)
         self.door_photos.grid(row=4, column=0, columnspan=3, sticky="ew", pady=(0, 10))
@@ -696,7 +742,15 @@ class App(ctk.CTk):
             WelcomeDialog(self)   # nothing to show the scenes with yet: the free key comes first
             return
         self.door_status.configure(text="", text_color=TEXT_DIM)
-        self._after_draft = "render" if self.var_straight.get() else "board"
+        # With "My own story", the story is always read in the Storyboard before it is made.
+        own = self.own_story_text(draft.TEMPLATES.get(self.var_template.get()))
+        # A short line may be read wrong: its options first, once (Make video again goes on).
+        short = [(key, line) for key, line in zip(("story_must", "story_ending"), own)
+                 if writer.too_short(line) and line not in self._own_ok]
+        if short:
+            self._ask_meaning(text, short)
+            return
+        self._after_draft = "render" if self.var_straight.get() and not any(own) else "board"
         dialog = DraftDialog(self)
         dialog.prefill(text)
         for photo in self.door_photos.photo_list():   # the dialog describes and places them
@@ -709,8 +763,12 @@ class App(ctk.CTk):
         # A template answers the questions itself; they are still shown, to change.
         self.var_auto_cards.set(template.cards)
         self.caption_vars["caption_style"].set(template.caption_style)
+        if template.story:   # one big word in the middle, like story Shorts
+            self.caption_vars["caption_position"].set("Center")
         self.var_style.set(template.look)
         dialog.style = template.audience.style
+        dialog.story = self.story_mode(template)
+        dialog.own = own
         dialog.var_platform.set(template.audience.platform)   # before the length it presets
         dialog._apply(draft.Suggestion(template.audience, template.length,
                                        f"The {name} template. Change any answer if you like."))
@@ -1202,9 +1260,14 @@ class App(ctk.CTk):
                                         pacing.TARGETS.get(self.var_target.get()))
         pictures = sum(scene.is_ai for scene in parsed)
         if pictures and imagegen.installed():
-            wait = pictures * 20 * (2 if self.var_versions.get() == "2" else 1)
+            # Measured on this PC where possible (17 s a picture on an RTX 4060 at Best).
+            wait = round(pictures * self.seconds_per_picture()
+                         * (2 if self.var_versions.get() == "2" else 1))
             text += (f" · {pictures} AI picture{'s' if pictures != 1 else ''}, about "
                      + (f"{wait} s" if wait < 90 else f"{round(wait / 60)} min") + " more")
+            if self.ai_slow():
+                text += " (this PC draws them on the processor, which is slow)"
+                warning = True
         self.estimate_label.configure(text=text,
                                       text_color=WARN_COLOR if warning else TEXT_MUTED)
 
@@ -1697,11 +1760,12 @@ class App(ctk.CTk):
         motion_row.grid(row=next(rows), column=0, sticky="ew", pady=PAD // 2)
         ctk.CTkSwitch(motion_row.control, text="", width=44, variable=self.var_smart_motion,
                       onvalue=True, offvalue=False, progress_color=ACCENT).pack(side="left")
-        qsv_row = SettingRow(page, self, self.icon("scenes"), "Encode on the Intel graphics chip",
-                             "Quick Sync: faster on Intel laptops. Falls back to the normal "
-                             "encoder by itself where it isn't there or fails")
+        qsv_row = SettingRow(page, self, self.icon("scenes"), "Encode on the graphics card",
+                             "NVIDIA, Intel or AMD: faster, and less work for the processor. "
+                             "Falls back to the normal encoder by itself where it isn't there "
+                             "or fails")
         qsv_row.grid(row=next(rows), column=0, sticky="ew", pady=PAD // 2)
-        ctk.CTkSwitch(qsv_row.control, text="", width=44, variable=self.var_quick_sync,
+        ctk.CTkSwitch(qsv_row.control, text="", width=44, variable=self.var_gpu_encode,
                       onvalue=True, offvalue=False, progress_color=ACCENT).pack(side="left")
         cache_row = SettingRow(page, self, self.icon("folder"), "Kept clips and voices",
                                "Re-renders reuse downloaded clips and spoken lines. "
@@ -2151,6 +2215,12 @@ class App(ctk.CTk):
         if left:   # the app closed while a switch it flipped for a video was still flipped
             threading.Thread(target=self._put_back_left, args=(left,), daemon=True).start()
         if self.version_since.get("version") != APP_VERSION:
+            # Counted once: an install (never started here) or an update (an older version
+            # ran here). One download of a 1-byte file, only with "Check for updates" on.
+            if self.var_check_updates.get():
+                kind = "update" if self.tour_seen else "install"
+                threading.Thread(target=updates.count, args=(kind, APP_VERSION),
+                                 daemon=True).start()
             # A first install has nothing "new": its What's new line never shows.
             self.version_since = {"version": APP_VERSION,
                                   "at": time.time() if self.tour_seen else 0}
@@ -2619,12 +2689,133 @@ class App(ctk.CTk):
         self.var_voice.set(voices.persona(result.voice).label)
         self.var_aspect.set(result.aspect)
         self.var_target.set(result.target)
+        self._apply_story(result)
         self._commit_script()
         # Look before it is made, unless the user asked for the video straight away.
         after, self._after_draft = self._after_draft, "board"
         self.select_page("board")
         if after == "render":
             self.start_render()
+
+    def story_mode(self, template):
+        """What the Smart writer is told for this template: no story, or a picture story that
+        keeps to real life (the box) or lets anything happen."""
+        if not (template and template.story):
+            return False
+        return writer.REAL_LIFE if self.var_story_real.get() else writer.ANYTHING_GOES
+
+    def _show_own_story(self):
+        if self.var_story_own.get():
+            self.own_story.pack(side="top", fill="x")
+        else:
+            self.own_story.pack_forget()
+
+    def _keep_own_story(self):
+        """Save what is in the two lines."""
+        for key, entry in self.own_entries.items():
+            setattr(self, key, " ".join(entry.get().split())[:400])
+        self._on_setting_changed()
+
+    def _ask_meaning(self, idea, short):
+        """Main thread: the writer's options for each short line, then shown under it."""
+        self._own_ok.update(line for _key, line in short)
+        if not (self.writer_mode == "Smart writer" and writer.ready()[0]):
+            for key, _line in short:   # no writer: the small boxes alone
+                self._show_meaning(key, [])
+            return
+        self.door_status.configure(text="Reading your short line...", text_color=TEXT_DIM)
+        gpu = bool(self.var_writer_gpu.get())
+
+        def work():
+            found = {}
+            try:
+                with writer.Session(gpu=gpu) as session:
+                    for key, line in short:
+                        kind = "Must happen" if key == "story_must" else "Ending"
+                        found[key] = session.readings(idea, kind, line)
+            except writer.WriterError:
+                pass   # the small boxes still help
+            self._queue.put(("call", {"fn": lambda: [self._show_meaning(key, found.get(key, []))
+                                                     for key, _line in short]}))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _show_meaning(self, key, options):
+        """Under the line: a warning, the options, and Something else with 3 small boxes."""
+        self.door_status.configure(text="", text_color=TEXT_DIM)
+        help_ = self.own_help[key]
+        for child in help_.winfo_children():
+            child.destroy()
+        ctk.CTkLabel(help_, text="⚠️ This is short, so the writer may guess wrong. Pick what you "
+                     "meant, or write it in more detail:", font=self.font_tiny,
+                     text_color=WARN_COLOR, anchor="w").pack(anchor="w", pady=(4, 2))
+        choice = tk.StringVar(value="")
+        boxes = ctk.CTkFrame(help_, fg_color="transparent")
+
+        def picked():
+            if choice.get() == "else":
+                boxes.pack(anchor="w", fill="x", pady=(2, 4))
+                return
+            self._use_meaning(key, choice.get())
+
+        for option in options:
+            ctk.CTkRadioButton(help_, text=option, value=option, variable=choice,
+                               command=picked, font=self.font_tiny, text_color=TEXT,
+                               radiobutton_width=16, radiobutton_height=16,
+                               border_width_checked=5).pack(anchor="w", pady=1)
+        ctk.CTkRadioButton(help_, text="Something else", value="else", variable=choice,
+                           command=picked, font=self.font_tiny, text_color=TEXT,
+                           radiobutton_width=16, radiobutton_height=16,
+                           border_width_checked=5).pack(anchor="w", pady=1)
+        parts = []
+        for label, hint in (("Who does it?", "the police car"),
+                            ("To whom or what?", "the strange car"),
+                            ("How or why?", "chases it at high speed through the city")):
+            ctk.CTkLabel(boxes, text=label, font=self.font_tiny, text_color=TEXT_MUTED,
+                         ).pack(side="left", padx=(0, 4))
+            box = ctk.CTkEntry(boxes, height=28, width=170 if len(parts) < 2 else 260,
+                               corner_radius=4, font=self.font_tiny, fg_color=FIELD_BG,
+                               border_width=0, text_color=TEXT, placeholder_text=hint,
+                               placeholder_text_color=TEXT_DIM)
+            box.pack(side="left", padx=(0, 10))
+            parts.append(box)
+        ctk.CTkButton(boxes, text="Use this", width=80, height=28, corner_radius=4,
+                      font=self.font_tiny, fg_color=FIELD_BG, hover_color=CARD_HOVER,
+                      border_width=1, border_color=FIELD_BORDER, text_color=TEXT,
+                      command=lambda: self._use_meaning(
+                          key, writer.merge_detail(*(b.get() for b in parts)))
+                      ).pack(side="left")
+        if not options:   # no writer options: the boxes straight away
+            choice.set("else")
+            picked()
+        help_.grid()
+
+    def _use_meaning(self, key, line):
+        """The chosen or merged line replaces the short one; Make video goes on with it."""
+        if not line:
+            return
+        entry = self.own_entries[key]
+        entry.delete(0, "end")
+        entry.insert(0, line)
+        self._own_ok.add(" ".join(line.split()))
+        self.own_help[key].grid_remove()
+        self._keep_own_story()
+
+    def own_story_text(self, template):
+        """(must happen, ending) for the Smart writer: empty unless "My own story" is
+        ticked for a picture story."""
+        self._keep_own_story()
+        if not (template and template.story and self.var_story_own.get()):
+            return "", ""
+        return self.story_must, self.story_ending
+
+    def _apply_story(self, result):
+        """A picture story's main character and look, and a new seed for its pictures. Any
+        other script leaves the character box empty, so no {hero} words are added."""
+        self.var_ai_hero.set(result.hero)
+        if result.look in imagegen.LOOKS:
+            self.var_ai_look.set(result.look)
+        if result.hero or result.look:
+            self.ai_seed = imagegen.new_seed()
 
     # -- the Smart writer's one-time download --------------------------------
     def start_writer_download(self, upgrade=False):
@@ -3415,6 +3606,9 @@ class App(ctk.CTk):
             self.var_style.set(snap["style"])
         if snap.get("ai_images_look") in imagegen.LOOKS:
             self.var_ai_look.set(snap["ai_images_look"])
+        self.var_ai_hero.set(snap.get("ai_hero") or "")
+        # A project from before 5.5 has no seed: 0 keeps its pictures (and their keys) as made.
+        self.ai_seed = snap.get("ai_seed") or 0
         if snap.get("target_length") in pacing.TARGETS:
             self.var_target.set(snap["target_length"])
         if "music_enabled" in snap:
@@ -3745,14 +3939,46 @@ class App(ctk.CTk):
 
         # The look of AI pictures: only there once AI pictures are downloaded.
         self.look_bar, body = self._option_card(box, "images", "AI picture look")
-        FluentSegmented(body, self, list(imagegen.LOOKS), self.var_ai_look, inner).pack(
-            anchor="w")
+        LookPicker(body, self, list(imagegen.LOOKS), self.var_ai_look).pack(anchor="w")
         look_hint = ctk.CTkLabel(body, text=AI_LOOK_HINTS.get(self.var_ai_look.get(), ""),
                                  font=self.font_tiny, text_color=TEXT_DIM, anchor="w",
                                  justify="left", wraplength=inner)
         look_hint.pack(fill="x", pady=(6, 0))
         self.var_ai_look.trace_add("write", lambda *_args: look_hint.configure(
             text=AI_LOOK_HINTS.get(self.var_ai_look.get(), "")))
+        # Picture quality, here too (the Storyboard is the control center): the same setting
+        # as Settings > AI pictures > Speed.
+        quality = ctk.CTkFrame(body, fg_color="transparent")
+        quality.pack(fill="x", pady=(8, 0))
+        ctk.CTkLabel(quality, text="Picture quality", font=self.font_body,
+                     text_color=TEXT).pack(side="left", padx=(0, 12))
+        shown = tk.StringVar(value=AI_SPEED_LABELS.get(self.var_ai_speed.get(), ""))
+        by_label = {label: speed for speed, label in AI_SPEED_LABELS.items()}
+        ctk.CTkOptionMenu(
+            quality, values=list(AI_SPEED_LABELS.values()), variable=shown, width=190,
+            height=30, corner_radius=4, font=self.font_body, fg_color=FIELD_BG,
+            button_color=FIELD_BG, button_hover_color=CARD_HOVER, text_color=TEXT,
+            dropdown_fg_color=CARD_BG, dropdown_text_color=TEXT,
+            dropdown_hover_color=CARD_HOVER, dropdown_font=self.font_body,
+            command=lambda label: self.var_ai_speed.set(by_label[label])).pack(side="left")
+        self.var_ai_speed.trace_add("write", lambda *_args: shown.set(
+            AI_SPEED_LABELS.get(self.var_ai_speed.get(), "")))
+        # The story's main character: the same words (and seed) in every scene keep them the same.
+        ctk.CTkLabel(body, text="Who is the story about?", font=self.font_body, text_color=TEXT,
+                     anchor="w").pack(fill="x", pady=(10, 4))
+        focus_accent(ctk.CTkEntry(
+            body, textvariable=self.var_ai_hero, width=inner, height=30, corner_radius=4,
+            font=self.font_body, fg_color=CARD_BG, border_color=FIELD_BORDER, border_width=1,
+            text_color=TEXT)).pack(anchor="w")
+        ctk.CTkLabel(body, text="For example: young man, short black wavy hair, navy shirt. "
+                                "A picture shows them where its scene says {hero}, like "
+                                "\"ai: {hero} at the airport\".", font=self.font_tiny,
+                     text_color=TEXT_DIM, anchor="w", justify="left",
+                     wraplength=inner).pack(fill="x", pady=(4, 6))
+        ctk.CTkButton(body, text="New pictures", width=130, height=28, corner_radius=4,
+                      font=self.font_tiny, fg_color=CARD_BG, hover_color=CARD_HOVER,
+                      border_width=1, border_color=FIELD_BORDER, text_color=TEXT,
+                      command=self.new_ai_pictures).pack(anchor="w")
 
         self.style_card, body = self._option_card(box, "script", "Style")
         FluentSegmented(body, self, list(drawn.STYLES), self.var_style, inner).pack(anchor="w")
@@ -3797,6 +4023,11 @@ class App(ctk.CTk):
     def board_box(self):
         """The size of a card's picture: the shape of the video, small."""
         return (81, 144) if self.var_aspect.get() == "9:16" else (176, 99)
+
+    def new_ai_pictures(self):
+        """A new seed: every AI picture of this video is drawn again, still matching each other."""
+        self.ai_seed = imagegen.new_seed()
+        self.refresh_board(force=True)
 
     def refresh_board(self, force=False):
         """Rebuild the cards if the script changed since they were built."""
@@ -4290,11 +4521,13 @@ class App(ctk.CTk):
     # -- pictures: found on worker threads, shown through the queue ---------------------
     def _picture_key(self, scene, ctx=None) -> str:
         ctx = ctx or self._board_ctx(search=False)
-        return f"{scene.ai_prompt}|{ctx['look']}|{ctx['aspect']}"
+        return imagegen.picture_key(scene.ai_prompt, ctx["look"], ctx["aspect"], ctx["hero"],
+                                    ctx["seed"])
 
     def _board_ctx(self, search=True) -> dict:
         """UI thread: what the picture workers need, read here because they must not touch Tk."""
         return {"look": self.var_ai_look.get(), "aspect": self.var_aspect.get(),
+                "hero": " ".join(self.var_ai_hero.get().split()), "seed": self.ai_seed,
                 "style": self.var_style.get(),
                 "has_key": self._has_footage_key(), "ai": imagegen.installed(),
                 "base": os.path.dirname(os.path.abspath(self.var_output.get() or ".")),
@@ -4388,6 +4621,7 @@ class App(ctk.CTk):
         size, look, backend = imagegen.size_for(self.var_aspect.get()), self.var_ai_look.get(), \
             self.ai_backend_now()
         speed, threads = self.ai_speed_now(), self.threads_pair()
+        hero, seed = " ".join(self.var_ai_hero.get().split()), self.ai_seed
         if self.board_cards[index] is not None:
             self.board_cards[index]["status"].configure(text="Making the picture...")
 
@@ -4399,7 +4633,8 @@ class App(ctk.CTk):
                 name = hashlib.sha1(f"{key}|{time.time()}".encode()).hexdigest()[:16]
                 path = os.path.join(PREVIEW_DIR, f"board_{name}.png")
                 made = imagegen.make(scene.ai_prompt, size, path, look, backend=backend,
-                                     log=self.ui.log, speed=speed, threads=threads)
+                                     log=self.ui.log, speed=speed, threads=threads,
+                                     seed=seed or None, hero=hero)
                 self.ui.ai_speed(made.seconds, speed)
                 self._board_post(gen, event="made", index=index, key=key, path=path,
                                  seconds=made.seconds, backend=made.backend)
@@ -4828,6 +5063,8 @@ class App(ctk.CTk):
     def ai_speed_now(self) -> str:
         """The speed a picture is made at now: the processor never goes above Fast."""
         speed = self.var_ai_speed.get()
+        # Stories were Fast (384x672, stretched 3 times: soft Dark comic lines, 2026-11-17);
+        # now the PC's own speed: Balanced with a graphics card, Fast without one.
         return imagegen.FAST if self.ai_backend_now() == imagegen.CPU else speed
 
     def seconds_per_picture(self, speed=None) -> float:
@@ -5343,6 +5580,8 @@ class App(ctk.CTk):
         if template:
             self.var_auto_cards.set(template.cards)
             self.caption_vars["caption_style"].set(template.caption_style)
+            if template.story:
+                self.caption_vars["caption_position"].set("Center")
             audience, length = template.audience, template.length
         else:
             audience = draft.Audience(self.audience["audience_content"],
@@ -5351,6 +5590,7 @@ class App(ctk.CTk):
             length = audience.length
         self._batch = {"texts": texts, "at": 0, "made": [], "failed": [],
                        "audience": audience, "length": length,
+                       "story": self.story_mode(template),
                        "folder": os.path.dirname(os.path.abspath(
                            self.var_output.get() or default_output_dir()))}
         self.append_log(f"📚 Making {len(texts)} videos, one after another.")
@@ -5376,16 +5616,17 @@ class App(ctk.CTk):
             return
         self.append_log(f"📝 Video {b['at'] + 1} of {len(b['texts'])}: writing the script...")
         args = (b["texts"][b["at"]], b["audience"], b["length"], self.settings["padding"],
-                bool(self.var_auto_cards.get()), self.ai_mode(), bool(self.var_writer_gpu.get()))
+                bool(self.var_auto_cards.get()), self.ai_mode(), bool(self.var_writer_gpu.get()),
+                b["story"])
         threading.Thread(target=self._batch_write, args=args, daemon=True).start()
 
-    def _batch_write(self, text, audience, length, padding, cards, ai, gpu):
+    def _batch_write(self, text, audience, length, padding, cards, ai, gpu, story=False):
         """Worker: one script, by the Smart writer if it is there, else Quick split."""
         try:
             if self.writer_mode == "Smart writer" and writer.ready()[0]:
                 with writer.Session(gpu=gpu) as session:
                     result = session.write(text, audience, length, padding, cards, ai,
-                                           bool(self.var_web_facts.get()))
+                                           bool(self.var_web_facts.get()), story=story)
                     try:   # while the model is loaded anyway
                         upload = session.upload_text(result.script)
                     except writer.WriterError:
@@ -5418,6 +5659,7 @@ class App(ctk.CTk):
         self.var_voice.set(voices.persona(result.voice).label)
         self.var_aspect.set(result.aspect)
         self.var_target.set(result.target)
+        self._apply_story(result)
         name = re.sub(r'[<>:"/\\|?*]+', "", projects.default_title(result.script)).strip(" .")
         self.var_output.set(os.path.join(b["folder"], (name or "video")[:60] + ".mp4"))
         self._commit_script()
@@ -5520,7 +5762,10 @@ class App(ctk.CTk):
                    thumbnail_scene=self._thumb_scene(), thumbnail_title=self.thumb_title())
 
         if cfg["music_path"] == AUTO_TRACK:
-            cfg["music_path"] = draft.pick_track(bundled_tracks(), self.audience[
+            # A picture story (it has a main character) takes its music from its look.
+            mood = (draft.STORY_MOODS.get(settings["ai_images_look"]) if settings["ai_hero"]
+                    else None)
+            cfg["music_path"] = draft.pick_track(bundled_tracks(), mood or self.audience[
                 "audience_content"], settings["script"]) or ""
         cfg.update(self._render_overrides)   # "make 2 and reuse", "Fast": this video only
         self._render_overrides = {}

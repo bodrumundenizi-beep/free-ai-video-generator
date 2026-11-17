@@ -494,6 +494,544 @@ def script_schema(scenes: int, pictures: bool = False, photos=()) -> dict:
     }
 
 
+# --- picture stories (5.5): one main character, every scene drawn ----------------------
+STORY_LOOKS = ("Anime film", "Dark comic", "Painted history", "TV cartoon")   # imagegen.LOOKS
+HERO_WORD = "HERO"   # the model writes this; the app puts the character's description there
+_HERO_IN = re.compile(r"\b(?:[Tt]he |[Oo]ur |[Aa] )?HERO\b")
+# No example story in the turns: tested 2026-11-15, Qwen3-VL retold it (a gossip idea came
+# back as the example's puppy in the snow, and snow fell at the airport).
+STORY_SCENES = 11   # 60 s: 10 to 12 scenes of one or two sentences
+STORY_WORDS_PER_SCENE = 13.5   # what an 11-scene, 60 s story came to (about 150 words)
+_CAPS_NAME = re.compile(r"\b[A-Z]{3,}\b")
+
+
+# Real life or anything goes (the app's switch). "The car is her" (2026-11-15): asked only for
+# "a twist", the model turned the kidnapping into a metaphor.
+REAL_RULE = ("- Everything in it could happen in real life: no magic, ghosts, monsters, dreams, "
+             "people turning into things, or \"it was all in her mind\". A twist must make "
+             "sense in real life.\n")
+# "Headlights slicing her face like a blade", "Finds her missing." (2026-11-15): trailer talk
+# that a B1 reader, and the plot, lost track of.
+# "Short" sentences went telegram-style in 1 of 6 stories: "Boy asks clerk." (2026-11-16)
+PLAIN_RULE = ("- Plain English a learner understands: simple everyday words, normal complete "
+              "sentences, with 'the' and 'a' like everyday English. Every line says who does "
+              "what (\"The girl opens the door\", not \"Door opens.\"), one action per line, "
+              "following from the line before. Use "
+              "time words where they help: then, suddenly, a minute later. No poetic images "
+              "or comparisons (\"like a blade\", \"eyes locked\").\n")
+# A school-note story got a police officer, a kind one danger (2026-11-16): the rules spoke only
+# of chases and police.
+# Naming "no police, drivers or strangers" took the danger out of the midnight car story too:
+# the car did nothing and "was never there" (2026-11-16).
+MOOD_RULE = ("- Keep the idea's mood: a kind idea stays kind, a funny one funny, a scary one "
+             "scary. Only the people the idea needs. In a scary idea the danger is real: the "
+             "threat does something, and the ending stops it.\n")
+REAL_LIFE, ANYTHING_GOES = "real life", "anything goes"   # Session.write(story=...)
+# Take 4 (2026-11-15) ended on "it was the bus driver" with nothing after. A list of endings
+# ("caught, arrested…") was taken as a menu: the woman herself was arrested (2026-11-16).
+ENDING_RULE = ("- The ending closes the story: it answers the problem from the start (the "
+               "danger stops, the question is answered, the wish comes true or fails) and says "
+               "what finally happens to the main character. The main character is the one the "
+               "story happens to, never the one punished, unless the idea says so. A reveal "
+               "alone is not an ending: say what happens after it.\n")
+# "Say the woman, the driver, the officer" put a driver and an officer in every plot, a school
+# story too (2026-11-16).
+NO_NAMES = ("- Give nobody a name: call people by what they are in this story (the girl, her "
+            "friend, the teacher). Only names the idea itself gives may be used, and real "
+            "people only when the idea names them.\n")
+SHORT_STORY = 0.83   # of the length asked for: under it (50 s of 60) a story is written again
+ANY_RULE = ("- Anything may happen, even the impossible, but the ending still says clearly "
+            "what happens, and it is not a dream or a metaphor.\n")
+
+
+# The story's picture rule, word for word as frozen; the user's own ending uses it too (its
+# own short rule gave pictures copying the spoken line, quotes and all, 2026-11-17).
+PICTURE_RULE = (
+    "- \"picture\" is one moment of the scene that an artist can draw: what is "
+    "happening, the feeling on the face, where it is, and a strong background that fits "
+    "the mood (rain, a sunset, a crowd, a dark street). When it shows the main character, start with HERO "
+    "and never describe their looks, for example: HERO kneeling by a window, "
+    "worried face, rain outside. One main person in the middle. No "
+    "writing, logos or brand names.\n")
+
+
+def story_prompt(audience: draft.Audience, words: int, scenes: int, real: bool = True) -> str:
+    """The instructions for a picture story: the scenes, the main character and the topic."""
+    return (
+        "You write short narrated picture stories for vertical videos. The user gives an "
+        "idea. Write an original story from it, told as narration. Something happens in "
+        "every scene: the main character does, sees, hears or decides something. Write "
+        "only about the user's idea.\n"
+        f"Audience and style: {audience.brief}\n"
+        f"Length: all the spoken lines together must be about {words} words "
+        f"({round(words * 0.85)} to {round(words * 1.1)}).\n"
+        f"Write exactly {scenes} scenes.\n"
+        "Rules:\n"
+        "- \"topic\" is what kind of story it is.\n"
+        "- The first line is a hook that makes people keep watching. The story builds up, "
+        "and the last scene is a twist or a payoff.\n"
+        + ENDING_RULE +
+        "- \"voice\" is one or two spoken sentences, 10 to 20 words. Every scene moves the "
+        "story on and says something new: never repeat a line or start lines the same way. "
+        "Every line tells what someone does or what happens, not only a mood.\n"
+        + PLAIN_RULE + MOOD_RULE + (REAL_RULE if real else ANY_RULE) +
+        "- \"hero\" describes how the main character looks, 8 to 20 words: age, hair, skin, "
+        "clothes. No name, no feelings, nothing they do.\n"
+        "- \"who\" says who the picture shows: the main character, other people only, or "
+        "no people. Show the main character in most scenes.\n"
+        + PICTURE_RULE + NO_NAMES +
+        "- Nothing gory or sexual. If the idea is a true story, history or from the Bible, "
+        "keep to what is known and do not invent facts, names or numbers.\n"
+        "- No greetings, hashtags or emojis.\n"
+        "Answer with JSON only.")
+
+
+# The story's kind picks the look: the model chose Dark comic for nearly everything when
+# asked for the look itself (2026-11-15), but names the kind of story well.
+STORY_TOPICS = {
+    "scary": "Dark comic", "crime": "Dark comic", "mystery": "Dark comic",
+    "history": "Painted history", "religion": "Painted history", "legend": "Painted history",
+    "school": "Anime film", "friendship": "Anime film", "love": "Anime film",
+    "kindness": "Anime film", "family": "Anime film",
+    "funny": "TV cartoon", "everyday life": "TV cartoon",
+}
+WHO = ("main character", "other people", "no people")
+# A story about real events: its facts come from Wikipedia (webfacts), as for fact videos.
+# Without them the Great Fire of London "didn't start in London" (2026-11-15).
+_TRUE_STORY = re.compile(r"\b(history|historical|bible|biblical|true story|real story|really "
+                         r"happened|ancient|medieval|war|in \d{3,4})\b", re.I)
+
+
+def true_story(idea: str) -> bool:
+    return bool(_TRUE_STORY.search(idea or ""))
+
+
+# Plot first: asked for the scenes straight away, the model wrote a mood ("it's night, you're
+# alone") where nothing happened and nothing ended, and skipped a step of the idea (the 911
+# call, 2026-11-15). Five events first, then the scenes told from them.
+PLOT_BEATS = ("the start", "what goes wrong", "it gets worse", "the big moment", "the ending")
+# A story over 60 s: 4 events per beat, one scene each, all in one answer. In parts, each part
+# retold the one before; with 2 scenes per event the model wrote its 10 lines twice over
+# (2026-11-16 comparison). The 4B model tells one event per scene.
+LONG_PER_BEAT = 4
+
+
+MAX_TALK = 4   # of a long plot's events: 9 and 11 of 20 were talk, a loop with no end (2026-11-16)
+
+
+def plot_prompt(real: bool = True, per_beat: int = 1) -> str:
+    count = len(PLOT_BEATS) * per_beat
+    beats = "; ".join(PLOT_BEATS)
+    # No outline first: tried 2026-11-16, the plot copied it as its first 5 events and told the
+    # story twice. Frozen at round 2's rules (see 5.5-fix-2min-plan.md, step 1b.3).
+    return (
+        "You plan the plot of a short story. The user gives an idea. Write the plot as "
+        + (f"{count} events in order: {beats}.\n" if per_beat == 1 else
+           f"{count} events in order, {per_beat} for each of: {beats}.\n") +
+        "Rules:\n"
+        + ("" if per_beat == 1 else
+           f"- Every event is an action. At most {MAX_TALK} of the {count} events are "
+           "someone talking.\n") +
+        "- Each event is one sentence where someone does something or something happens: "
+        "a note falls out, she runs, he opens the door. Never a mood or a "
+        "feeling on its own.\n"
+        "- Every step the idea names is in the plot, in the idea's order. Each event "
+        "happens once: nobody is caught or saved before the ending.\n"
+        + ENDING_RULE + MOOD_RULE + (REAL_RULE if real else ANY_RULE) + NO_NAMES
+        + PLAIN_RULE +
+        "- Nothing gory or sexual.\n"
+        "Answer with JSON only.")
+
+
+REPEAT_WORDS = 5   # 4 flagged every story ("she looks at the"); 5 is a phrase said again
+
+
+def repeats(scenes) -> bool:
+    """Five words in a row said again in a later line ("the note is still there", three
+    times as filler, 2026-11-16): a story worth asking for once more."""
+    seen = {}
+    for n, scene in enumerate(scenes):
+        words = re.findall(r"[a-z0-9']+", scene.voice.lower().replace("’", "'"))
+        for i in range(len(words) - REPEAT_WORDS + 1):
+            run = tuple(words[i:i + REPEAT_WORDS])
+            if seen.setdefault(run, n) != n:
+                return True
+    return False
+
+
+def near_repeats(scenes, run: int = 4) -> set[int]:
+    """Lines that say ``run`` words in a row from the line just before them ("She sees no one
+    else nearby" in lines 9 and 10, 2026-11-16). Only neighbours: across a whole story, 4 words
+    flagged every story ("she looks at the")."""
+    def runs(scene):
+        words = re.findall(r"[a-z0-9']+", scene.voice.lower().replace("’", "'"))
+        return {tuple(words[i:i + run]) for i in range(len(words) - run + 1)}
+    return {n for n in range(1, len(scenes)) if runs(scenes[n]) & runs(scenes[n - 1])}
+
+
+def sentences(scenes) -> list[str]:
+    return [s for scene in scenes for s in re.split(r"(?<=[.!?])\s+", scene.voice) if s.strip()]
+
+
+def tiny_sentences(scenes) -> int:
+    return sum(len(s.split()) < 5 for s in sentences(scenes))
+
+
+def choppy(scenes) -> bool:
+    """Telegram style, "Boy asks clerk. Clerk says...": a third of the sentences under five
+    words, or starting with a word the story elsewhere says with "the" ("the boy"), so a
+    name is never taken for it."""
+    said = sentences(scenes)
+    if not said:
+        return False
+    text = " ".join(said).lower()
+    bare = sum(1 for s in said if (m := re.match(r"([A-Z][a-z]+) [a-z]", s))
+               and f"the {m.group(1).lower()}" in text)
+    return tiny_sentences(scenes) * 3 > len(said) or bare * 3 > len(said)
+
+
+def event_spots(events, scenes) -> list:
+    """The first scene that tells each plot event, or None: found by the event's own words,
+    the ones (4+ letters) no other event uses, so "walks" in every event matches nothing."""
+    said = [s.voice.lower() for s in scenes]
+    sets = [set(re.findall(r"[a-z]{4,}", e.lower())) for e in events]
+    spots = []
+    for n, words in enumerate(sets):
+        own = words - set().union(*(w for m, w in enumerate(sets) if m != n))
+        found = re.compile(r"\b(?:" + "|".join(sorted(own)) + r")s?\b") if own else None
+        spots.append(next((i for i, v in enumerate(said) if found.search(v)), None)
+                     if own else None)
+    return spots
+
+
+def scene_map(events, count: int) -> str:
+    """Which scenes tell which plot event: "Scenes 1-2: ...", the spare scenes to the first
+    events, so the ending event always gets the last scenes."""
+    each, spare = divmod(count, len(events))
+    lines, first = [], 1
+    for n, event in enumerate(events):
+        size = each + (n < spare)
+        last = first + size - 1
+        lines.append(f"Scene {first}: {event}" if size == 1 else
+                     f"Scenes {first}-{last}: {event}")
+        first = last + 1
+    return "\n".join(lines)
+
+
+def plot_schema(count: int = len(PLOT_BEATS)) -> dict:
+    return {"type": "object",
+            "properties": {"events": {"type": "array", "minItems": count,
+                                      "maxItems": count,
+                                      "items": {"type": "string", "maxLength": 200}}},
+            "required": ["events"]}
+
+
+def parse_plot(content: str) -> list[str]:
+    try:
+        events = json.loads(content)["events"]
+    except (ValueError, KeyError, TypeError):
+        return []
+    return [" ".join(str(e).split()) for e in events if str(e).strip()] \
+        if isinstance(events, list) else []
+
+
+_TALK = re.compile(r"\b(says?|said|asks?|asked|tells?|told|shouts?|whispers?|replies)\b|['\"‘“]")
+
+
+def talking(events) -> int:
+    return sum(bool(_TALK.search(e)) for e in events)
+
+
+# Something happening, not a mood: the midnight car plot was "a car, she goes in, nothing
+# happens" (Deniz, 2026-11-17). Gentle stories have these too (she finds, opens, searches).
+_ACTION = re.compile(
+    r"\b(?:run|ran|runs|running|hid|hides?|hiding|call(?:s|ed|ing)?|chas(?:e|es|ed|ing)|"
+    r"catch(?:es|ing)?|caught|grab(?:s|bed|bing)?|escap(?:e|es|ed|ing)|fight(?:s|ing)?|fought|"
+    r"jump(?:s|ed|ing)?|finds?|found|break(?:s|ing)?|broke|attack(?:s|ed|ing)?|steal(?:s|ing)?|"
+    r"stole|crash(?:es|ed|ing)?|scream(?:s|ed|ing)?|lock(?:s|ed|ing)?|push(?:es|ed|ing)?|"
+    r"throws?|threw|climb(?:s|ed|ing)?|f[ae]ll|falls|flee(?:s|ing)?|fled|rac(?:e|es|ed|ing)|"
+    r"rescu(?:e|es|ed|ing)|sav(?:e|es|ed|ing)|arrest(?:s|ed|ing)?|search(?:es|ed|ing)?|"
+    r"police|sirens?)\b", re.I)
+
+
+def actions(events) -> int:
+    """How many events have something happen in them."""
+    return sum(bool(_ACTION.search(e)) for e in events)
+
+
+PLOTS = 3                 # plots written, the best kept: a plot costs 3-5 s, a bad one a story
+PLOT_TEMPERATURE = 0.6
+# How a last quarter that closes a story sounds, gentle or dark: a plot without any of these
+# stopped in the middle ("he's not alone", 2026-11-16).
+_CLOSED = re.compile(r"\b(caught|arrest\w*|police|safe\w*|escap\w*|rescu\w*|found|finds|home|"
+                     r"hug\w*|friends?|happy|proud|thank\w*|stops?|stopped|gone|free|together|"
+                     r"smil\w*|saved?|relie\w*|forgiv\w*|wins?|won)\b", re.I)
+
+
+def plot_trouble(events, idea: str, count: int) -> int:
+    """What a reader would trip over in a plot, counted by code: too few events, a talk loop,
+    a phrase said twice, the idea's own steps missing, an ending that closes nothing."""
+    if not events:
+        return 99
+    lines = [draft.DraftScene("x", e, n) for n, e in enumerate(events)]
+    tail = " ".join(events[-max(1, len(events) // 4):])
+    return (max(0, count - len(events)) + max(0, talking(events) - MAX_TALK)
+            + 2 * repeats(lines) + 2 * len(missing_events(idea.split(MUST), lines))
+            + 2 * (not _CLOSED.search(tail)))
+
+
+
+
+def missing_events(events, scenes) -> list[str]:
+    """The plot's events the story's lines never mention: none of their words of five
+    letters or more is said anywhere."""
+    said = " ".join(s.voice for s in scenes).lower()
+    gone = []
+    for event in events:
+        words = {w for w in re.findall(r"[a-z0-9]+", event.lower()) if len(w) >= 5}
+        words -= {"there", "their", "about", "after", "before", "where", "which", "while"}
+        if words and not any(w in said for w in words) and not any(
+                w[:-1] in said for w in words if w.endswith("s")):
+            gone.append(event)
+    return gone
+# "A girl holding a note..." when the picture should start with HERO: that girl is the hero.
+_SOMEONE = re.compile(
+    r"^(?:a|an|the|our)\s+(?:[\w-]+\s+){0,2}?(?:girl|boy|man|woman|teenager|teen|child|kid|"
+    r"person|worker|shepherd|soldier|lady|guy|student|baker|king|queen)\b,?", re.I)
+
+
+def story_schema(scenes: int) -> dict:
+    return {
+        "type": "object",
+        "properties": {
+            "topic": {"enum": list(STORY_TOPICS)},
+            "hero": {"type": "string"},
+            "scenes": {"type": "array", "minItems": scenes, "maxItems": scenes,
+                       "items": {"type": "object",
+                                 # 4-word lines left stories at 37 s (2026-11-15)
+                                 "properties": {"voice": {"type": "string", "minLength": 60,
+                                                          "maxLength": 150},
+                                                "who": {"enum": list(WHO)},
+                                                "picture": {"type": "string"}},
+                                 "required": ["voice", "who", "picture"]}}},
+        "required": ["topic", "hero", "scenes"],
+    }
+
+
+# "My own story" (5.5): what the user wants to happen joins the idea as its own step, so
+# plot_trouble checks it like the idea's other steps.
+MUST = "\n\nThis must happen in the story: "
+# The user's ending replaces the last scenes. The writer told a given ending well (2 of 2) but
+# invented muddled ones (Happy and Strong, about 1 of 4; 2026-11-17, style-test/ENDING-PROBE*).
+# Tried 6 scenes for a long ending (2026-11-17): the writer filled them with filler and a name,
+# and the thief was never caught (style-test/ENDING-FIX-CHECK.md). Kept at 4.
+OWN_ENDING_SCENES = 4
+ENDINGS = 3   # written 3 times, the one that says the user's words and a reason kept
+_REASON = re.compile(r"\b(because|so that|wanted|was only|came to|to (?:bring|give|return|"
+                     r"tell|warn|help|find|take|stop|save))\b", re.I)
+_NUMBERED = re.compile(r"^\s*(?:\d+[.)]\s*)+")   # "17. 17. She hears..." (the probe)
+
+
+# "What did you mean?" (5.5): a short My own story line gets 3 options. Asked for 3 meanings
+# freely, the writer gave 3 of the same; given these 3 kinds, "a fight" came out 3 ways
+# (2026-11-17, style-test/readings_probe.py). "Something else" always follows them.
+SHORT_LINE = 12   # words: under it, a line is too short to be sure what it means
+READING_KINDS = ("main", "to_main", "others")
+READINGS_PROMPT = (
+    "A user is making a short story video and wrote one short line about what happens. Write "
+    "3 versions of only that event, one sentence each, 12 to 25 words, saying who does what to "
+    "whom. Do not retell the story. The 3 must differ like this:\n"
+    "- \"main\": the main character does it.\n"
+    "- \"to_main\": someone does it to the main character.\n"
+    "- \"others\": other people do it; the main character only sees it or is helped by it.\n"
+    "Answer with JSON only.")
+READINGS_SCHEMA = {"type": "object",
+                   "properties": {k: {"type": "string", "minLength": 30, "maxLength": 200}
+                                  for k in READING_KINDS},
+                   "required": list(READING_KINDS)}
+
+
+def too_short(line: str) -> bool:
+    return 0 < len((line or "").split()) < SHORT_LINE
+
+
+def distinct(options, same: float = 0.6) -> list[str]:
+    """``options`` without near-copies: two sharing most of their words are one option."""
+    kept = []
+    for option in options:
+        words = set(re.findall(r"[a-z']+", option.lower()))
+        if option and all(len(words & set(re.findall(r"[a-z']+", k.lower())))
+                          < same * min(len(words), len(re.findall(r"[a-z']+", k.lower())))
+                          for k in kept):
+            kept.append(option)
+    return kept
+
+
+def merge_detail(who: str, whom: str, how: str) -> str:
+    """The 3 small boxes as one line for the writer, each part named so none is lost."""
+    parts = [(label, " ".join((text or "").split())) for label, text in
+             (("Who", who), ("To whom or what", whom), ("How and why", how))]
+    return " ".join(f"{label}: {text.rstrip('.')}." for label, text in parts if text)
+
+
+def ending_prompt(real: bool = True) -> str:
+    return ("You rewrite only the ending of a short narrated picture story. The user says how "
+            "it ends: tell exactly that ending, clearly, say why it happened and what finally "
+            "happens to the main character. Rules:\n"
+            # Told an ending, it wrote 4 quotes in a row every time (2026-11-17).
+            "- Tell it as narration: what people do and what happens. At most one line where "
+            "someone speaks. Say plainly who it was, with the user's words.\n"
+            # The story's own ending rule: without it, take 3 stopped at "speaks to the officer".
+            + ENDING_RULE + (REAL_RULE if real else ANY_RULE) + PLAIN_RULE + NO_NAMES +
+            # Asked for "voice", it wrote what characters say and put the story in "picture"
+            # (2026-11-17); asked for plain lines (2.1's probe), it narrated.
+            "- \"narration\" is what the storyteller says: one or two sentences, 10 to 20 "
+            "words, telling what happens.\n"
+            "- \"who\" says who the picture shows: the main character, other people only, or "
+            "no people.\n"
+            + PICTURE_RULE +
+            "Answer with JSON only.")
+
+
+def ending_schema(scenes: int) -> dict:
+    return {"type": "object", "properties": {"scenes": {
+        "type": "array", "minItems": scenes, "maxItems": scenes,
+        "items": {"type": "object",
+                  "properties": {"narration": {"type": "string", "minLength": 40,
+                                               "maxLength": 150},
+                                 "who": {"enum": list(WHO)}, "picture": {"type": "string"}},
+                  "required": ["narration", "who", "picture"]}}}, "required": ["scenes"]}
+
+
+def whole_sentences(voice: str) -> str:
+    """A line without the probe's doubled numbers, ending on a whole sentence: the answer's
+    length limit cut some mid-sentence ("...lights")."""
+    voice = _NUMBERED.sub("", " ".join(str(voice).split()))
+    if not voice or voice[-1] in ".!?'\"”’":
+        return voice
+    end = max(voice.rfind(m) for m in ".!?")
+    return voice[:end + 1] if end > len(voice) // 3 else voice.rstrip(" ,;:—-") + "."
+
+
+def copied_picture(picture: str, voice: str) -> bool:
+    """A picture that only repeats its spoken line ("the officer says, 'You're under arrest'"):
+    quotes in it, or nearly all its words said in the line."""
+    if re.search(r"['\"‘“]\s*\w", picture.replace("{hero}", "")) and _TALK.search(picture):
+        return True
+    words = set(re.findall(r"[a-z']+", picture.lower().replace("{hero}", ""))) - _SMALL
+    said = set(re.findall(r"[a-z']+", voice.lower()))
+    return bool(words) and len(words & said) >= 0.8 * len(words)
+
+
+_SMALL = {"the", "a", "an", "of", "in", "on", "at", "to", "and", "her", "his", "is", "with"}
+
+
+def ending_score(lines, ending: str) -> int:
+    """How well ``lines`` tell the user's ``ending``: its own words said, and a reason given.
+    More than one talking line costs: endings of 4 quotes in a row won on words alone and never
+    said "her friend" (2026-11-17, style-test/OWN-STORY-TEST.md)."""
+    said = " ".join(lines).lower()
+    own = {w for w in re.findall(r"[a-z]+", ending.lower()) if len(w) >= 4}
+    return (sum(w in said for w in own) + 2 * bool(_REASON.search(said))
+            - 2 * max(0, talking(lines) - 1))
+
+
+# "{hero} in taxi, ..." drew her walking next to the taxi, 2 of 2; "inside a taxi, back seat,
+# seen through the side window: {hero} sitting, ..." drew her inside, 4 of 4 (2026-11-17,
+# style-test/inside-car). The picture model follows its first words most.
+_INSIDE = re.compile(r"^\{hero\},?\s+(?:is\s+)?(?:(?P<drive>driving)|(?:sitting\s+|riding\s+)?"
+                     r"(?:in|inside))\s+(?:a\s+|an\s+|the\s+|her\s+|his\s+)?(?P<kind>[a-z]+\s+)?"
+                     r"(?P<what>taxi|cab|car|bus|train|van|truck|tram|subway)\b[,.]?\s*", re.I)
+
+
+def inside_first(picture: str) -> str:
+    """A picture of the main character in a vehicle, said place and pose first."""
+    found = _INSIDE.match(picture)
+    if not found:
+        return picture
+    what, rest = found["what"].lower(), picture[found.end():]
+    pose = ("at the wheel, seen through the side window: {hero} driving"
+            if found["drive"] else "back seat, seen through the side window: {hero} sitting")
+    return f"inside the {found['kind'] or ''}{what}, {pose}" + (f", {rest}" if rest else "")
+
+
+# Every picture is drawn alone: after "she steps into the taxi", "{hero} leaning forward, taxi
+# cornering" drew her outside leaning on a car, and "shouting, driver turning" drew her driving
+# (2026-11-17, Deniz: "sloppy unlogical images"). So the story remembers where she is.
+_VEHICLE = r"(taxi|cab|car|bus|train|van|truck|tram|subway)"
+_ENTER = re.compile(r"\b(?:(?:gets?|got|jumps?|jumped|climbs?|climbed|steps?|stepped|hops?|"
+                    r"slides?)\s+(?:in|into|inside)|enter(?:s|ing|ed)?|board(?:s|ing|ed)?)\s+"
+                    r"(?:a\s+|an\s+|the\s+|her\s+|his\s+)?(?:[a-z]+\s+)?" + _VEHICLE + r"\b", re.I)
+_LEAVE = re.compile(r"\b(?:gets?|got|jumps?|jumped|steps?|stepped|climbs?|climbed|runs?|ran)\s+"
+                    r"out\b(?!\s+of\s+(?:here|there))|\bleaves?\s+the\s+" + _VEHICLE + r"\b",
+                    re.I)   # "We need to get out of here!" said in the taxi is not leaving it
+# Shown walking, running or standing: she is out, even when no line says she got out.
+_ON_FOOT = re.compile(r"^\{hero\},?\s+(?:is\s+)?(?:walking|running|standing|sprinting|"
+                      r"stepping)\b", re.I)
+_SEATED = re.compile(r"^inside the (?:[a-z]+\s+)?" + _VEHICLE + r"\b", re.I)
+
+
+def still_inside(picture: str, vehicle: str) -> str:
+    """A picture of the main character, placed in the ``vehicle`` she is still in."""
+    if _SEATED.match(picture) or "{hero}" not in picture:
+        return picture
+    seat = "back seat" if vehicle in ("taxi", "cab", "bus", "train", "tram", "subway") \
+        else "front seat"
+    return f"inside the {vehicle}, {seat}, seen through the side window: {picture}"
+
+
+def parse_story(content: str) -> tuple[list[draft.DraftScene], str, str]:
+    """The model's story as (scenes, the main character, the look). HERO in a picture
+    becomes imagegen's {hero}, and so does the person a main-character picture starts with;
+    a missing picture is drawn from the spoken line."""
+    try:
+        answer = json.loads(content)
+        items = answer["scenes"]
+        if not isinstance(items, list):
+            raise TypeError("scenes is not a list")
+    except (ValueError, KeyError, TypeError) as exc:
+        raise WriterError("The Smart writer gave an answer the app could not read.") from exc
+    hero = " ".join(str(answer.get("hero") or "").split()).rstrip(" .")
+    look = (answer.get("look") if answer.get("look") in STORY_LOOKS
+            else STORY_TOPICS.get(answer.get("topic"), STORY_LOOKS[0]))
+    scenes, said, vehicle = [], set(), None   # the vehicle the main character is in, if any
+    # "DAVID" in capitals in most pictures instead of HERO (seen 2026-11-15): that is the hero.
+    pictures = [str(i.get("picture") or "") for i in items if isinstance(i, dict)]
+    caps = [w for p in pictures if "HERO" not in p for w in set(_CAPS_NAME.findall(p))]
+    name = max(set(caps), key=caps.count) if caps else ""
+    name = name if name != "HERO" and caps.count(name) * 2 >= len(pictures) else ""
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        voice = " ".join(str(item.get("voice") or "").split())
+        if not voice or voice.lower() in said:
+            continue
+        said.add(voice.lower())
+        picture = " ".join(str(item.get("picture") or "").split()) or voice
+        picture = _HERO_IN.sub("{hero}", picture)
+        if "{hero}" not in picture and name:   # the model wrote the character's name
+            picture = re.sub(rf"\b{name}\b", "{hero}", picture)
+        if "{hero}" not in picture and item.get("who") == WHO[0]:
+            picture = (_SOMEONE.sub("{hero}", picture, count=1) if _SOMEONE.match(picture)
+                       else "{hero}, " + picture)
+        picture = inside_first(picture)
+        if _LEAVE.search(voice) or _ON_FOOT.match(picture):   # outside from this scene on
+            vehicle = None
+        if vehicle:
+            picture = still_inside(picture, vehicle)
+        entered = _ENTER.search(voice) or _ENTER.search(picture) or _SEATED.match(picture)
+        if entered and not _LEAVE.search(voice):
+            vehicle = entered.group(entered.lastindex).lower()
+        visual = " ".join(re.findall(r"[A-Za-z]+", picture.replace("{hero}", "person"))[:3])
+        # A push-in on a face for the feeling, a pan across a place with no one in it.
+        zoom = "pan" if item.get("who") == WHO[2] else "in"
+        scenes.append(draft.DraftScene(visual or "story scene", voice, len(scenes), picture,
+                                       zoom=zoom))
+    if not scenes:
+        raise WriterError("The Smart writer gave an empty answer.")
+    return scenes, hero, look
+
+
 _SUGGEST_PROMPT = (
     "You sort texts for a video maker. Read the user's text and choose what it is about "
     "and who it is written for.\n"
@@ -1205,12 +1743,15 @@ class Session:
     def write(self, text: str, audience: draft.Audience | None = None,
               length: str | None = None, padding: float = 0.3,
               cards: bool = True, ai: str = draft.AI_NONE, web: bool = False,
-              progress=None, photos=()) -> draft.Draft:
+              progress=None, photos=(), story: bool | str = False, must: str = "",
+              ending: str = "") -> draft.Draft:
         """A script for ``text``, rewritten for the audience and the length. With ``web``, an
         idea that asks for facts is first looked up on Wikipedia (vidgen.webfacts).
+        ``story``: a picture story, real-life only unless it is ANYTHING_GOES.
         ``progress(message, fraction)`` hears how a long video's parts are going.
         ``photos`` (draft.Photo): the user's reference photos; the shown ones are put in
-        the scenes about them."""
+        the scenes about them. ``must`` and ``ending`` ("My own story", picture stories
+        only): what has to happen in it, and how it ends."""
         audience = audience or draft.Audience()
         length = length if length in draft.LENGTHS else audience.length
         persona = voices.persona(audience.voice)
@@ -1223,6 +1764,11 @@ class Session:
         else:
             words = target_words(target, persona)
 
+        if story:
+            return self._write_story(text, audience, length, words, target, persona, padding,
+                                     ai, web, real=story != ANYTHING_GOES,
+                                     must=" ".join((must or "").split()),
+                                     ending=" ".join((ending or "").split()))
         pictures = bool(ai)
         facts, sources, source = "", [], "Smart writer"
         if web and is_idea(text) and webfacts.wants_facts(text):
@@ -1307,6 +1853,162 @@ class Session:
         if not found:
             raise WriterError("The Smart writer gave an empty answer.")
         return found
+
+    def _plot(self, idea, facts="", real=True, per_beat=1):
+        """The best of PLOTS plots, chosen by code (plot_trouble), not by more rules.
+        Dark story shapes were tried here (2026-11-16): the plot copied the 5 steps as its
+        first 5 events, then drifted to a friendly ending, so they were taken out."""
+        asked = f"{idea}\n\nFacts to use (keep to them):\n{facts}" if facts else idea
+        best = None
+        for _ in range(PLOTS):
+            self._stopping()
+            events = parse_plot(self._ask(plot_prompt(real, per_beat), [("user", asked)],
+                                          plot_schema(len(PLOT_BEATS) * per_beat),
+                                          400 * per_beat, PLOT_TEMPERATURE))
+            trouble = plot_trouble(events, idea, len(PLOT_BEATS) * per_beat)
+            # On a tie, the plot where more happens (2026-11-17: midnight car had 1 of 20).
+            key = (trouble, -actions(events))
+            if best is None or key < best[0]:
+                best = (key, events)
+            if not trouble and actions(events) * 4 >= len(events):
+                break   # good enough: another plot costs seconds, on a slow PC a minute
+        self.plot = best[1]   # for the story tests to score
+        return best[1]
+
+    def readings(self, idea: str, kind: str, line: str) -> list[str]:
+        """Up to 3 clearly different detailed versions of a short My own story ``line``
+        (``kind``: "Must happen" or "Ending"); [] if no answer could be read."""
+        asked = f"The story idea: {' '.join(idea.split())}\n{kind} (what the user wrote): {line}"
+        try:
+            answer = json.loads(self._ask(READINGS_PROMPT, [("user", asked)], READINGS_SCHEMA,
+                                          300, 0.7))
+            return distinct([whole_sentences(answer.get(k, "")) for k in READING_KINDS])
+        except (ValueError, TypeError, AttributeError):
+            return []
+
+    def _own_ending(self, idea, scenes, hero, ending, real=True):
+        """``scenes`` with the last OWN_ENDING_SCENES rewritten to tell the user's ``ending``;
+        everything before them stays. Kept as they were if no answer could be read."""
+        count = min(OWN_ENDING_SCENES, len(scenes) - 1)
+        if count < 1:
+            return scenes
+        keep = scenes[:-count]
+        story = "\n".join(f"{n}. {s.voice}" for n, s in enumerate(keep, 1))
+        asked = (f"The idea: {idea.split(MUST)[0]}\n\nThe story so far:\n{story}\n\n"
+                 f"How it ends: {ending}\n\nWrite the last {count} scenes, following from "
+                 f"line {len(keep)}.")
+        best, score = None, 0
+        for _ in range(ENDINGS):
+            self._stopping()
+            try:
+                items = json.loads(self._ask(ending_prompt(real), [("user", asked)],
+                                             ending_schema(count), 250 * count + 100))["scenes"]
+                told = {s.voice.lower() for s in keep}
+                for item in items:
+                    item["voice"] = whole_sentences(item.get("narration", ""))
+                    if item["voice"].lower() in told:   # a line of the story said again
+                        item["voice"] = ""
+                new, _hero, _look = parse_story(json.dumps({"hero": hero, "scenes": items}))
+            except (ValueError, KeyError, TypeError, AttributeError, WriterError):
+                continue
+            # a line dropped as a repeat costs, like talking too much; so does a picture that
+            # only copies its spoken line
+            points = (ending_score([s.voice for s in new], ending) - 2 * (count - len(new))
+                      - 2 * sum(copied_picture(s.picture, s.voice) for s in new))
+            if best is None or points > score:   # any of them beats the old ending
+                best, score = new, points
+        if best is None:
+            return scenes
+        return keep + [dataclasses.replace(s, sentence=len(keep) + n) for n, s in enumerate(best)]
+
+    def _story_once(self, idea, audience, words, facts="", events=(), real=True, count=0):
+        count = count or (STORY_SCENES if words >= 100 else scene_count(words))
+        room = _answer_tokens(words, True) + 80
+        system = story_prompt(audience, words, count, real)
+        plan = ("\n\nThe plot, in order. Tell each event in exactly its own scenes, and nothing "
+                "after the last event:\n" + scene_map(events, count)) if events else ""
+        if facts:   # the plot already holds them: cut to the room left, not refused
+            # (Wikipedia's 4,500 letters never fit beside a 2-minute answer, 2026-11-16)
+            free = int((CONTEXT - room - len(system) / CHARS_PER_TOKEN - 60) * CHARS_PER_TOKEN)
+            facts = _cut_lines(facts, free - len(idea) - len(plan) - 40)
+        asked = (f"{idea}\n\nFacts to use (keep to them):\n{facts}" if facts else idea) + plan
+        _check_fits(asked, room)
+        content = self._ask(system, [("user", asked)], story_schema(count), room)
+        return parse_story(content)
+
+    def _write_story(self, idea, audience, length, words, target, persona, padding, ai,
+                     web=False, real=True, must="", ending=""):
+        """A picture story: every scene drawn (when AI pictures are here), one character.
+        With ``web``, a story about real events gets its facts from Wikipedia first.
+        ``real``: only what could happen in real life, else anything goes."""
+        facts, source = "", "Smart writer (picture story)"
+        if web and true_story(idea):
+            facts, pages = webfacts.facts(idea)
+            if pages:
+                source += f", with facts from Wikipedia ({', '.join(pages)})"
+            # Asked for 20 events, the writer invented what Wikipedia did not say (the
+            # Ottomans "tore down" the walls of Istanbul, 2026-11-16); at 60 s it kept to them.
+            if pages and target is not None and target > LONG:
+                length, target = "60 s", pacing.TARGETS["60 s"]
+                words = target_words(target, persona)
+                source += "; kept to 60 s so the facts stay right"
+        if must:   # after the facts lookup: searched, it would find other pages
+            idea += MUST + must
+        long = target is not None and target > LONG
+        events = self._plot(idea, facts, real, LONG_PER_BEAT if long else 1)
+
+        def spoken(lines):
+            return sum(pacing.estimate_voice(s.voice, persona.rate, persona.pause_scale,
+                                             persona.enhanced) + padding for s in lines)
+
+        if long and events:
+            scenes, hero, look = self._story_once(idea, audience, words, facts, events, real,
+                                                  count=len(events))
+        else:
+            scenes, hero, look = self._story_once(idea, audience, words, facts, events, real)
+        # A skipped step, a story saying the same thing twice, or one far too short (its
+        # repeated lines dropped left 45 s of 60, 2026-11-15): asked for once more, and the
+        # second kept unless it came out shorter still. Long stories are not
+        # written twice: that doubles a wait of minutes.
+        short = target is not None and spoken(scenes) < target * SHORT_STORY
+        if (target is None or target <= LONG) and (
+                len(missing_events(events, scenes)) > 1 or repeats(scenes) or short):
+            self._stopping()
+            again = self._story_once(idea, audience, words, facts, events, real)
+            if not (short and spoken(again[0]) < spoken(scenes)):
+                scenes, hero, look = again
+        # Telegram style comes at random, about 1 story in 6: written once more, the less
+        # choppy kept. A check, not a stricter rule, so the other stories stay as they are.
+        if choppy(scenes):
+            self._stopping()
+            again = self._story_once(idea, audience, words, facts, events, real,
+                                     count=len(events) if long and events else 0)
+            if not choppy(again[0]) or tiny_sentences(again[0]) < tiny_sentences(scenes):
+                scenes, hero, look = again
+        # A line repeating the one before it, with nothing happening in it, only says it again:
+        # dropped (a 2-minute story is not written twice). One where something happens ("the
+        # dog runs into a bush and vanishes") is kept. Never the last line, and before the
+        # user's own ending is written, so that is never touched.
+        again = {n for n in near_repeats(scenes) - {len(scenes) - 1}
+                 if not actions([scenes[n].voice])}
+        scenes = [s for n, s in enumerate(scenes) if n not in again]
+        if ending:
+            self._stopping()
+            scenes = self._own_ending(idea, scenes, hero, ending, real)
+        # Too long: cut lines, never the ending. Writing it again shorter cut too much
+        # (34 s, 2026-11-15).
+        # The user's own ending is all of its scenes: cutting kept only the last and left
+        # the user's sentence alone at the end (2026-11-17).
+        if target is not None and not _fits(scenes, target, persona):
+            tail = scenes[-(OWN_ENDING_SCENES if ending else 1):]
+            left = target - sum(pacing.estimate_voice(s.voice, persona.rate, persona.pause_scale,
+                                                      persona.enhanced) for s in tail)
+            scenes = _trim(scenes[:-len(tail)], max(left, 1.0), persona) + tail
+        script = draft.to_script(scenes, False, draft.AI_ALL if ai else draft.AI_NONE)
+        seconds = sum(pacing.estimate_voice(s.voice, persona.rate, persona.pause_scale,
+                                            persona.enhanced) + padding for s in scenes)
+        return draft.Draft(script, scenes, seconds, length, persona.id, audience.aspect,
+                           source=source, hero=hero, look=look)
 
     def _write_once(self, text, audience, words, pictures=False, facts="", photos=()):
         room = _answer_tokens(words, pictures)
@@ -1417,6 +2119,15 @@ class Session:
 def _answer_tokens(words: int, pictures: bool = False) -> int:
     extra = scene_count(words) * PICTURE_TOKENS if pictures else 0
     return min(round(words * 2.4) + 200 + extra, CONTEXT // 2)
+
+
+def _cut_lines(text: str, limit: int) -> str:
+    """``text`` cut to ``limit`` letters at a line end: each page's opening, its summary,
+    comes first in the facts and is kept."""
+    if len(text) <= limit:
+        return text
+    cut = text[:max(0, limit)]
+    return cut[:cut.rfind("\n")] if "\n" in cut else cut
 
 
 def _check_fits(text: str, answer_tokens: int) -> None:

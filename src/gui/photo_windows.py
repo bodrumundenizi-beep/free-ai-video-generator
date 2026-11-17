@@ -762,6 +762,8 @@ class DraftDialog(ctk.CTkToplevel):
         self.result = None
         self.keep = set()        # dropped sentences the user put back
         self.style = ""          # a Home template's extra instruction for the writer
+        self.story = False       # the Picture story template: a story with one character
+        self.own = ("", "")      # "My own story": (what must happen, the ending)
         self.confirming = False  # "Use this script" was pressed over the user's own script
         self.busy = False        # a worker is running, or the model is downloading
         self.stop = threading.Event()
@@ -908,13 +910,14 @@ class DraftDialog(ctk.CTkToplevel):
         args = (job, self.text(), self.audience(), self.var_length.get(),
                 self.app.settings["padding"], bool(self.app.var_writer_gpu.get()),
                 bool(self.app.var_auto_cards.get()), self.app.ai_mode(),
-                bool(self.app.var_web_facts.get()), self.photo_list())
+                bool(self.app.var_web_facts.get()), self.photo_list(), self.story, self.own)
         threading.Thread(target=self._work, args=args, daemon=True).start()
 
     def _post(self, **payload):
         self.app._queue.put(("draft", dict(payload, dialog=self)))
 
-    def _work(self, job, text, audience, length, padding, gpu, cards, ai, web=False, shots=()):
+    def _work(self, job, text, audience, length, padding, gpu, cards, ai, web=False, shots=(),
+              story=False, own=("", "")):
         """Worker thread: never touches a widget."""
         keep_loaded = False
         try:
@@ -936,7 +939,7 @@ class DraftDialog(ctk.CTkToplevel):
                                text, audience, length, padding, cards, ai, web,
                                progress=lambda message, fraction: self._post(
                                    event="progress", message=message, fraction=fraction),
-                               photos=shots))
+                               photos=shots, story=story, must=own[0], ending=own[1]))
         except writer.Stopped:
             self._post(event="stopped")
         except (writer.WriterError, draft.DraftError, ScriptError) as exc:

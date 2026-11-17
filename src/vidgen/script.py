@@ -12,7 +12,7 @@ Any scene can add optional keys, in any order after its ``Visual:``:
     Voice: Here is the fix. Open Task Manager.
     Duration: 4s        auto (default) or a number of seconds
     Padding: 0.5s       silence after the voice; default comes from Settings
-    Zoom: in            in, out, none, or auto (default: a subtle zoom)
+    Zoom: in            in, out, pan, none, or auto (default: a subtle zoom)
     Card: Win + V       drawn over the footage; see cards.py for the three looks
     Picture: a robot    what an AI picture of this scene would show, kept beside a stock
                         scene so the Storyboard can switch it to one in a click
@@ -31,7 +31,7 @@ import re
 from dataclasses import dataclass
 
 KEYS = ("visual", "voice", "duration", "padding", "zoom", "card", "picture", "chapter")
-ZOOM_MODES = ("auto", "in", "out", "none")
+ZOOM_MODES = ("auto", "in", "out", "none", "pan")
 _ZOOM_ALIASES = {"off": "none", "no": "none", "default": "auto"}
 
 MIN_DURATION = 0.5
@@ -111,7 +111,7 @@ def _zoom(text, line_no):
     value = _ZOOM_ALIASES.get(value, value)
     if value not in ZOOM_MODES:
         raise ScriptError(
-            f"Error on Line {line_no}: Zoom: expects in, out, none or auto, got '{text.strip()}'"
+            f"Error on Line {line_no}: Zoom: expects in, out, pan, none or auto, got '{text.strip()}'"
         )
     return value
 

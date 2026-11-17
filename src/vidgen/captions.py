@@ -22,6 +22,7 @@ from __future__ import annotations
 import bisect
 import math
 import os
+import re
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import NamedTuple
@@ -63,6 +64,16 @@ MAX_GAP = 0.2  # a silence longer than this ends the cue: a breath, a full stop
 HOLD = 0.25  # a cue lingers this long after its last word, if nothing follows
 MAX_WIDTH = 0.88  # of the frame; wider text is shrunk to fit
 ONE_WORD_SCALE = 1.35
+KEY_SCALE = 1.25   # a key word in One word captions, against the others
+# Long words that never carry a line (key_word): the rest of five letters or more do.
+_NOT_KEY = frozenset(
+    "about above after again being below could every first their there these those three "
+    "under until where which while whose would never still since shall might other "
+    "didnt doesnt wasnt hadnt couldnt wouldnt shouldnt youre theyre theyd youve theyve "
+    "before behind should little really always around because though through "
+    "without another something nothing anything everything someone anyone everyone "
+    "himself herself itself myself yourself themselves within whether almost already "
+    "instead people things during toward towards".split())
 FONT_FILES = ("seguibl.ttf", "arialbd.ttf", "impact.ttf")  # heaviest first
 
 
@@ -238,18 +249,27 @@ def _stroke(pixels: int) -> int:
     return max(2, round(pixels * 0.09))
 
 
-def render_state(texts, active, frame_w: int, pixels: int, highlight: Highlight | None):
+def key_word(text: str) -> bool:
+    """A word that carries the line ("SAVINGS", "YEARS", "1666"): One word captions show it
+    bigger and in colour, the rest white."""
+    word = re.sub(r"[^\w]", "", text or "")
+    return any(c.isdigit() for c in word) or (len(word) >= 5
+                                              and word.lower() not in _NOT_KEY)
+
+
+def render_state(texts, active, frame_w: int, pixels: int, highlight: Highlight | None,
+                 height: int | None = None):
     """An RGBA image, ``frame_w`` wide, of ``texts`` on one centred line.
 
     ``active`` is the index of the spoken word, set apart as ``highlight``
     describes; pass None for no highlight. Text wider than the frame allows is shrunk to fit,
-    but the image keeps the height of the full-size font so every caption sits
-    on the same line.
+    but the image keeps the height of the full-size font (or ``height``) so every caption
+    sits on the same line.
     """
     from PIL import Image, ImageDraw
 
     words = [text.upper() for text in texts]
-    height = band_height(pixels)
+    height = height or band_height(pixels)
     limit = frame_w * MAX_WIDTH
 
     size = pixels
@@ -299,7 +319,9 @@ def caption_layer(states, size, options: CaptionOptions, duration: float):
 
     frame_w, frame_h = size
     pixels = font_pixels(frame_w, frame_h, options)
-    height = band_height(pixels)
+    one_word = options.style == "One word"
+    key_pixels = round(pixels * KEY_SCALE) if one_word else pixels
+    height = band_height(key_pixels)
     highlight = None if options.style == "Plain" else COLORS[options.color]
     starts = [state.start for state in states]
     blank_rgb = np.zeros((height, frame_w, 3), dtype=np.uint8)
@@ -313,8 +335,14 @@ def caption_layer(states, size, options: CaptionOptions, duration: float):
     @lru_cache(maxsize=4)
     def drawn(i):
         state = states[i]
-        image = render_state([w[2] for w in state.cue.words], state.active,
-                             frame_w, pixels, highlight)
+        texts = [w[2] for w in state.cue.words]
+        if one_word:   # white, and the words that carry the line bigger and in colour
+            big = key_word(texts[0])
+            image = render_state(texts, 0 if big else None, frame_w,
+                                 key_pixels if big else pixels, highlight if big else None,
+                                 height)
+        else:
+            image = render_state(texts, state.active, frame_w, pixels, highlight)
         rgba = np.asarray(image)
         return rgba[:, :, :3].copy(), rgba[:, :, 3].astype(float) / 255.0
 

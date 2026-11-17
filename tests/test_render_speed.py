@@ -143,12 +143,15 @@ def test_without_a_cache_every_voice_is_made(tmp_path, monkeypatch):
 
 # --- the encoder ---------------------------------------------------------------------------
 
-def test_quick_sync_is_used_only_when_asked_for_and_working(monkeypatch):
-    monkeypatch.setattr(render, "quick_sync_works", lambda: True)
-    assert render.encoder({"quick_sync": True}) == render.QSV
-    assert render.encoder({}) == render.X264
-    monkeypatch.setattr(render, "quick_sync_works", lambda: False)
-    assert render.encoder({"quick_sync": True}) == render.X264
+def test_the_graphics_card_encodes_by_default_the_first_one_that_works(monkeypatch):
+    works = {render.QSV}
+    monkeypatch.setattr(render, "hardware_works", lambda codec: codec in works)
+    assert render.encoder({}) == render.QSV                       # on by default
+    assert render.encoder({"gpu_encode": False}) == render.X264   # the switch off
+    works = {render.NVENC, render.QSV}
+    assert render.encoder({}) == render.NVENC                     # NVIDIA first
+    works = set()
+    assert render.encoder({}) == render.X264                      # none: the processor
 
 
 def test_a_quick_sync_encode_that_fails_is_made_again_with_x264(monkeypatch):
@@ -186,18 +189,18 @@ def test_a_cancelled_quick_sync_encode_is_not_retried(monkeypatch):
     assert used == [render.QSV]
 
 
-def test_quick_sync_check_says_no_on_a_pc_without_it(monkeypatch):
+def test_the_graphics_card_check_says_no_on_a_pc_without_it(monkeypatch):
     from vidgen import mastering
 
     def fails(args, stdin=None):
         raise RuntimeError("ffmpeg failed: No device available")
 
-    render.quick_sync_works.cache_clear()
+    render.hardware_works.cache_clear()
     monkeypatch.setattr(mastering, "run_ffmpeg", fails)
     try:
-        assert render.quick_sync_works() is False
+        assert render.hardware_works(render.NVENC) is False
     finally:
-        render.quick_sync_works.cache_clear()
+        render.hardware_works.cache_clear()
 
 
 # --- the hint before a render --------------------------------------------------------------
@@ -256,3 +259,55 @@ def test_draft_is_small_quick_and_makes_no_new_ai_picture():
                               SimpleNamespace(log=lambda m: None), 1,
                               SimpleNamespace(providers=["Pexels"]), lambda: False)
     assert made is False and "draft" in p.note
+
+
+# --- parts built side by side (5.5) ------------------------------------------------------
+
+def test_parts_at_once_follow_the_cores_and_the_free_memory():
+    gb = 1024 ** 3
+    assert render.parts_at_once(free=16 * gb, cores=16) == render.MAX_AT_ONCE   # at most 4
+    assert render.parts_at_once(free=16 * gb, cores=4) == 2                     # half the cores
+    assert render.parts_at_once(free=1 * gb, cores=16) == 2                     # memory
+    assert render.parts_at_once(free=0.2 * gb, cores=16) == 1                   # never 0
+    assert render.parts_at_once(free=None, cores=2) == 1
+
+
+def test_parts_are_built_side_by_side_joined_in_order_and_an_error_is_raised(monkeypatch,
+                                                                            tmp_path):
+    import threading
+    from types import SimpleNamespace
+    from vidgen import compose, mastering
+
+    running, most, built = [0], [0], []
+    lock = threading.Lock()
+
+    def encode(video, path, *args, **kwargs):
+        with lock:
+            running[0] += 1
+            most[0] = max(most[0], running[0])
+        import time
+        time.sleep(0.05)
+        with lock:
+            running[0] -= 1
+            built.append(path)
+        if "fail" in path and path.endswith("002.mp4"):
+            raise OSError("part 3 broke")
+
+    joined = []
+    monkeypatch.setattr(render, "_encode", encode)
+    monkeypatch.setattr(compose, "layered", lambda layers, size, length: None)
+    monkeypatch.setattr(mastering, "run_ffmpeg", lambda args, stdin=None: joined.append(args))
+    chunks = [(0.0, 10.0), (10.0, 20.0), (20.0, 30.0), (30.0, 40.0)]
+    ui = SimpleNamespace(log=lambda m: None, status=lambda m: None)
+    render._encode_chunks(chunks, [], None, [], None, (1080, 1920), str(tmp_path / "o.mp4"),
+                          "8000k", str(tmp_path), 1, lambda f, label="": None, lambda: False,
+                          render.X264, ui, at_once=4)
+    assert most[0] > 1                                    # side by side
+    listing = open(tmp_path / "parts_1.txt", encoding="utf-8").read()
+    assert listing.index("000") < listing.index("001") < listing.index("003")   # in order
+    failing = tmp_path / "fail"
+    failing.mkdir()
+    with pytest.raises(OSError):
+        render._encode_chunks(chunks, [], None, [], None, (1080, 1920), str(failing / "o.mp4"),
+                              "8000k", str(failing), 1, lambda f, label="": None,
+                              lambda: False, render.X264, ui, at_once=2)

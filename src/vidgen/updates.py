@@ -67,6 +67,24 @@ class Release:
         return bool(self.portable_url and self.portable_name and self.sums_url)
 
 
+# Counts installs: GitHub counts downloads of these 1-byte files in each release. Nothing else
+# is sent: no ID, no name, nothing about the PC. Off with "Check for updates". Said in the
+# README and every release note (5.5).
+COUNTERS = {"install": "app-data-1.bin", "update": "app-data-2.bin"}
+
+
+def count(kind: str, version: str, session=None) -> bool:
+    """Download this version's ``kind`` counter file once ("install" or "update"); False when
+    offline or the file isn't there. Never raises: a count never gets in the way."""
+    url = f"{DOWNLOAD_PREFIX}v{version}/{COUNTERS[kind]}"
+    try:
+        reply = (session or requests).get(url, headers={"User-Agent": f"AIVideoStudio/{version}"},
+                                          timeout=TIMEOUT)
+        return bool(reply.ok)
+    except (requests.RequestException, AttributeError):
+        return False
+
+
 def parse_version(text) -> tuple[int, ...] | None:
     """"v3.4.0" or "3.4" as a tuple of numbers; None if it isn't a version."""
     match = re.fullmatch(r"\s*v?(\d+(?:\.\d+)*)\s*", str(text or ""), re.IGNORECASE)

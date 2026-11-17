@@ -136,7 +136,7 @@ def test_the_chapter_key_round_trips_and_is_named_in_errors():
 
 
 def test_long_lengths_are_offered():
-    assert draft.LENGTHS[3:6] == ["3 min", "5 min", "10 min"]
+    assert draft.LENGTHS[3:7] == ["2 min", "3 min", "5 min", "10 min"]
     assert pacing.TARGETS["10 min"] == 600.0
     assert writer.part_count(writer.target_words(600, PERSONA)) == writer.MAX_PARTS
 

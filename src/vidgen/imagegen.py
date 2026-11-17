@@ -119,7 +119,17 @@ LOOKS = {
     "Realistic photo": "realistic photo, natural light, sharp focus",
     "3D render": "3D render, soft studio lighting, clean and colourful",
     "Illustration": "flat digital illustration, bold colours, clean lines",
+    # Story looks (5.5), tuned 2026-11-15 on a person, a crowd, a place and a face.
+    "Anime film": "2D anime film still, cel shaded, clean line art, soft painted background, "
+                  "warm cinematic light",
+    "Dark comic": "dark graphic novel comic art, bold black ink outlines, cel shading, "
+                  "dramatic lighting, high contrast",
+    "Painted history": "oil painting on canvas, visible brush strokes, painterly, dramatic "
+                       "chiaroscuro light, classical painting, rich warm colours",
+    "TV cartoon": "2D adult animated sitcom style, adult proportions, flat colours, thick black "
+                  "outlines, detailed backgrounds, hand-drawn cartoon",
 }
+STORY_LOOKS = ("Anime film", "Dark comic", "Painted history", "TV cartoon")
 DEFAULT_LOOK = "Realistic photo"
 # Changing a photo with words (redraw): how much of it is drawn again. The amount works in
 # steps of 1/steps, so a change takes half as many steps again: at 8, 0.7 to 0.85 all came out
@@ -226,12 +236,48 @@ def size_for(aspect: str) -> tuple[int, int]:
     return SIZES.get(aspect, SIZES["9:16"])
 
 
-def full_prompt(prompt: str, look: str = DEFAULT_LOOK) -> str:
-    """One line for the model: what to show, then the video's look."""
-    words = " ".join((prompt or "").split())[:MAX_PROMPT].rstrip(" ,.")
-    if not words:
-        raise ImageError("The picture has no description.")
-    return f"{words}, {LOOKS.get(look, LOOKS[DEFAULT_LOOK])}"
+HERO = "{hero}"   # where a scene's picture shows the video's main character
+NO_HERO = "a person"
+
+
+def picture_key(prompt, look, aspect, hero="", seed=0) -> str:
+    """What a kept picture was made from. Videos from before 5.5 (no seed) keep their
+    old keys, so their pictures are not drawn again."""
+    key = f"{prompt}|{look}|{aspect}"
+    return f"{key}|{' '.join((hero or '').split())}|{seed}" if seed else key
+
+
+def new_seed() -> int:
+    return random.randrange(1, 2**31)
+
+
+def full_prompt(prompt: str, look: str = DEFAULT_LOOK, hero: str = "") -> str:
+    """One line for the model: what to show, then the video's look.
+
+    ``{hero}`` in the scene becomes the main character's description. The whole line stays
+    within MAX_PROMPT: the scene's own words are cut from the end, never the character's, so
+    the same person is drawn in every scene (the same words and the same seed, tested
+    2026-11-15)."""
+    hero = " ".join((hero or "").split()).rstrip(" ,.") or NO_HERO
+    words = " ".join((prompt or "").split())
+    look_words = LOOKS.get(look, LOOKS[DEFAULT_LOOK])
+    # A story look is said first too: at the end of a long scene only, 2 of 11 Dark comic
+    # pictures came out as photos; said first as well, all 11 kept it (2026-11-15).
+    first = f"{look_words}: " if look in STORY_LOOKS else ""
+    if HERO not in words:
+        words = words[:MAX_PROMPT - len(first)].rstrip(" ,.")
+        if not words:
+            raise ImageError("The picture has no description.")
+        return f"{first}{words}, {look_words}"
+    parts = words.split(HERO)
+    room = (MAX_PROMPT - len(first) - len(look_words) - 2
+            - len(hero) * (len(parts) - 1))
+    while sum(map(len, parts)) > max(room, 0):
+        too_many = sum(map(len, parts)) - max(room, 0)
+        last = max(i for i, part in enumerate(parts) if part)   # cut the scene from its end
+        parts[last] = parts[last][:max(len(parts[last]) - too_many, 0)]
+    words = hero.join(parts).strip().rstrip(" ,.")
+    return f"{first}{words}, {look_words}"
 
 
 def smaller(size) -> tuple[int, int]:
@@ -500,7 +546,7 @@ def make(prompt: str, size, out_path: str, look: str = DEFAULT_LOOK, seed: int |
          should_stop=None, launch=_launch, check=ready, backend: str = "", log=None,
          memory=writer.free_memory, verify=damaged_files, speed: str = BEST,
          threads: tuple[int, int] = (0, 0), init: tuple[str, float] | None = None,
-         mask: str | None = None) -> Made:
+         mask: str | None = None, hero: str = "") -> Made:
     """Make one picture at ``out_path`` (a .png) and say how it was made.
 
     The graphics card is tried first, then the processor: a card can start
@@ -521,8 +567,8 @@ def make(prompt: str, size, out_path: str, look: str = DEFAULT_LOOK, seed: int |
     ok, why = check()
     if not ok:
         raise ImageError(why)
-    text = full_prompt(prompt, look)
-    seed = random.randrange(1, 2**31) if seed is None else seed
+    text = full_prompt(prompt, look, hero)
+    seed = new_seed() if not seed else seed
     log_path = out_path + ".log"
     failure, ran = None, False
     # GPU: the graphics card only (the user chose it); CPU: the processor only; "": the
