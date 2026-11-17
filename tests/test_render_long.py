@@ -152,6 +152,9 @@ def test_a_short_video_opens_each_clip_only_while_it_shows(tmp_path, monkeypatch
             super().close()
 
     monkeypatch.setattr(moviepy, "VideoFileClip", Counted)
+    # One part: parts built side by side (5.5) each open their own shots, so the count
+    # would follow the PC's cores (a 4-core build machine split this video, 2026-11-17).
     path, _ = _render(dict(script="\n\n".join(blocks), aspect="16:9", resolution="720p",
-                           captions=False, output_path=str(tmp_path / "short.mp4")))
+                           captions=False, output_path=str(tmp_path / "short.mp4"),
+                           parts_at_once=1))
     assert most[0] <= 2   # the shot showing, and the next during the crossfade
