@@ -348,6 +348,24 @@
     background: var(--coral) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'%3E%3Cpath d='M3.6 2.6v4.8L7.4 5z' fill='%23fff'/%3E%3C/svg%3E") center / 100% no-repeat;
     transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1); }
   .get details[open] summary::before { transform: rotate(90deg); }
+  .get .warn { margin-top: 28px; max-width: 60ch; }
+  .get .warn h3 { font-size: 1.1rem; margin: 0 0 8px; }
+  .get .warn p a { color: var(--blue); }
+  .note b { color: var(--text); }
+  /* a drawing of the SmartScreen box, so people know where "More info" hides */
+  .smartscreen { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 20px 0; }
+  .ss-box { background: #0A5BB5; color: #fff; border-radius: 8px; padding: 16px; display: flex; flex-direction: column;
+    gap: 8px; font-size: 0.85rem; line-height: 1.35; }
+  .ss-box b { font-size: 1rem; font-weight: 600; }
+  .ss-text { opacity: 0.9; }
+  .ss-link { text-decoration: underline; align-self: flex-start; }
+  .ss-buttons { display: flex; gap: 8px; justify-content: flex-end; margin-top: auto; }
+  .ss-btn { border: 1px solid #fff; padding: 4px 12px; }
+  .ss-hit { outline: 3px solid var(--coral); outline-offset: 3px; border-radius: 4px; position: relative; }
+  .ss-hit i { position: absolute; top: -14px; right: -14px; width: 22px; height: 22px; border-radius: 50%;
+    background: var(--coral); color: var(--bg); font: 700 0.8rem/22px var(--body); text-align: center; }
+  .hero-ss { margin-top: 24px; max-width: 560px; }
+  @media (max-width: 520px) { .smartscreen { grid-template-columns: 1fr; } }
 
   footer { padding: 24px 0 48px; color: var(--muted); font-size: 0.95rem; display: flex; flex-wrap: wrap; gap: 8px 24px; }
 
@@ -422,7 +440,20 @@
         <a class="download" href="https://github.com/bodrumundenizi-beep/free-ai-video-generator/releases/download/v5.5.0/AIVideoStudio-5.5.0-setup.exe">Download for Windows</a>
         <small>Free and open source, for Windows 10 and 11.</small>
       </div>
-      <p class="note">The installer (<span class="size">81&nbsp;MB</span>) is a Windows program. If Windows says it’s from an unknown publisher, choose More info, then Run anyway.</p>
+      <p class="note">The installer is <span class="size">81&nbsp;MB</span>. Windows will warn you the first time because the app is new: click <b>More info</b>, then <b>Run anyway</b>.</p>
+      <div class="smartscreen hero-ss" aria-hidden="true">
+        <div class="ss-box">
+          <b>Windows protected your PC</b>
+          <span class="ss-text">Microsoft Defender SmartScreen prevented an unrecognized app from starting.</span>
+          <span class="ss-link ss-hit">More info <i>1</i></span>
+          <span class="ss-buttons"><span class="ss-btn">Don’t run</span></span>
+        </div>
+        <div class="ss-box">
+          <b>Windows protected your PC</b>
+          <span class="ss-text">App: AIVideoStudio-5.5.0-setup.exe<br>Publisher: Unknown publisher</span>
+          <span class="ss-buttons"><span class="ss-btn ss-hit">Run anyway <i>2</i></span><span class="ss-btn">Don’t run</span></span>
+        </div>
+      </div>
     </div>
     <figure class="showcase">
       <div class="phone" id="phone">
@@ -585,10 +616,24 @@
       <a class="download" href="https://github.com/bodrumundenizi-beep/free-ai-video-generator/releases/download/v5.5.0/AIVideoStudio-5.5.0-setup.exe">Download for Windows</a>
       <small><a href="https://github.com/bodrumundenizi-beep/free-ai-video-generator/releases/latest">All downloads on GitHub</a>, including a portable version that needs no install.</small>
     </div>
-    <details>
-      <summary>Windows warns you the first time</summary>
-      <p>The app isn’t signed with a paid certificate, so SmartScreen may say it’s from an unknown publisher. Choose More info, then Run anyway. The code is public on GitHub if you’d like to check it first.</p>
-    </details>
+    <div class="warn">
+      <h3>Windows warns you the first time</h3>
+      <p>A blue box says “Windows protected your PC” and the only button is <b>Don’t run</b>. That’s normal for a new app without a paid certificate. Here’s how to start it:</p>
+      <div class="smartscreen" aria-hidden="true">
+        <div class="ss-box">
+          <b>Windows protected your PC</b>
+          <span class="ss-text">Microsoft Defender SmartScreen prevented an unrecognized app from starting.</span>
+          <span class="ss-link ss-hit">More info <i>1</i></span>
+          <span class="ss-buttons"><span class="ss-btn">Don’t run</span></span>
+        </div>
+        <div class="ss-box">
+          <b>Windows protected your PC</b>
+          <span class="ss-text">App: AIVideoStudio-5.5.0-setup.exe<br>Publisher: Unknown publisher</span>
+          <span class="ss-buttons"><span class="ss-btn ss-hit">Run anyway <i>2</i></span><span class="ss-btn">Don’t run</span></span>
+        </div>
+      </div>
+      <p>Why it’s safe: all the code is <a href="https://github.com/bodrumundenizi-beep/free-ai-video-generator">public on GitHub</a>, every release is built there from that code, and each file’s fingerprint is listed in SHA256SUMS.txt. The app needs no account and runs on your PC. The warning goes away as more people install it.</p>
+    </div>
   </div>
 </main>
 
