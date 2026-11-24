@@ -69,6 +69,22 @@ fetch_espeak = importlib.util.module_from_spec(_fetch)
 _fetch.loader.exec_module(fetch_espeak)
 ESPEAK = fetch_espeak.bundle_files()
 
+# Real-ESRGAN sharpens each AI picture after it is drawn (vidgen.imagegen.sharpen): a
+# separate program with its 1.2 MB model, copied as plain data into _internal/realesrgan.
+_fetch = importlib.util.spec_from_file_location(
+    "fetch_esrgan", os.path.join(ROOT, "packaging", "fetch_esrgan.py"))
+fetch_esrgan = importlib.util.module_from_spec(_fetch)
+_fetch.loader.exec_module(fetch_esrgan)
+ESRGAN = fetch_esrgan.bundle_files()
+
+# TAEF1, the tiny decoder: the AI pictures program finishes each picture 3x faster with it
+# (vidgen.imagegen.command). 9.8 MB, copied as plain data into _internal/taef1.
+_fetch = importlib.util.spec_from_file_location(
+    "fetch_taef1", os.path.join(ROOT, "packaging", "fetch_taef1.py"))
+fetch_taef1 = importlib.util.module_from_spec(_fetch)
+_fetch.loader.exec_module(fetch_taef1)
+TAEF1 = fetch_taef1.bundle_files()
+
 # The Image editor's background remover (BiRefNet lite, MIT) and eraser (LaMa, Apache 2.0) are
 # downloaded the first time they're used (vidgen.cutout, vidgen.eraser), from the release the
 # workflow uploads them to. Only their licences ship inside the app.
@@ -92,7 +108,7 @@ a = Analysis(
     # imageio reads its own version from package metadata when imported (the
     # only bundled library that does); without it the frozen app fails every
     # render with "No package metadata was found for imageio".
-    datas=[(ICON, "assets")] + MUSIC + PROMO + TUTORIAL + LOOKS + SFX + LLAMA + ESPEAK + BIREFNET + LAMA + copy_metadata("imageio"),
+    datas=[(ICON, "assets")] + MUSIC + PROMO + TUTORIAL + LOOKS + SFX + LLAMA + ESPEAK + ESRGAN + TAEF1 + BIREFNET + LAMA + copy_metadata("imageio"),
     hiddenimports=[
         # Imported inside a try/except in apply_window_effects(); PyInstaller's
         # scan does find it, but being explicit costs nothing.

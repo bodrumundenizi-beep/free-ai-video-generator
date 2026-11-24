@@ -113,6 +113,25 @@ except ImportError:  # pragma: no cover - startup guard
     )
     raise SystemExit(1)
 
+
+def _scrollbar_draw(draw):
+    """CTkScrollbar._draw ends with update_idletasks(), which paints the whole window halfway
+    through a resize (the black, blocky frames). Tk paints it at the next idle anyway."""
+    def _draw(self, no_color_updates=False):
+        self._canvas.update_idletasks = _no_flush
+        try:
+            draw(self, no_color_updates)
+        finally:
+            vars(self._canvas).pop("update_idletasks", None)
+    return _draw
+
+
+def _no_flush():
+    pass
+
+
+ctk.CTkScrollbar._draw = _scrollbar_draw(ctk.CTkScrollbar._draw)
+
 # The engine. Only light modules load here; MoviePy waits for the first render
 # (or the warm-up thread), so the window still appears instantly.
 from vidgen.formats import RATIO_OPTIONS, RESOLUTION_OPTIONS, resolve_target  # noqa: E402
@@ -137,7 +156,7 @@ from vidgen.voice import generate_voiceover  # noqa: E402
 
 
 APP_NAME = "AI Video Studio"
-APP_VERSION = "5.5.0"
+APP_VERSION = "5.6.0"
 # Must match AppUserModelID in packaging/installer.iss, or a pinned taskbar
 # shortcut will not group with the running window.
 APP_MODEL_ID = "AIVideoStudio.Desktop.3"
@@ -302,6 +321,7 @@ MOVING_HINTS = {
 AI_THREAD_OPTIONS = ("Auto", "2", "4", "6", "8", "10", "12", "14", "16", "20", "24", "32")
 SLOW_AI_SCENES = 2       # AI pictures New from text makes by default on a slow PC
 SLOW_FAST_SECONDS = 40   # a Fast picture slower than this makes a PC "slow" for AI pictures
+SLOW_RISE = 1.5          # one picture may raise the kept picture time this much at most
 # Deniz's words for the Storyboard dropdown (2026-11-17); the hints below start the same way.
 AI_SPEED_LABELS = {imagegen.BEST: "Best: slow", imagegen.BALANCED: "Balanced: normal",
                    imagegen.FAST: "Fast: fast but low res"}
@@ -343,6 +363,7 @@ def default_settings() -> dict:
         "auto_cards": True,
         "story_real": True,        # picture stories: only what could happen in real life
         "story_own": False,        # "My own story": the user says what happens and the ending
+        "story_fewer": None,       # fewer pictures, slower voice; None = ticked on a slow PC
         "story_must": "",
         "story_ending": "",
         "ai_images_for": AI_IMAGES_FOR[0],
@@ -461,6 +482,7 @@ def load_settings() -> dict:
     data["auto_cards"] = bool(data["auto_cards"])
     data["story_real"] = bool(data["story_real"])
     data["story_own"] = bool(data["story_own"])
+    data["story_fewer"] = None if data["story_fewer"] is None else bool(data["story_fewer"])
     for key in ("story_must", "story_ending"):
         data[key] = " ".join(str(data[key] or "").split())[:400]
     if data["ai_images_for"] not in AI_IMAGES_FOR:
@@ -1239,12 +1261,12 @@ TOUR = (
 # Shown once after updating to this version (WhatsNewDialog). Short: the release notes have
 # the whole story.
 WHATS_NEW = (
-    "Picture stories: type an idea and get a story video, every scene drawn in one style with "
-    "the same main character, one big word on screen at a time. Template > Picture story.",
-    "4 story looks (Anime film, Dark comic, Painted history, TV cartoon), 60 s or 2 minutes. "
-    "My own story: say what must happen and how it ends.",
-    "Faster: videos are put together on the graphics card and in parts at once, about 2 "
-    "minutes less for a 2-minute video. Picture quality is in the Storyboard.",
+    "Better picture stories: real twists, dark endings that stay dark, and shots of the places "
+    "and things in the story, not only the main character.",
+    "AI pictures are about 40% faster and drawn while the voice is made; Fast pictures are "
+    "sharpened. Laptops: \"fewer pictures, a little slower voice\" for picture stories.",
+    "Fixed: a story on a fast PC could get stock clips, and the window went black when "
+    "maximized.",
 )
 
 

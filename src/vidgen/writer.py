@@ -112,6 +112,21 @@ NEW_PROJ = Model(
 )
 NEW_FILES = (NEW, NEW_PROJ)
 
+# 5.6: an add-on for Qwen3-VL 4B trained on 269 hand-checked stories (plan 4.3): busier plots,
+# dark endings that stay dark. Only picture-story plots and stories use it. Not in the
+# installer: fetched the first time a picture story is written. Uploaded to the release by
+# hand (it is trained on Deniz's PC, not in the release workflow).
+STORY_LORA = Model(
+    name="story writer add-on",
+    file="story-lora-v2.gguf",
+    url="https://github.com/bodrumundenizi-beep/free-ai-video-generator/releases/download/"
+        "v5.6.0/story-lora-v2.gguf",
+    size=66_095_296,
+    sha256="5c3d309ecc9186fad11c19840803d615b0b1fffa01893a05543a2daf03ea1f55",
+    licence="Apache 2.0",
+)
+_lora_failed = False   # fetched once per run at most: offline, every story would wait for it
+
 SERVER_EXE = "llama-server.exe"
 GPU_LAYERS = "99"  # more layers than the model has: all of it on the graphics card
 CONTEXT = 4096  # tokens the model can hold: instructions, the text and its answer
@@ -1195,6 +1210,7 @@ def _revise_turn(scenes, comment: str) -> str:
 # One answer holds about 770 words (CONTEXT // 2 tokens), a 10 minute video about 1500: so a
 # long video is planned as parts first, then written a part at a time.
 LONG = 60.0          # seconds: longer targets are written in parts
+SLOWER = "Slower"    # a picture story on a slow PC is read at this voices.SPEEDS speed
 PART_WORDS = 130     # spoken words in one part: about 13 scenes, well inside one answer
 MAX_PARTS = 10
 
@@ -1418,14 +1434,33 @@ def has_graphics(run=subprocess.run) -> bool | None:
     return bool(re.search(r"^\s*Vulkan\d+:", text, re.M))
 
 
-def _launch(exe: str, model_file: str, port: int, gpu: bool = False):
-    """Start llama.cpp, reachable from this PC only, with no window of its own."""
+def story_lora(should_stop=None) -> str | None:
+    """The story add-on's path, fetched if missing; None when the writer is not Qwen3-VL 4B
+    (it fits no other model) or it could not be fetched (stories are then written without)."""
+    global _lora_failed
+    if not upgraded():
+        return None
+    if not installed(STORY_LORA):
+        if _lora_failed:
+            return None
+        try:
+            download(should_stop=should_stop, model=STORY_LORA)
+        except WriterError:
+            _lora_failed = True
+            return None
+    return model_path(STORY_LORA)
+
+
+def _launch(exe: str, model_file: str, port: int, gpu: bool = False, lora: str | None = None):
+    """Start llama.cpp, reachable from this PC only, with no window of its own. ``lora`` is
+    loaded switched off: each request says whether it is used (Session._ask)."""
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     return subprocess.Popen(
         [exe, "-m", model_file, "--host", "127.0.0.1", "--port", str(port),
          "-c", str(CONTEXT), "-np", "1", "--no-webui",
          # Always said out loud: left alone, llama.cpp may pick the graphics card itself.
-         "-ngl", GPU_LAYERS if gpu else "0"],
+         "-ngl", GPU_LAYERS if gpu else "0"]
+        + (["--lora", lora, "--lora-init-without-apply"] if lora else []),
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
         creationflags=flags)
 
@@ -1501,6 +1536,7 @@ class Session:
         self._proc = None
         self._url = ""
         self._lock = threading.Lock()
+        self._lora = None   # the story add-on's path, once a picture story asked for it
 
     def __enter__(self):
         return self
@@ -1523,7 +1559,9 @@ class Session:
         port = _free_port()
         self._url = f"http://127.0.0.1:{port}"
         try:
-            self._proc = self._launch(runtime_path(), model_path(current()), port, self.gpu)
+            extra = {"lora": self._lora} if self._lora else {}
+            self._proc = self._launch(runtime_path(), model_path(current()), port, self.gpu,
+                                      **extra)
         except OSError as exc:
             raise WriterError(f"The Smart writer could not be started: {exc}") from exc
         with _LIVE_LOCK:
@@ -1533,6 +1571,9 @@ class Session:
             self._stopping()
             if self._proc.poll() is not None:
                 self._proc = None
+                if self._lora:   # a broken add-on must not stop the writer: without it
+                    self._lora = None
+                    return self.start()
                 if self.gpu:
                     # Too little video memory or a driver problem: the processor still works.
                     self.gpu, self.gpu_failed = False, True
@@ -1595,8 +1636,9 @@ class Session:
             raise WriterError("The Smart writer's answer could not be read.") from exc
 
     def _ask(self, system: str, turns: list[tuple[str, str]], schema: dict,
-             max_tokens: int, temperature: float = 0.6) -> str:
-        """One answer from the model, as text that fits ``schema``."""
+             max_tokens: int, temperature: float = 0.6, lora: bool = False) -> str:
+        """One answer from the model, as text that fits ``schema``. ``lora``: with the story
+        add-on, when it is loaded (picture-story plots and stories only)."""
         self.start()
         messages = [{"role": "system", "content": system}] if system else []
         messages +=[{"role": role, "content": content} for role, content in turns]
@@ -1608,6 +1650,8 @@ class Session:
             "response_format": {"type": "json_schema",
                                 "json_schema": {"name": "answer", "schema": schema}},
         }
+        if self._lora:   # loaded: off unless asked (off gives the same answers as without it)
+            body["lora"] = [{"id": 0, "scale": 1.0 if lora else 0.0}]
         # The request blocks, so a watcher stops the model when the user cancels
         # or the PC proves too slow; the request then fails and we say which.
         finished, timed_out = threading.Event(), threading.Event()
@@ -1744,10 +1788,11 @@ class Session:
               length: str | None = None, padding: float = 0.3,
               cards: bool = True, ai: str = draft.AI_NONE, web: bool = False,
               progress=None, photos=(), story: bool | str = False, must: str = "",
-              ending: str = "") -> draft.Draft:
+              ending: str = "", slower: bool = False) -> draft.Draft:
         """A script for ``text``, rewritten for the audience and the length. With ``web``, an
         idea that asks for facts is first looked up on Wikipedia (vidgen.webfacts).
-        ``story``: a picture story, real-life only unless it is ANYTHING_GOES.
+        ``story``: a picture story, real-life only unless it is ANYTHING_GOES. ``slower``
+        (a story on a slow PC): fewer words, so it still fills the length read Slower.
         ``progress(message, fraction)`` hears how a long video's parts are going.
         ``photos`` (draft.Photo): the user's reference photos; the shown ones are put in
         the scenes about them. ``must`` and ``ending`` ("My own story", picture stories
@@ -1755,6 +1800,8 @@ class Session:
         audience = audience or draft.Audience()
         length = length if length in draft.LENGTHS else audience.length
         persona = voices.persona(audience.voice)
+        if story and slower:
+            persona = voices.at_speed(persona, SLOWER)
         text = " ".join((text or "").split())
         if not text:
             raise draft.DraftError("Paste some text first.")
@@ -1864,7 +1911,7 @@ class Session:
             self._stopping()
             events = parse_plot(self._ask(plot_prompt(real, per_beat), [("user", asked)],
                                           plot_schema(len(PLOT_BEATS) * per_beat),
-                                          400 * per_beat, PLOT_TEMPERATURE))
+                                          400 * per_beat, PLOT_TEMPERATURE, lora=True))
             trouble = plot_trouble(events, idea, len(PLOT_BEATS) * per_beat)
             # On a tie, the plot where more happens (2026-11-17: midnight car had 1 of 20).
             key = (trouble, -actions(events))
@@ -1933,7 +1980,7 @@ class Session:
             facts = _cut_lines(facts, free - len(idea) - len(plan) - 40)
         asked = (f"{idea}\n\nFacts to use (keep to them):\n{facts}" if facts else idea) + plan
         _check_fits(asked, room)
-        content = self._ask(system, [("user", asked)], story_schema(count), room)
+        content = self._ask(system, [("user", asked)], story_schema(count), room, lora=True)
         return parse_story(content)
 
     def _write_story(self, idea, audience, length, words, target, persona, padding, ai,
@@ -1942,6 +1989,10 @@ class Session:
         With ``web``, a story about real events gets its facts from Wikipedia first.
         ``real``: only what could happen in real life, else anything goes."""
         facts, source = "", "Smart writer (picture story)"
+        lora = story_lora(self.should_stop)
+        if lora and lora != self._lora:   # loaded the next time the model starts
+            self.close()
+            self._lora = lora
         if web and true_story(idea):
             facts, pages = webfacts.facts(idea)
             if pages:

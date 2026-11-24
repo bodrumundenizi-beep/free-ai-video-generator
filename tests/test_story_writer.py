@@ -100,6 +100,48 @@ def test_picture_story_template_writes_a_drawn_story(monkeypatch):
     assert "HERO" in sent["messages"][0]["content"]
 
 
+def write_story(model):
+    answer = story([scene(i, i % 4 != 0) for i in range(1, 12)])
+    plot = json.dumps({"events": ["a happens", "b happens", "c happens", "d happens",
+                                  "k happens"]})
+    model.answers = [plot, answer, answer, json.dumps({"hook": "Watch this."})]
+    with session(model) as s:
+        s.write("a man gives away his savings at the airport",
+                draft.TEMPLATES["Picture story"].audience, "60 s", ai=draft.AI_ALL, story=True)
+        s.hook("a tip")   # anything else asked in the same session
+
+
+def test_the_story_add_on_is_on_for_plot_and_story_only(monkeypatch):
+    monkeypatch.setattr(writer, "story_lora", lambda _stop=None: "story-lora.gguf")
+    model = FakeModel()
+    write_story(model)
+    assert model.loras == ["story-lora.gguf"]
+    assert [b["lora"][0]["scale"] for b in model.bodies] == [1.0, 1.0, 1.0, 0.0]
+
+
+def test_without_the_add_on_nothing_changes(monkeypatch):
+    model = FakeModel()
+    write_story(model)   # no Qwen3-VL 4B here: story_lora() is None, nothing fetched
+    assert model.loras == [None] and not any("lora" in b for b in model.bodies)
+    monkeypatch.setattr(writer, "story_lora", lambda _stop=None: "story-lora.gguf")
+    model = FakeModel()
+    model.lora_broken = True   # llama.cpp won't load it: the writer still writes, without it
+    write_story(model)
+    assert model.loras == ["story-lora.gguf", None] and not any("lora" in b for b in model.bodies)
+
+
+def test_a_failed_fetch_is_not_tried_again(monkeypatch):
+    tries = []
+
+    def fail(**_kw):
+        tries.append(1)
+        raise WriterError("offline")
+    monkeypatch.setattr(writer, "upgraded", lambda: True)
+    monkeypatch.setattr(writer, "download", fail)
+    monkeypatch.setattr(writer, "_lora_failed", False)
+    assert writer.story_lora() is None and writer.story_lora() is None and tries == [1]
+
+
 def test_the_plot_comes_first_and_skipped_events_are_found():
     events = writer.parse_plot(json.dumps({"events": [
         "A car follows her at midnight", "She gets off the bus", "She calls 911",
@@ -471,3 +513,13 @@ def test_an_ending_whose_pictures_copy_the_words_loses_and_both_use_one_picture_
     assert writer.ENDING_RULE in writer.ending_prompt()
     assert writer.PICTURE_RULE in writer.ending_prompt() and \
         writer.PICTURE_RULE in writer.story_prompt(draft.Audience(), 150, 11)
+
+
+def test_a_slower_story_is_written_with_fewer_words(monkeypatch):
+    asked = []
+    monkeypatch.setattr(writer.Session, "_write_story",
+                        lambda self, text, audience, length, words, *a, **k: asked.append(words))
+    one = writer.Session.__new__(writer.Session)
+    for slower in (False, True):
+        one.write("a girl and a cat", length="2 min", story=True, slower=slower)
+    assert asked[1] < asked[0] * 0.92   # read 12% slower: about 12% fewer words

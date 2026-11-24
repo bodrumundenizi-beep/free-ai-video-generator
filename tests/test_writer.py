@@ -45,12 +45,14 @@ class FakeModel:
         self.fail_health, self.on_post = fail_health, on_post
         self.alive, self.launched, self.killed = True, 0, 0
         self.gpus, self.gpu_broken = [], False
+        self.loras, self.lora_broken = [], False
 
     # the process
-    def launch(self, exe, model_file, port, gpu=False):
+    def launch(self, exe, model_file, port, gpu=False, lora=None):
         self.launched += 1
         self.gpus.append(gpu)
-        self.alive = not (gpu and self.gpu_broken)
+        self.loras.append(lora)
+        self.alive = not (gpu and self.gpu_broken) and not (lora and self.lora_broken)
         return self
 
     def poll(self):

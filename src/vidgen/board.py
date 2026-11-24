@@ -174,6 +174,25 @@ def apply_revision(before: list[Scene], revised: list[tuple[str, str]], cards=No
     return out.scenes
 
 
+def pair_scenes(scenes: list[Scene]) -> list[Scene]:
+    """Every two scenes as one: both lines spoken over the first one's picture. For a picture
+    story on a slow PC, where each picture takes a minute or more: half the pictures (Deniz,
+    2026-11-23). A scene with a card or a chapter start, and the last scene when it is left
+    over, stay as they are."""
+    out, at = [], 0
+    while at < len(scenes):
+        first = scenes[at]
+        second = scenes[at + 1] if at + 1 < len(scenes) else None
+        if second is None or first.card or second.card or second.chapter \
+                or not first.voice or not second.voice or first.duration or second.duration:
+            out.append(first)
+            at += 1
+            continue
+        out.append(dataclasses.replace(first, voice=f"{first.voice} {second.voice}"))
+        at += 2
+    return out
+
+
 def limit_ai(scenes: list[Scene], keep: int) -> list[Scene]:
     """``scenes`` with only the first ``keep`` AI pictures; later ones become stock scenes.
 

@@ -30,6 +30,15 @@ keyvault.delete = lambda name: _VAULT.pop(name, None) or True
 
 
 @pytest.fixture(autouse=True)
+def _no_sharpener(monkeypatch):
+    """The real sharpener (vendor/realesrgan, when fetched) never runs on fake pictures:
+    tests behave the same with and without it. test_imagegen tests sharpen itself."""
+    from vidgen import imagegen
+    monkeypatch.setattr(imagegen, "SHARPENER", "not-here.exe")
+    monkeypatch.setattr(imagegen, "TINY_DECODER", "not-here.safetensors")   # same for TAEF1
+
+
+@pytest.fixture(autouse=True)
 def _fake_keyvault():
     _VAULT.clear()
     yield _VAULT

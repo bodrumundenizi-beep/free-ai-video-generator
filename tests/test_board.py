@@ -139,3 +139,23 @@ def test_a_translation_replaces_only_the_spoken_lines():
     scenes = board.parse_script(out)
     assert [s.voice for s in scenes] == ["Presiona Windows y V.", None, "Fíjalo."]
     assert scenes[0].card == "Win + V" and scenes[1].duration == 2 and scenes[2].is_ai
+
+
+def test_pair_scenes_puts_two_lines_on_one_picture_and_keeps_the_odd_one():
+    scenes = parse_script(
+        "Visual: ai: {hero} at a bus stop\nVoice: She waits.\n\n"
+        "Visual: ai: {hero} on the bus\nVoice: The bus comes.\n\n"
+        "Visual: ai: {hero} at home\nVoice: She is home.")
+    paired = board.pair_scenes(scenes)
+    assert [s.voice for s in paired] == ["She waits. The bus comes.", "She is home."]
+    assert [s.ai_prompt for s in paired] == ["{hero} at a bus stop", "{hero} at home"]
+    assert "The bus comes." in Board(paired).text() and "on the bus" not in Board(paired).text()
+
+
+def test_pair_scenes_leaves_cards_and_set_lengths_alone():
+    scenes = parse_script(
+        "Visual: ai: a\nVoice: One.\nCard: Big news\n\n"
+        "Visual: ai: b\nVoice: Two.\n\n"
+        "Visual: ai: c\nVoice: Three.\nDuration: 4\n\n"
+        "Visual: ai: d\nVoice: Four.")
+    assert [s.voice for s in board.pair_scenes(scenes)] == ["One.", "Two.", "Three.", "Four."]

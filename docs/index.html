@@ -89,13 +89,15 @@
   img, video { display: block; max-width: 100%; height: auto; }
   a { color: inherit; text-underline-offset: 0.2em; }
   /* text links: the underline sweeps in from the left on hover, in Acid Lime */
-  footer a, .get .act small a, .name { text-decoration: none; background: linear-gradient(var(--ring), var(--ring))
+  .bar-links { display: flex; align-items: center; gap: 22px; }
+  .bar .how { font-size: 0.95rem; padding: 13px 0; white-space: nowrap; }
+  footer a, .get .act small a, .name, .bar .how { text-decoration: none; background: linear-gradient(var(--ring), var(--ring))
     left bottom / 0 2px no-repeat; transition: background-size 0.35s cubic-bezier(0.16, 1, 0.3, 1); }
   footer a, .get .act small a { background-size: 100% 1px; background-image: linear-gradient(currentColor, currentColor); }
-  footer a:hover, .get .act small a:hover, .name:hover { background-image: linear-gradient(var(--ring), var(--ring));
+  footer a:hover, .get .act small a:hover, .name:hover, .bar .how:hover { background-image: linear-gradient(var(--ring), var(--ring));
     background-size: 100% 2px; }
   @keyframes sweep { from { background-size: 0 2px; } }
-  footer a:hover, .get .act small a:hover, .name:hover { animation: sweep 0.35s cubic-bezier(0.16, 1, 0.3, 1); }
+  footer a:hover, .get .act small a:hover, .name:hover, .bar .how:hover { animation: sweep 0.35s cubic-bezier(0.16, 1, 0.3, 1); }
   ::selection { background: var(--coral); color: var(--bg); }
   html { color-scheme: dark; scrollbar-color: var(--edge) var(--bg); accent-color: var(--ring); }
   :focus-visible { outline: 3px solid var(--ring); outline-offset: 3px; border-radius: 4px; }
@@ -406,7 +408,7 @@
     .story { height: auto; }
     .story .stick { position: static; min-height: 0; }
     .js .story .w { opacity: 1; }
-    footer a:hover, .get .act small a:hover, .name:hover { animation: none; }
+    footer a:hover, .get .act small a:hover, .name:hover, .bar .how:hover { animation: none; }
   }
   /* phones: half-size backgrounds (88 KB and 37 KB instead of 380 KB and 264 KB); the screen is
      small enough that nobody can tell */
@@ -423,7 +425,10 @@
 <div class="beam" aria-hidden="true"></div>
 <header class="wrap bar">
   <a class="name" href="#top">AI Video Studio</a>
-  <a class="download" href="https://github.com/bodrumundenizi-beep/free-ai-video-generator/releases/download/v5.5.0/AIVideoStudio-5.5.0-setup.exe">Download for Windows</a>
+  <span class="bar-links">
+    <a class="how" href="how">See how it works</a>
+    <a class="download" href="https://github.com/bodrumundenizi-beep/free-ai-video-generator/releases/download/v5.6.0/AIVideoStudio-5.6.0-setup.exe">Download for Windows</a>
+  </span>
 </header>
 
 <main id="top" class="wrap">
@@ -437,7 +442,7 @@
         <p><b class="say">Voice:</b> Add a little chocolate before you brew.</p>
       </div>
       <div class="act">
-        <a class="download" href="https://github.com/bodrumundenizi-beep/free-ai-video-generator/releases/download/v5.5.0/AIVideoStudio-5.5.0-setup.exe">Download for Windows</a>
+        <a class="download" href="https://github.com/bodrumundenizi-beep/free-ai-video-generator/releases/download/v5.6.0/AIVideoStudio-5.6.0-setup.exe">Download for Windows</a>
         <small>Free and open source, for Windows 10 and 11.</small>
       </div>
       <p class="note">The installer is <span class="size">81&nbsp;MB</span>. Windows will warn you the first time because the app is new: click <b>More info</b>, then <b>Run anyway</b>.</p>
@@ -450,7 +455,7 @@
         </div>
         <div class="ss-box">
           <b>Windows protected your PC</b>
-          <span class="ss-text">App: AIVideoStudio-5.5.0-setup.exe<br>Publisher: Unknown publisher</span>
+          <span class="ss-text">App: AIVideoStudio-5.6.0-setup.exe<br>Publisher: Unknown publisher</span>
           <span class="ss-buttons"><span class="ss-btn ss-hit">Run anyway <i>2</i></span><span class="ss-btn">Don’t run</span></span>
         </div>
       </div>
@@ -613,8 +618,8 @@
     <h2>Make your first video in a few minutes</h2>
     <p>For Windows 10 and 11. A free Pexels or Pixabay key adds stock footage; the first run shows you how to get one.</p>
     <div class="act">
-      <a class="download" href="https://github.com/bodrumundenizi-beep/free-ai-video-generator/releases/download/v5.5.0/AIVideoStudio-5.5.0-setup.exe">Download for Windows</a>
-      <small><a href="https://github.com/bodrumundenizi-beep/free-ai-video-generator/releases/latest">All downloads on GitHub</a>, including a portable version that needs no install.</small>
+      <a class="download" href="https://github.com/bodrumundenizi-beep/free-ai-video-generator/releases/download/v5.6.0/AIVideoStudio-5.6.0-setup.exe">Download for Windows</a>
+      <small><a href="https://github.com/bodrumundenizi-beep/free-ai-video-generator/releases/latest">All downloads on GitHub</a>, including a portable version that needs no install. Or <a href="how">try the app in your browser first</a>.</small>
     </div>
     <div class="warn">
       <h3>Windows warns you the first time</h3>
@@ -628,7 +633,7 @@
         </div>
         <div class="ss-box">
           <b>Windows protected your PC</b>
-          <span class="ss-text">App: AIVideoStudio-5.5.0-setup.exe<br>Publisher: Unknown publisher</span>
+          <span class="ss-text">App: AIVideoStudio-5.6.0-setup.exe<br>Publisher: Unknown publisher</span>
           <span class="ss-buttons"><span class="ss-btn ss-hit">Run anyway <i>2</i></span><span class="ss-btn">Don’t run</span></span>
         </div>
       </div>

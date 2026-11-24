@@ -87,7 +87,7 @@ You can confirm you have the real file by checking its hash against
 `SHA256SUMS.txt` on the release page:
 
 ```powershell
-Get-FileHash .\AIVideoStudio-5.5.0-setup.exe -Algorithm SHA256
+Get-FileHash .\AIVideoStudio-5.6.0-setup.exe -Algorithm SHA256
 ```
 
 ## The quick way
@@ -764,9 +764,17 @@ one big word on screen at a time. Made on your PC with the Smart writer and AI p
   through the city") and how it **ends** ("the driver was her brother, who came to warn her").
   A short line gets options and three small boxes (who, to whom, how), because the writer
   may guess wrong. Short, clear endings work best.
+- **Written by a trained add-on** (from 5.6): the Smart writer gets a small add-on trained on
+  story videos, downloaded once the first time you make a picture story (66 MB). Stories get
+  real twists, dark endings stay dark, and about 1 in 3 scenes shows a place or a thing
+  instead of the main character.
 - **Picture quality** (Storyboard): Best (slow), Balanced (normal, the default with a graphics
-  card) or Fast (fast but low res). A 2-minute story took about 5.5 minutes at Balanced on an
-  RTX 4060.
+  card) or Fast (fast but low res). Fast pictures are sharpened, Balanced ones a little.
+  A 2-minute story took about 5.5 minutes at Balanced on an RTX 4060 in 5.5; 5.6 draws each
+  picture about 40% faster and starts drawing while the voice is made.
+- **Fewer pictures, a little slower voice** (a tick box under the templates): two lines share
+  each picture and the voice reads a little slower, so the story keeps its length with half
+  the pictures. On by default on laptops and PCs without a graphics card.
 - The story is read in the Storyboard before it is made: change any line, the look or the
   quality there.
 
@@ -968,7 +976,7 @@ python packaging/fetch_espeak.py
 python packaging/fetch_birefnet.py
 python packaging/fetch_lama.py
 pyinstaller --noconfirm --clean packaging/ai_video_studio.spec
-"%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe" /DMyAppVersion=5.5.0 packaging\installer.iss
+"%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe" /DMyAppVersion=5.6.0 packaging\installer.iss
 ```
 
 That is where Inno Setup goes when installed for one user; installed for everyone, it is

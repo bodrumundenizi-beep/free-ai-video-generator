@@ -21,13 +21,19 @@ Pure of Tk. The download and the program can both be replaced in tests.
 
 from __future__ import annotations
 
+import base64
 import ctypes
+import json
 import os
 import random
 import re
 import shutil
+import socket
 import subprocess
+import tempfile
+import threading
 import time
+import urllib.request
 import zipfile
 from dataclasses import dataclass
 
@@ -144,6 +150,53 @@ AMOUNTS = {LITTLE: 0.6, SOME: 0.67, A_LOT: 0.75}
 def program_dir() -> str:
     """Beside the models, outside the install folder, so an app update keeps it."""
     return os.path.join(os.path.dirname(writer.models_dir()), "sd")
+
+
+SHARPENER = "realesrgan-ncnn-vulkan.exe"   # bundled, see packaging/fetch_esrgan.py
+SHARP_MODEL = "realesr-animevideov3"
+SHARP_LONG = 2560   # long side kept of the 4x picture: a 1080p frame plus room for the zoom
+# The drawn-art model made skin waxy on photos (2026-11-21); every other look came out cleaner.
+NOT_SHARPENED = ("Realistic photo",)
+# How much of the sharpened picture is kept per speed (Deniz, 2026-11-22): Fast is drawn small
+# and needs it; Balanced gets half, mixed with the plain picture; Best is big enough without.
+SHARP_STRENGTH = {"Fast": 1.0, "Balanced": 0.5, "Best": 0.0}
+
+
+def sharpen(path: str, look: str, strength: float = 1.0, run=subprocess.run) -> bool:
+    """``path`` drawn again 4 times bigger with clean lines (Real-ESRGAN), in place. The
+    pictures are drawn small (384x672 on Fast) and looked blurry stretched to 1080p. Below
+    ``strength`` 1 it is mixed with the plain picture enlarged. False, with the picture
+    untouched, when it is not done: a photo look, the program missing, or no graphics it can
+    run on."""
+    exe = writer.bundled("realesrgan", SHARPENER)
+    if look in NOT_SHARPENED or exe is None:
+        return False
+    from PIL import Image
+
+    big = path + ".x4.png"
+    try:
+        run([exe, "-i", path, "-o", big, "-n", SHARP_MODEL, "-s", "4"], cwd=os.path.dirname(exe),
+            capture_output=True, timeout=120, check=True,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        with Image.open(big) as image:
+            image.load()
+            scale = SHARP_LONG / max(image.size)
+            if scale < 1:
+                image = image.resize((round(image.width * scale), round(image.height * scale)),
+                                     Image.LANCZOS)
+            if strength < 1:
+                with Image.open(path) as plain:
+                    plain = plain.convert("RGB").resize(image.size, Image.LANCZOS)
+                image = Image.blend(plain, image.convert("RGB"), strength)
+            image.save(path)
+        return True
+    except (OSError, subprocess.SubprocessError):
+        return False
+    finally:
+        try:
+            os.remove(big)
+        except OSError:
+            pass
 
 
 def program_path() -> str | None:
@@ -325,6 +378,16 @@ def shaped_like(photo_size, size) -> tuple[int, int]:
     return (max(256, round(width * scale / 16) * 16), max(256, round(height * scale / 16) * 16))
 
 
+TINY_DECODER = "taef1.safetensors"   # bundled, see packaging/fetch_taef1.py
+
+
+def tiny_decoder() -> list[str]:
+    """TAEF1 finishes a picture 3x faster than the full decoder and looked the same on every
+    look (2026-11-22). Not bundled (run from source without vendor/taef1): the full one."""
+    path = writer.bundled("taef1", TINY_DECODER)
+    return ["--taesd", path] if path else []
+
+
 def command(exe: str, prompt: str, size, out_path: str, seed: int, backend: str = GPU,
             steps: int = STEPS, threads: int = 0, init: tuple[str, float] | None = None,
             mask: str | None = None) -> list[str]:
@@ -341,7 +404,8 @@ def command(exe: str, prompt: str, size, out_path: str, seed: int, backend: str 
             # With nothing said the program takes the first graphics card it finds.
             *(["--backend", "cpu"] if backend == CPU else []),
             *(["-t", str(threads)] if threads and backend == CPU else []),
-            *(["-i", init[0], "--strength", f"{init[1]:.2f}"] if init else []),
+            # A redrawn photo is also read in by the decoder: the full one, untested otherwise.
+            *(["-i", init[0], "--strength", f"{init[1]:.2f}"] if init else tiny_decoder()),
             *(["--mask", mask] if mask and init else [])]
 
 
@@ -542,6 +606,144 @@ def _run(args, log_path, should_stop, launch, began, timeout: float | None = Non
     return process.returncode
 
 
+# --- one picture program for a whole render ---------------------------------------------
+# sd-cli loads the models from disk for every picture: 3 of a Fast picture's 6.35 s on an
+# RTX 4060. sd-server stays running and, with only the text reader and decoder read from disk,
+# keeps the drawing part (3.7 GB) loaded: 4.3 s a picture, pixel-identical (2026-11-22).
+SERVER = "sd-server.exe"
+KEEP_MEMORY = 16 * 2 ** 30   # more RAM than this keeps the drawing part loaded (Deniz's rule)
+SERVER_START = 120.0         # seconds for the server to answer before it is given up
+_serve = {"on": False, "server": None, "broken": False, "no_keep": False}
+_serve_lock = threading.Lock()
+
+
+class _Server:
+    """sd-server.exe on a free local port, asked for one picture at a time."""
+
+    def __init__(self, exe: str, keep: bool, say, launch=_launch):
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            self.port = probe.getsockname()[1]
+        self.log = os.path.join(tempfile.gettempdir(), "AIVideoStudio-sd-server.log")
+        self._open = urllib.request.build_opener(urllib.request.ProxyHandler({})).open
+        self.process = launch([
+            exe, "--diffusion-model", writer.model_path(MODEL), "--vae", writer.model_path(DECODER),
+            "--llm", writer.model_path(writer.MODEL), "--diffusion-fa",
+            "--listen-ip", "127.0.0.1", "--listen-port", str(self.port),
+            "--params-backend", "te=disk,vae=disk" if keep else "disk", *tiny_decoder()],
+            self.log)
+        began = time.monotonic()
+        try:
+            while True:
+                if self.process.poll() is not None:
+                    raise ImageError(f"it stopped at the start (exit code {self.process.returncode})")
+                try:
+                    self._open(self._url("/sdapi/v1/samplers"), timeout=2).close()
+                    break
+                except OSError:
+                    if time.monotonic() - began > SERVER_START:
+                        raise ImageError("it didn't answer") from None
+                    time.sleep(0.2)
+        except BaseException:
+            self.close()
+            raise
+        device = device_name(_output(self.log))
+        say(f"🎨 Picture server started ({'drawing part kept loaded' if keep else 'models read '
+            'from disk each time'}){f' on {device}' if device else ''}")
+
+    def _url(self, path: str) -> str:
+        return f"http://127.0.0.1:{self.port}{path}"
+
+    def draw(self, text, size, steps, seed, out_path, should_stop, began):
+        body = json.dumps({"prompt": text, "steps": steps, "cfg_scale": 1.0, "width": size[0],
+                           "height": size[1], "seed": seed}).encode()
+        result = {}
+
+        def ask():
+            try:
+                request = urllib.request.Request(self._url("/sdapi/v1/txt2img"), body,
+                                                 {"Content-Type": "application/json"})
+                with self._open(request, timeout=TIMEOUT) as answer:
+                    result["png"] = base64.b64decode(json.load(answer)["images"][0])
+            except Exception as exc:  # noqa: BLE001 - handed to the caller below
+                result["error"] = exc
+
+        asking = threading.Thread(target=ask, daemon=True)
+        asking.start()
+        while asking.is_alive():
+            if should_stop is not None and should_stop():
+                raise Stopped()
+            if time.monotonic() - began > TIMEOUT:
+                raise ImageError("The AI picture took too long on this PC.")
+            asking.join(0.2)
+        if "error" in result:
+            raise result["error"]
+        with open(out_path, "wb") as fh:
+            fh.write(result["png"])
+
+    def close(self):
+        if self.process.poll() is None:
+            self.process.kill()
+            self.process.wait()
+
+
+def serve(on: bool = True):
+    """On: pictures made from now share one picture server, started by the first of them.
+    Off: it stops. A render turns it on for its pictures and off in a ``finally``."""
+    if not on or not _serve["on"]:   # a new render starts fresh; turning it on again keeps it
+        _serve["broken"] = _serve["no_keep"] = False
+    _serve["on"] = on
+    if not on:
+        close_server()
+
+
+def close_server():
+    """Stop the picture server, e.g. before a moving picture needs the graphics memory."""
+    with _serve_lock:
+        server, _serve["server"] = _serve["server"], None
+    if server is not None:
+        server.close()
+
+
+def _by_server(text, size, steps, seed, out_path, should_stop, began, say,
+               launch=_launch) -> bool:
+    """Make the picture through the picture server: True if it did. Any trouble: False, said
+    once, and the rest of the render goes back to one program per picture."""
+    if not _serve["on"] or _serve["broken"]:
+        return False
+    exe = program_path()
+    exe = os.path.join(os.path.dirname(exe), SERVER) if exe else ""
+    if not os.path.isfile(exe):
+        _serve["broken"] = True
+        return False
+    keep = False
+    try:
+        with _serve_lock:
+            if _serve["server"] is None:
+                keep = (writer.total_memory() or 0) > KEEP_MEMORY and not _serve["no_keep"]
+                _serve["server"] = _Server(exe, keep, say, launch)
+                _serve["server"].keep = keep
+            keep = getattr(_serve["server"], "keep", False)
+            _serve["server"].draw(text, size, steps, seed, out_path, should_stop, began)
+        return True
+    except Stopped:
+        close_server()
+        raise
+    except Exception as exc:  # noqa: BLE001 - the one-program way still works
+        close_server()
+        if keep:
+            # Kept loaded, the drawing part needs ~6.5 GB of the card at the prompt; a browser
+            # and a second screen left 150 MB (HTTP 500, 2026-11-23). Read from disk instead.
+            _serve["no_keep"] = True
+            say(f"🎨 The graphics card ran short of memory ({_scrub(str(exc))}); the picture "
+                "server now reads the models from disk for each picture.")
+            return False
+        _serve["broken"] = True
+        say(f"🎨 The picture server didn't work ({_scrub(str(exc))}); making pictures one at a "
+            "time instead.")
+        return False
+
+
 def make(prompt: str, size, out_path: str, look: str = DEFAULT_LOOK, seed: int | None = None,
          should_stop=None, launch=_launch, check=ready, backend: str = "", log=None,
          memory=writer.free_memory, verify=damaged_files, speed: str = BEST,
@@ -606,22 +808,32 @@ def make(prompt: str, size, out_path: str, look: str = DEFAULT_LOOK, seed: int |
         began, ran = time.monotonic(), True
         if os.path.isfile(out_path):
             os.remove(out_path)   # a picture left by an earlier try must not pass for this one
-        try:
-            code = _run(command(program_path() or EXE, text, fitted, out_path, seed, attempt,
-                                steps, count, start, area), log_path, should_stop, launch, began)
-        finally:
-            for leftover in (start and start[0], area):
-                if leftover:
-                    try:
-                        os.remove(leftover)
-                    except OSError:
-                        pass
-        lines = _output(log_path)
+        if attempt == GPU and not init and _by_server(text, fitted, steps, seed, out_path,
+                                                      should_stop, began, say, launch):
+            code, lines = 0, []
+        else:
+            try:
+                code = _run(command(program_path() or EXE, text, fitted, out_path, seed, attempt,
+                                    steps, count, start, area), log_path, should_stop, launch,
+                            began)
+            finally:
+                for leftover in (start and start[0], area):
+                    if leftover:
+                        try:
+                            os.remove(leftover)
+                        except OSError:
+                            pass
+            lines = _output(log_path)
         device = device_name(lines) if attempt == GPU else ""
         if device:
             say(f"🎨 Graphics card used: {device}")
         if code == 0 and os.path.isfile(out_path) and os.path.getsize(out_path):
-            return Made(time.monotonic() - began, attempt, fitted)
+            seconds = time.monotonic() - began
+            # A changed photo (init) keeps its size: it is laid back over the photo.
+            strength = SHARP_STRENGTH.get(FAST if attempt == CPU else speed, 0.0)
+            if not init and strength and sharpen(out_path, look, strength):
+                say(f"🎨 Sharpened in {time.monotonic() - began - seconds:.1f} s")
+            return Made(seconds, attempt, fitted)
         detail = _scrub("\n".join(
             [f"AI picture failed on the {where} after {time.monotonic() - began:.0f} s: exit "
              f"code {code}, {_gigabytes(memory())} GB free at that moment"]

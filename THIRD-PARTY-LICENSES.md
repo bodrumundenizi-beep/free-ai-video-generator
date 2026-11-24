@@ -14,6 +14,8 @@ portable ZIP redistribute the components below, each under its own licence.
 | [BiRefNet lite](https://github.com/ZhengPeng7/BiRefNet) (bundled model) | MIT | Remove background, see below |
 | [LaMa](https://github.com/advimman/lama) (bundled model) | Apache-2.0 | Erase, see below |
 | [espeak-ng](https://github.com/espeak-ng/espeak-ng) (bundled program) | **GPL-3.0** | See below |
+| [Real-ESRGAN](https://github.com/xinntao/Real-ESRGAN) (bundled program and realesr-animevideov3 model) | BSD-3-Clause, program MIT | Sharpens AI pictures; licences in `_internal/realesrgan` |
+| [TAEF1](https://huggingface.co/madebyollin/taef1) (bundled model, by Ollin Boer Bohan) | MIT | Tiny decoder that finishes AI pictures faster; licence in `_internal/taef1` |
 | [pywinstyles](https://github.com/Akascape/py-win-styles) | MIT | Mica backdrop |
 | [FFmpeg](https://ffmpeg.org/) (bundled binary) | **GPL-3.0** | See below |
 | [Pillow](https://python-pillow.org/), [NumPy](https://numpy.org/) | MIT-CMU / BSD-3-Clause | Pulled in by MoviePy |

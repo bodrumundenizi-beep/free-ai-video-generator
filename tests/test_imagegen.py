@@ -487,3 +487,282 @@ def test_quick_split_can_ask_for_pictures_too():
     script = draft.write(text, length=draft.KEEP_ALL, cards=False, ai=draft.AI_UNFILMABLE).script
     assert script.count("Visual: ai: ") == 1 and "river" in script.split("Visual: ")[2]
     assert "ai:" not in draft.write(text, length=draft.KEEP_ALL).script
+
+
+# --- the sharpener (Real-ESRGAN) ------------------------------------------------------
+
+def sharpener_here(monkeypatch, tmp_path):
+    exe = tmp_path / imagegen.SHARPENER
+    exe.write_bytes(b"")
+    monkeypatch.setattr(writer, "bundled", lambda folder, name: str(exe) if (
+        folder, name) == ("realesrgan", imagegen.SHARPENER) else None)
+    monkeypatch.setattr(imagegen, "SHARPENER", imagegen.SHARPENER)
+
+
+def picture(path, size=(384, 672)):
+    from PIL import Image
+    Image.new("RGB", size, "red").save(path)
+    return str(path)
+
+
+def fake_esrgan(calls, scale=4, fail=False):
+    def run(args, **_kw):
+        from PIL import Image
+        import subprocess
+        calls.append(args)
+        if fail:
+            raise subprocess.CalledProcessError(1, args)
+        with Image.open(args[args.index("-i") + 1]) as im:
+            im.resize((im.width * scale, im.height * scale)).save(args[args.index("-o") + 1])
+    return run
+
+
+def test_sharpen_makes_the_picture_bigger_up_to_the_cap(monkeypatch, tmp_path):
+    from PIL import Image
+    sharpener_here(monkeypatch, tmp_path)
+    calls = []
+    small = picture(tmp_path / "a.png")
+    assert imagegen.sharpen(small, "Dark comic", run=fake_esrgan(calls))
+    assert Image.open(small).size == (1463, 2560)   # 4x is 1536x2688: cut to SHARP_LONG
+    assert calls[0][calls[0].index("-n") + 1] == imagegen.SHARP_MODEL
+    assert not os.path.exists(small + ".x4.png")
+
+
+def test_sharpen_leaves_photos_and_failures_alone(monkeypatch, tmp_path):
+    from PIL import Image
+    calls = []
+    small = picture(tmp_path / "a.png")
+    assert not imagegen.sharpen(small, "Dark comic", run=fake_esrgan(calls))   # not bundled
+    sharpener_here(monkeypatch, tmp_path)
+    assert not imagegen.sharpen(small, "Realistic photo", run=fake_esrgan(calls))
+    assert not imagegen.sharpen(small, "Dark comic", run=fake_esrgan(calls, fail=True))
+    assert Image.open(small).size == (384, 672) and len(calls) == 1
+
+
+def test_a_made_picture_is_sharpened_but_a_changed_photo_is_not(monkeypatch, tmp_path):
+    done = []
+    monkeypatch.setattr(imagegen, "sharpen",
+                        lambda path, look, strength: done.append((look, strength)) or True)
+    said = []
+    imagegen.make("a cat", (576, 1024), str(tmp_path / "a.png"), "Dark comic", speed="Fast",
+                  launch=launcher([]), check=ok, memory=plenty, log=said.append)
+    assert done == [("Dark comic", 1.0)] and any("Sharpened" in line for line in said)
+    photo = picture(tmp_path / "photo.png")
+    imagegen.make("a dog", (576, 1024), str(tmp_path / "b.png"), "Dark comic", speed="Fast",
+                  launch=launcher([]), check=ok, memory=plenty, init=(photo, 0.6))
+    assert done == [("Dark comic", 1.0)]
+
+
+def test_fast_is_sharpened_fully_balanced_by_half_and_best_not_at_all(monkeypatch, tmp_path):
+    done = []
+    monkeypatch.setattr(imagegen, "sharpen",
+                        lambda path, look, strength: done.append(strength) or True)
+    for n, speed in enumerate(("Fast", "Balanced", "Best")):
+        imagegen.make("a cat", (576, 1024), str(tmp_path / f"{n}.png"), "Dark comic",
+                      speed=speed, launch=launcher([]), check=ok, memory=plenty)
+    imagegen.make("a cat", (576, 1024), str(tmp_path / "cpu.png"), "Dark comic", speed="Best",
+                  backend=imagegen.CPU, launch=launcher([]), check=ok, memory=plenty)
+    assert done == [1.0, 0.5, 1.0]   # the processor draws at Fast size whatever was chosen
+
+
+def test_half_strength_mixes_the_sharpened_and_the_plain_picture(monkeypatch, tmp_path):
+    from PIL import Image
+    sharpener_here(monkeypatch, tmp_path)
+
+    def run(args, **_kw):   # "sharpened" = white, so the mix of white and red shows
+        with Image.open(args[args.index("-i") + 1]) as im:
+            Image.new("RGB", (im.width * 4, im.height * 4), "white").save(
+                args[args.index("-o") + 1])
+
+    small = picture(tmp_path / "a.png", (100, 100))
+    assert imagegen.sharpen(small, "Dark comic", 0.5, run=run)
+    assert Image.open(small).getpixel((10, 10)) == (255, 127, 127)   # half way, rounded down
+
+
+# --- one picture server for a render ----------------------------------------------------
+
+class FakeServer:
+    """Stands in for _Server: draws by writing the file, or fails on ``fail``."""
+    made, fail = [], False
+
+    def __init__(self, exe, keep, say, launch):
+        FakeServer.made.append(self)
+        self.keep, self.closed, self.drawn = keep, False, []
+
+    def draw(self, text, size, steps, seed, out_path, should_stop, began):
+        if FakeServer.fail:
+            raise OSError("connection refused")
+        if should_stop and should_stop():
+            raise imagegen.Stopped()
+        self.drawn.append((size, steps, seed))
+        with open(out_path, "wb") as fh:
+            fh.write(b"png")
+
+    def close(self):
+        self.closed = True
+
+
+@pytest.fixture
+def server(monkeypatch, home):
+    exe = home / "sd" / "sd-cli.exe"
+    exe.parent.mkdir()
+    exe.write_bytes(b"")
+    (exe.parent / imagegen.SERVER).write_bytes(b"")
+    monkeypatch.setattr(imagegen, "program_path", lambda: str(exe))
+    monkeypatch.setattr(imagegen, "_Server", FakeServer)
+    monkeypatch.setattr(imagegen, "sharpen", lambda path, look, strength=1.0: False)
+    FakeServer.made, FakeServer.fail = [], False
+    yield FakeServer
+    imagegen.serve(False)
+
+
+def test_pictures_in_a_render_share_one_server_and_it_stops_after(server, home):
+    seen = []
+    imagegen.serve()
+    for n in range(3):
+        made = make(home, seen, f"{n}.png", seed=5, speed=imagegen.FAST)
+        assert made.backend == imagegen.GPU and os.path.isfile(home / f"{n}.png")
+    assert seen == [] and len(server.made) == 1   # no sd-cli at all, one server
+    assert server.made[0].drawn[0] == ((384, 672), 4, 5)
+    imagegen.serve(False)
+    assert server.made[0].closed
+
+
+def test_the_server_keeps_the_drawing_part_only_above_16_gb(monkeypatch, server, home):
+    for total, keep in ((32 * 2 ** 30, True), (16 * 2 ** 30, False), (None, False)):
+        monkeypatch.setattr(imagegen.writer, "total_memory", lambda t=total: t)
+        imagegen.serve()
+        make(home)
+        assert server.made[-1].keep is keep
+        imagegen.serve(False)
+
+
+def test_outside_a_render_and_for_photos_and_the_processor_sd_cli_is_used(server, home):
+    seen = []
+    make(home, seen)                                     # Try it / Make picture: no server
+    imagegen.serve()
+    make(home, seen, backend=imagegen.CPU)               # the processor
+    make(home, seen, init=(picture(home / "photo.png"), 0.6))   # a redrawn photo
+    assert len(seen) == 3 and server.made == []
+
+
+def test_a_broken_server_falls_back_to_sd_cli_for_the_rest_of_the_render(monkeypatch, server,
+                                                                          home):
+    monkeypatch.setattr(imagegen.writer, "total_memory", lambda: 16 * 2 ** 30)   # nothing kept
+    seen, said = [], []
+    server.fail = True
+    imagegen.serve()
+    make(home, seen, "a.png", log=said.append)
+    imagegen.serve()   # turned on again in the same render (pictures drawn ahead): still broken
+    make(home, seen, "b.png")
+    assert os.path.isfile(home / "a.png") and os.path.isfile(home / "b.png")
+    assert len(seen) == 2 and len(server.made) == 1 and server.made[0].closed
+    assert sum("picture server didn't work" in line for line in said) == 1
+    imagegen.serve(False)
+    imagegen.serve()   # the next render tries the server again
+    server.fail = False
+    make(home, seen, "c.png")
+    assert len(seen) == 2 and len(server.made) == 2
+
+
+def test_a_kept_server_short_of_card_memory_goes_on_reading_from_disk(monkeypatch, server,
+                                                                       home):
+    monkeypatch.setattr(imagegen.writer, "total_memory", lambda: 32 * 2 ** 30)
+    seen, said = [], []
+    server.fail = True
+    imagegen.serve()
+    make(home, seen, "a.png", log=said.append)      # kept server fails: sd-cli makes this one
+    server.fail = False
+    make(home, seen, "b.png", log=said.append)      # a new server, reading from disk
+    assert len(seen) == 1 and [s.keep for s in server.made] == [True, False]
+    assert any("ran short of memory" in line for line in said)
+    imagegen.serve(False)
+    imagegen.serve()
+    make(home, seen, "c.png")                       # the next render tries keeping it again
+    assert server.made[-1].keep is True
+
+
+def test_stop_during_a_server_picture_stops_the_server(server, home):
+    imagegen.serve()
+    make(home)
+    with pytest.raises(imagegen.Stopped):
+        make(home, should_stop=lambda: True)
+    assert server.made[0].closed and len(server.made) == 1
+
+
+def test_the_real_server_class_asks_over_http_and_saves_the_png(monkeypatch, tmp_path):
+    """_Server against a tiny local web server standing in for sd-server.exe."""
+    import base64
+    import http.server
+    import json
+    import threading
+
+    asked = []
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"[]")
+
+        def do_POST(self):
+            asked.append(json.loads(self.rfile.read(int(self.headers["Content-Length"]))))
+            body = json.dumps({"images": [base64.b64encode(b"PNGDATA").decode()]}).encode()
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *_args):
+            pass
+
+    started = []
+
+    def launch(args, log_path):
+        open(log_path, "w").write("ggml_vulkan: 0 = NVIDIA GeForce RTX 4060 (NVIDIA) | uma: 0\n")
+        web = http.server.HTTPServer(("127.0.0.1", int(args[args.index("--listen-port") + 1])),
+                                     Handler)
+        threading.Thread(target=web.serve_forever, daemon=True).start()
+        started.append((args, web))
+
+        class Running:
+            returncode = None
+
+            def poll(self):
+                return self.returncode
+
+            def kill(self):
+                web.shutdown()
+                web.server_close()
+                self.returncode = -9
+
+            def wait(self):
+                return self.returncode
+        return Running()
+
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    said = []
+    one = imagegen._Server("sd-server.exe", True, said.append, launch)
+    args = started[0][0]
+    assert args[args.index("--params-backend") + 1] == "te=disk,vae=disk"
+    assert "RTX 4060" in said[0] and "kept loaded" in said[0]
+    out = tmp_path / "p.png"
+    one.draw("a cat", (384, 672), 4, 9, str(out), None, imagegen.time.monotonic())
+    assert out.read_bytes() == b"PNGDATA"
+    assert asked == [{"prompt": "a cat", "steps": 4, "cfg_scale": 1.0, "width": 384,
+                      "height": 672, "seed": 9}]
+    one.close()
+    assert one.process.poll() == -9
+
+
+def test_the_tiny_decoder_is_used_when_bundled_but_not_for_a_redrawn_photo(monkeypatch, tmp_path):
+    tae = tmp_path / "taef1.safetensors"
+    tae.write_bytes(b"")
+    monkeypatch.setattr(writer, "bundled", lambda folder, name: str(tae) if (
+        folder, name) == ("taef1", imagegen.TINY_DECODER) else None)
+    drawn = imagegen.command("sd-cli.exe", "a cat", (384, 672), "o.png", 1)
+    assert drawn[drawn.index("--taesd") + 1] == str(tae)
+    redrawn = imagegen.command("sd-cli.exe", "a cat", (384, 672), "o.png", 1,
+                               init=("photo.png", 0.6))
+    assert "--taesd" not in redrawn
+    monkeypatch.setattr(writer, "bundled", lambda folder, name: None)
+    assert "--taesd" not in imagegen.command("sd-cli.exe", "a cat", (384, 672), "o.png", 1)

@@ -153,9 +153,14 @@ class App(ctk.CTk):
             return
         first = getattr(self, "_last_size", None) is None
         self._last_size = size
+        jumped = self.state() != getattr(self, "_last_state", None)
+        self._last_state = self.state()
         if first or self.current_page is None:
             if self.current_page is not None:   # opening maximized: the side panels show
                 self.after_idle(self._resized)
+            return
+        if jumped and not getattr(self, "_resize_job", None):
+            self._resized()   # maximize / restore is one jump: redraw once, no cover, no wait
             return
         # customtkinter redraws every rounded widget on each step of a drag (CTk issue #2617):
         # the pages are taken off screen behind a plain panel until the drag stops.
@@ -182,7 +187,10 @@ class App(ctk.CTk):
         self._layout_board()
         self._layout_settings()
         if self.current_page == "home":
-            self._fill_home()
+            if hasattr(self, "_home_cards"):
+                self._place_home()
+            else:
+                self._fill_home()
         if self.current_page == "projects":
             self.refresh_projects()
         if self.current_page == "thumbs":
@@ -282,6 +290,9 @@ class App(ctk.CTk):
         self.var_ai_speed = tk.StringVar(value=s["ai_images_speed"] or self.default_ai_speed())
         self.var_ai_threads = tk.StringVar(value=str(s["ai_threads"]))
         self.var_ai_speed.trace_add("write", self._ai_speed_picked)
+        # Picture stories: two lines per picture, read Slower. Follows this PC until clicked.
+        self.story_fewer_chosen = s["story_fewer"]
+        self.var_story_fewer = tk.BooleanVar(value=self.story_fewer())
         self._render_overrides = {}   # one render's answer to the slow-PC question
         self._both = None   # "Make both shapes": {shape, other, first: the first videos}
         self._batch = None  # "Make several": the texts, how far it is, what was made
@@ -324,6 +335,7 @@ class App(ctk.CTk):
             "auto_cards": bool(self.var_auto_cards.get()),
             "story_real": bool(self.var_story_real.get()),
             "story_own": bool(self.var_story_own.get()),
+            "story_fewer": self.story_fewer_chosen,
             "story_must": self.story_must,
             "story_ending": self.story_ending,
             "ai_images_for": self.var_ai_for.get(),
@@ -652,6 +664,14 @@ class App(ctk.CTk):
                         font=self.font_body, text_color=TEXT_MUTED, checkbox_width=18,
                         checkbox_height=18, border_width=1,
                         command=self._show_own_story).pack(side="left", padx=(16, 0))
+        fewer = ctk.CTkFrame(bars, fg_color="transparent")
+        fewer.pack(side="top", anchor="w", pady=(8, 0))
+        ctk.CTkCheckBox(fewer, text="Picture stories: fewer pictures, a little slower voice",
+                        variable=self.var_story_fewer, font=self.font_body,
+                        text_color=TEXT_MUTED, checkbox_width=18, checkbox_height=18,
+                        border_width=1, command=self._story_fewer_clicked).pack(side="left")
+        ctk.CTkLabel(fewer, text="Recommended for many laptops and slow PCs", font=self.font_tiny,
+                     text_color=TEXT_DIM).pack(side="left", padx=(10, 0))
         self.own_story = ctk.CTkFrame(bars, fg_color="transparent")
         self.own_story.grid_columnconfigure(1, weight=1)
         self.own_entries, self.own_help, self._own_ok = {}, {}, set()
@@ -775,6 +795,8 @@ class App(ctk.CTk):
 
     def refresh_home(self):
         self.refresh_estimate()
+        if self.story_fewer_chosen is None:   # the graphics check may have finished since
+            self.var_story_fewer.set(self.ai_slow())
         if self.current_page == "home" and hasattr(self, "home_body"):
             self._fill_home()
 
@@ -790,21 +812,34 @@ class App(ctk.CTk):
         self.home_hello.configure(text=started.greeting(time.localtime(now).tm_hour))
         self.home_status.configure(text=started.status_line(numbers, now))
         body = self.home_body
-        body.grid_columnconfigure((0, 1), weight=0, uniform="")
         left = [self._continue_card(every[0], body) if every else None,
                 self._ideas_card(every, body)]
         right = [None if self.started["hidden"] else self._started_card(numbers, body),
                  self._news_card(body) if started.whats_new_due(
                      self.version_since, APP_VERSION, now) else None]
         below = [self._features_card(body)]
+        self._home_cards = (left, right, below)
+        self._place_home()
+
+    def _place_home(self):
+        """Lay Home's cards out for the window width; a resize moves them, it doesn't rebuild."""
+        left, right, below = self._home_cards
+        body = self.home_body
+        self._layout_features()
+        for stack in getattr(self, "_home_stacks", ()):
+            if stack.winfo_exists():
+                stack.destroy()
+        self._home_stacks = []
+        body.grid_columnconfigure((0, 1), weight=0, uniform="")
         if not self.wide:
             body.grid_columnconfigure(0, weight=1)
             for row, card in enumerate(c for c in left + right + below if c is not None):
-                card.grid(row=row, column=0, columnspan=2, sticky="ew", pady=(0, PAD))
+                card.grid(in_=body, row=row, column=0, columnspan=2, sticky="ew", pady=(0, PAD))
             return
         body.grid_columnconfigure((0, 1), weight=1, uniform="home")
         for column, cards in ((0, left), (1, right)):
             stack = ctk.CTkFrame(body, fg_color="transparent")
+            self._home_stacks.append(stack)
             stack.grid(row=0, column=column, sticky="new",
                        padx=(0, PAD // 2) if column == 0 else (PAD // 2, 0))
             stack.grid_columnconfigure(0, weight=1)
@@ -1193,15 +1228,10 @@ class App(ctk.CTk):
         if self.features_hidden:
             body.grid_forget()   # folded to its title line
             return card
-        features = self._features()
-        # All in one row only when each card still has room for its text.
-        roomy = self.winfo_width() / ctk.ScalingTracker.get_window_scaling(self) >= 1800
-        per_row = len(features) if roomy else 3
-        body.grid_columnconfigure(tuple(range(per_row)), weight=1, uniform="features")
-        for at, (glyph, title, line, button, action) in enumerate(features):
+        tiles = []
+        for glyph, title, line, button, action in self._features():
             tile = ctk.CTkFrame(body, fg_color=FIELD_BG, corner_radius=6)
-            tile.grid(row=at // per_row, column=at % per_row, sticky="nsew",
-                      padx=(0 if at % per_row == 0 else 6, 0), pady=(0, 6))
+            tiles.append(tile)
             ctk.CTkLabel(tile, text=self.icon(glyph), font=self.font_icon_lg,
                          text_color=ACCENT).pack(anchor="w", padx=12, pady=(12, 4))
             ctk.CTkLabel(tile, text=title, font=self.font_bold, text_color=TEXT,
@@ -1213,7 +1243,22 @@ class App(ctk.CTk):
                           fg_color=CARD_BG, hover_color=CARD_HOVER, border_width=1,
                           border_color=FIELD_BORDER, text_color=TEXT,
                           command=action).pack(anchor="w", padx=12, pady=(0, 12))
+        self._feature_tiles = (body, tiles)
+        self._layout_features()
         return card
+
+    def _layout_features(self):
+        """All feature tiles in one row only when each still has room for its text."""
+        body, tiles = getattr(self, "_feature_tiles", (None, []))
+        if not tiles or not body.winfo_exists():
+            return
+        roomy = self.winfo_width() / ctk.ScalingTracker.get_window_scaling(self) >= 1800
+        per_row = len(tiles) if roomy else 3
+        body.grid_columnconfigure(tuple(range(len(tiles))), weight=0, uniform="")
+        body.grid_columnconfigure(tuple(range(per_row)), weight=1, uniform="features")
+        for at, tile in enumerate(tiles):
+            tile.grid(row=at // per_row, column=at % per_row, sticky="nsew",
+                      padx=(0 if at % per_row == 0 else 6, 0), pady=(0, 6))
 
     def toggle_features(self):
         self.features_hidden = not self.features_hidden
@@ -2665,6 +2710,25 @@ class App(ctk.CTk):
         current = self.script_box.get("1.0", "end").strip()
         return current not in ("", DEFAULT_SCRIPT.strip(), self._last_draft)
 
+    def story_fewer(self) -> bool:
+        """Fewer pictures and a slower voice for picture stories: the user's choice, or, until
+        they make one, on when this PC draws pictures slowly (a laptop, no graphics card)."""
+        return self.ai_slow() if self.story_fewer_chosen is None else self.story_fewer_chosen
+
+    def _story_fewer_clicked(self):
+        self.story_fewer_chosen = bool(self.var_story_fewer.get())
+        save_settings(self._collect_settings())
+
+    def _story_for_slow_pc(self, result, script):
+        """A picture story with "fewer pictures" on: two lines share each picture, read Slower
+        (the writer wrote fewer words for that speed, so the length stays). Else unchanged."""
+        if not (result.hero or result.look) or not self.story_fewer():
+            return script
+        self.var_voice_speed.set(writer.SLOWER)
+        self.append_log("🎨 Fewer pictures is on: two lines share each picture and the voice "
+                        "reads a little slower. The length stays the same.")
+        return boards.Board(boards.pair_scenes(parse_script(script))).text()
+
     def use_draft(self, result, audience, mode=None):
         """Put a written script in the editor, with the settings it was written for."""
         script = result.script
@@ -2672,7 +2736,9 @@ class App(ctk.CTk):
         self.project = None   # a new video: its own project from the first save
         self.thumb = {"scene": None, "title": ""}
         self.board_history, self.board_future = [], []
-        if self.ai_slow() and self._has_footage_key():
+        story = bool(result.hero or result.look)
+        script = self._story_for_slow_pc(result, script)
+        if self.ai_slow() and self._has_footage_key() and not story:
             # Each picture takes minutes here: keep the first few, stock for the rest.
             capped = boards.Board(boards.limit_ai(parse_script(script), SLOW_AI_SCENES)).text()
             if capped != script:
@@ -5084,8 +5150,12 @@ class App(ctk.CTk):
             return imagegen.auto_threads(imagegen.cpu_cores())
 
     def note_picture_time(self, seconds, speed):
-        """A picture just finished: keep its time, as if it were Fast, for the estimates."""
-        self.ai_fast_seconds = round(seconds / imagegen.cost(speed), 1)
+        """A picture just finished: keep its time, as if it were Fast, for the estimates. One
+        slow picture (a game on the card, the first after a restart) may only raise it 1.5x:
+        it alone made a fast PC "slow", and a story lost all but 2 pictures (5.5.0)."""
+        now = seconds / imagegen.cost(speed)
+        kept = self.ai_fast_seconds
+        self.ai_fast_seconds = round(min(now, kept * SLOW_RISE) if kept else now, 1)
         if not self.ai_speed_chosen:
             self.var_ai_speed.set(self.default_ai_speed())
             self.ai_speed_chosen = False
@@ -5617,16 +5687,18 @@ class App(ctk.CTk):
         self.append_log(f"📝 Video {b['at'] + 1} of {len(b['texts'])}: writing the script...")
         args = (b["texts"][b["at"]], b["audience"], b["length"], self.settings["padding"],
                 bool(self.var_auto_cards.get()), self.ai_mode(), bool(self.var_writer_gpu.get()),
-                b["story"])
+                b["story"], bool(b["story"]) and self.story_fewer())
         threading.Thread(target=self._batch_write, args=args, daemon=True).start()
 
-    def _batch_write(self, text, audience, length, padding, cards, ai, gpu, story=False):
+    def _batch_write(self, text, audience, length, padding, cards, ai, gpu, story=False,
+                     slower=False):
         """Worker: one script, by the Smart writer if it is there, else Quick split."""
         try:
             if self.writer_mode == "Smart writer" and writer.ready()[0]:
                 with writer.Session(gpu=gpu) as session:
                     result = session.write(text, audience, length, padding, cards, ai,
-                                           bool(self.var_web_facts.get()), story=story)
+                                           bool(self.var_web_facts.get()), story=story,
+                                           slower=slower)
                     try:   # while the model is loaded anyway
                         upload = session.upload_text(result.script)
                     except writer.WriterError:
@@ -5654,8 +5726,9 @@ class App(ctk.CTk):
         audience = b["audience"]   # as use_draft keeps it: the music's mood follows it
         self.audience = {"audience_content": audience.content, "audience_age": audience.age,
                          "audience_platform": audience.platform}
+        script = self._story_for_slow_pc(result, result.script)
         self.script_box.delete("1.0", "end")
-        self.script_box.insert("1.0", result.script)
+        self.script_box.insert("1.0", script)
         self.var_voice.set(voices.persona(result.voice).label)
         self.var_aspect.set(result.aspect)
         self.var_target.set(result.target)
@@ -5663,8 +5736,8 @@ class App(ctk.CTk):
         name = re.sub(r'[<>:"/\\|?*]+', "", projects.default_title(result.script)).strip(" .")
         self.var_output.set(os.path.join(b["folder"], (name or "video")[:60] + ".mp4"))
         self._commit_script()
-        self._slow_ok = result.script.strip()   # nobody is there to answer the slow-PC window
-        if self.ai_slow():
+        self._slow_ok = script.strip()   # nobody is there to answer the slow-PC window
+        if self.ai_slow() and not (result.hero or result.look):   # a story draws all its own
             self._render_overrides = {"ai_reuse": SLOW_AI_SCENES}
         self.append_log(f"🎬 Video {b['at'] + 1} of {len(b['texts'])}: making it...")
         self.start_render()

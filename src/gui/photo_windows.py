@@ -910,14 +910,15 @@ class DraftDialog(ctk.CTkToplevel):
         args = (job, self.text(), self.audience(), self.var_length.get(),
                 self.app.settings["padding"], bool(self.app.var_writer_gpu.get()),
                 bool(self.app.var_auto_cards.get()), self.app.ai_mode(),
-                bool(self.app.var_web_facts.get()), self.photo_list(), self.story, self.own)
+                bool(self.app.var_web_facts.get()), self.photo_list(), self.story, self.own,
+                bool(self.story) and self.app.story_fewer())
         threading.Thread(target=self._work, args=args, daemon=True).start()
 
     def _post(self, **payload):
         self.app._queue.put(("draft", dict(payload, dialog=self)))
 
     def _work(self, job, text, audience, length, padding, gpu, cards, ai, web=False, shots=(),
-              story=False, own=("", "")):
+              story=False, own=("", ""), slower=False):
         """Worker thread: never touches a widget."""
         keep_loaded = False
         try:
@@ -939,7 +940,8 @@ class DraftDialog(ctk.CTkToplevel):
                                text, audience, length, padding, cards, ai, web,
                                progress=lambda message, fraction: self._post(
                                    event="progress", message=message, fraction=fraction),
-                               photos=shots, story=story, must=own[0], ending=own[1]))
+                               photos=shots, story=story, must=own[0], ending=own[1],
+                               slower=slower))
         except writer.Stopped:
             self._post(event="stopped")
         except (writer.WriterError, draft.DraftError, ScriptError) as exc:

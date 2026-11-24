@@ -262,6 +262,12 @@ def render_worker(cfg: dict, ui: UiBridge):
             ui.log(f"🎞️ Technical details: {detail}")
         ui.finished(False, "Render failed", str(e))
     finally:
+        ahead = cfg.pop("_ahead", None)
+        if ahead is not None:   # it may still be drawing into work_dir
+            ahead.close()
+        from . import imagegen
+
+        imagegen.serve(False)
         # Close before deleting: an open reader would keep its file locked.
         job.close_all()
         from . import myvoice
@@ -410,6 +416,8 @@ def _render(cfg, ui, work_dir, job):
     ui.status(f"Rendering {target_w}x{target_h}...")
     total_scenes = len(plans)
     spent = Stages()
+
+    _start_pictures_ahead(plans, cfg, ratio, work_dir, ui, stop)
 
     # 2. Voiceovers. Each one decides its scene's length.
     ui.status("Step 1 of 4: Voices...")
@@ -616,6 +624,9 @@ def _make_version(cfg, ui, work_dir, job, plans, search, choices, version, save_
                         bool(cfg.get("smart_motion")), work_dir, stop,
                         ThreadPoolExecutor(DOWNLOADS, thread_name_prefix="clip"))
     ui.status("Step 2 of 4: Clips and pictures...")
+    from . import imagegen
+
+    imagegen.serve()   # one picture program for all of this step's AI pictures
     try:
         with spent.time("stock"):
             stock.start(plans, search, choices)
@@ -650,6 +661,7 @@ def _make_version(cfg, ui, work_dir, job, plans, search, choices, version, save_
                               stop, exc)
             ui.progress(base_progress + span * 0.35 * (i + 1) / total_scenes)
     finally:
+        imagegen.serve(False)
         stock.pool.shutdown(wait=True, cancel_futures=True)
 
     # 4. Timeline. With music, the cuts between scenes move onto its beats.
@@ -1377,6 +1389,9 @@ def _moving_picture(plan, index, cfg, ratio, work_dir, ui, version, ai_before, s
         plan.kind = "moving AI picture"
         return
     clip = os.path.join(work_dir, f"moving_{version}_{index}.avi")
+    from . import imagegen
+
+    imagegen.close_server()   # the video model needs the graphics memory it holds
     try:
         moved = animate.make(plan.sources[0].path, plan.scene.ai_prompt or "", ratio, clip,
                              should_stop=stop, log=ui.log,
@@ -1393,6 +1408,96 @@ def _moving_picture(plan, index, cfg, ratio, work_dir, ui, version, ai_before, s
     ui.log(f"🎞️ Scene {index + 1}: the picture moves (made in {moved.seconds:.0f} s)")
     plan.parts, plan.sources = 1, [_Source(store.put(name, looped) or looped, "video")]
     plan.kind = "moving AI picture"
+
+
+def _picture_path(work_dir, version, index) -> str:
+    return os.path.join(work_dir, f"ai_{version}_{index}.png")
+
+
+def _draw(prompt, path, cfg, ratio, ui, stop):
+    """One AI picture at ``path`` with this render's settings; imagegen.make's errors."""
+    from . import imagegen
+
+    return imagegen.make(prompt, imagegen.size_for(ratio), path,
+                         cfg.get("ai_images_look") or imagegen.DEFAULT_LOOK,
+                         should_stop=stop, backend=cfg.get("ai_images_backend") or "",
+                         log=ui.log, speed=cfg.get("ai_images_speed") or imagegen.BEST,
+                         threads=tuple(cfg.get("ai_threads") or (0, 0)),
+                         seed=cfg.get("ai_seed") or None, hero=cfg.get("ai_hero") or "")
+
+
+class _PicturesAhead:
+    """The AI pictures drawn on a thread while the voices are made: the graphics card draws
+    while the processor speaks. Version 1 only; _ai_picture picks each one up, in order."""
+
+    def __init__(self, indexes, draw, stop):
+        import threading
+
+        self.wanted, self.done = set(indexes), {}
+        self._quit = threading.Event()
+        self._ready = threading.Condition()
+        self._thread = threading.Thread(target=self._run, args=(list(indexes), draw, stop),
+                                        daemon=True, name="pictures-ahead")
+        self._thread.start()
+
+    def _run(self, indexes, draw, stop):
+        def stopping():
+            return self._quit.is_set() or stop()
+
+        for index in indexes:
+            try:
+                out = draw(index, stopping)
+            except BaseException as exc:  # noqa: BLE001 - handed to _ai_picture
+                out = exc
+            with self._ready:
+                self.done[index] = out
+                self._ready.notify_all()
+            if stopping():
+                break
+
+    def result(self, index, stop):
+        """The scene's Made, once drawn; its ImageError or Stopped raised here instead."""
+        with self._ready:
+            while index not in self.done:
+                if stop() or not self._thread.is_alive() and index not in self.done:
+                    from . import imagegen
+
+                    raise imagegen.Stopped()
+                self._ready.wait(0.2)
+            out = self.done[index]
+        if isinstance(out, BaseException):
+            raise out
+        return out
+
+    def close(self):
+        self._quit.set()
+        self._thread.join(timeout=60)
+
+
+def _start_pictures_ahead(plans, cfg, ratio, work_dir, ui, stop):
+    """Start drawing the render's AI pictures now, before the voices, where that is safe:
+    a graphics card (on the processor both would fight for the same cores), no My voice
+    (it uses the card too), no moving pictures (their model needs the card's memory)."""
+    from . import imagegen
+
+    ready = cfg.get("ai_pictures") or {}
+    indexes = [i for i, p in enumerate(plans) if p.scene.is_ai and i not in ready]
+    if cfg.get("ai_reuse"):
+        indexes = indexes[:cfg["ai_reuse"]]   # the rest reuse these (_ai_picture)
+    if (not indexes or cfg.get("resolution") == DRAFT or cfg.get("animate")
+            or cfg.get("ai_images_backend") == imagegen.CPU
+            or voices.persona(cfg.get("voice")).id == voices.MY_VOICE
+            or not imagegen.ready()[0]):
+        return
+    imagegen.serve()
+    by_index = {i: plans[i].scene.ai_prompt for i in indexes}
+
+    def draw(index, stopping):
+        ui.log(f"🎨 Scene {index + 1}: drawing its AI picture while the voices are made...")
+        return _draw(by_index[index], _picture_path(work_dir, 1, index), cfg, ratio, ui,
+                     stopping)
+
+    cfg["_ahead"] = _PicturesAhead(indexes, draw, stop)
 
 
 def _ai_picture(plan, index, cfg, ratio, work_dir, ui, version, search, stop) -> bool:
@@ -1421,16 +1526,15 @@ def _ai_picture(plan, index, cfg, ratio, work_dir, ui, version, search, stop) ->
         ui.log(f"🎨 Scene {index + 1}: using an AI picture made for an earlier scene")
         plan.parts, plan.sources = 1, [_Source(again, "image")]
         return True
-    path = os.path.join(work_dir, f"ai_{version}_{index}.png")
-    ui.log(f"🎨 Scene {index + 1}: making an AI picture of '{plan.scene.ai_prompt}'...")
+    path = _picture_path(work_dir, version, index)
     speed = cfg.get("ai_images_speed") or imagegen.BEST
+    ahead = cfg.get("_ahead") if version == 1 else None
     try:
-        made = imagegen.make(plan.scene.ai_prompt, imagegen.size_for(ratio), path,
-                             cfg.get("ai_images_look") or imagegen.DEFAULT_LOOK,
-                             should_stop=stop, backend=cfg.get("ai_images_backend") or "",
-                             log=ui.log, speed=speed,
-                             threads=tuple(cfg.get("ai_threads") or (0, 0)),
-                             seed=cfg.get("ai_seed") or None, hero=cfg.get("ai_hero") or "")
+        if ahead is not None and index in ahead.wanted:
+            made = ahead.result(index, stop)   # drawn while the voices were made
+        else:
+            ui.log(f"🎨 Scene {index + 1}: making an AI picture of '{plan.scene.ai_prompt}'...")
+            made = _draw(plan.scene.ai_prompt, path, cfg, ratio, ui, stop)
     except imagegen.Stopped as exc:
         raise RenderCancelled() from exc
     except imagegen.ImageError as exc:

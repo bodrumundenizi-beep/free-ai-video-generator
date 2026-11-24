@@ -71,6 +71,14 @@ jobs:
         # The program that tells the offline voice how words sound.
         run: python packaging/fetch_espeak.py
 
+      - name: Fetch Real-ESRGAN (pinned, checksum-verified)
+        # Sharpens each AI picture after it is drawn; 7.6 MB, bundled inside the app.
+        run: python packaging/fetch_esrgan.py
+
+      - name: Fetch TAEF1 (pinned, checksum-verified)
+        # The tiny decoder: each AI picture is finished 3x faster; 9.8 MB, bundled inside the app.
+        run: python packaging/fetch_taef1.py
+
       - name: Fetch BiRefNet lite (pinned, checksum-verified)
         # The Image editor's background remover, bundled inside the app.
         run: python packaging/fetch_birefnet.py
@@ -91,6 +99,8 @@ jobs:
           if (-not (Test-Path dist/AIVideoStudio/_internal/assets/icon.ico)) { throw "icon asset missing" }
           if (-not (Test-Path dist/AIVideoStudio/_internal/customtkinter/assets)) { throw "customtkinter assets missing" }
           if (-not (Test-Path dist/AIVideoStudio/_internal/llama/llama-server.exe)) { throw "llama.cpp (Smart writer) missing" }
+          if (-not (Test-Path dist/AIVideoStudio/_internal/realesrgan/models/realesr-animevideov3-x4.bin)) { throw "Real-ESRGAN (picture sharpener) missing" }
+          if (-not (Test-Path dist/AIVideoStudio/_internal/taef1/taef1.safetensors)) { throw "TAEF1 (tiny picture decoder) missing" }
           # It must at least start outside the build tree: a missing DLL shows here.
           & dist/AIVideoStudio/_internal/llama/llama-server.exe --version
           if ($LASTEXITCODE -ne 0) { throw "bundled llama-server.exe does not run" }
